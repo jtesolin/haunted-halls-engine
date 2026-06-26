@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.routes import health
+from app.api.routes import chat, health
 
 app = FastAPI(
     title="Haunted Halls API",
@@ -21,6 +21,7 @@ app.add_middleware(
 )
 
 app.include_router(health.router)
+app.include_router(chat.router)
 
 
 @app.get("/")
