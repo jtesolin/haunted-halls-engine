@@ -9,4 +9,8 @@ def test_chat_echoes_message() -> None:
     response = client.post("/api/chat", json={"message": "hello"})
 
     assert response.status_code == 200
-    assert response.json() == {"message": "Did you say: hello"}
+    assert response.json() == {
+        "reply": "AI narrator replies: hello",
+        "campaign_id": "",
+        "turn_id": "turn_0001",
+    }
