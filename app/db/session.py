@@ -92,6 +92,24 @@ def init_db(conn: sqlite3.Connection) -> None:
             FOREIGN KEY(campaign_id) REFERENCES campaigns(campaign_id) ON DELETE CASCADE
         );
 
+        CREATE TABLE IF NOT EXISTS model_requests (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            request_id TEXT NOT NULL UNIQUE,
+            player_id TEXT NOT NULL,
+            campaign_id TEXT NOT NULL,
+            turn_id TEXT NOT NULL,
+            agent_name TEXT NOT NULL,
+            model TEXT NOT NULL,
+            estimated_input_tokens INTEGER NOT NULL,
+            actual_input_tokens INTEGER NOT NULL,
+            actual_output_tokens INTEGER NOT NULL,
+            latency_ms INTEGER NOT NULL,
+            success INTEGER NOT NULL,
+            failure_reason TEXT,
+            cost_estimate REAL,
+            created_at TEXT NOT NULL
+        );
+
         CREATE TABLE IF NOT EXISTS game_events (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             event_id TEXT NOT NULL UNIQUE,

@@ -44,6 +44,87 @@ class Repository:
             created_at=datetime.fromisoformat(row["created_at"]),
         )
 
+    def get_player_campaign(self, player_id: str, campaign_id: str) -> Optional[CampaignDBModel]:
+        row = self.conn.execute(
+            "SELECT campaign_id, player_id, name, description, state, created_at FROM campaigns WHERE campaign_id = ? AND player_id = ?",
+            (campaign_id, player_id),
+        ).fetchone()
+        if row is None:
+            return None
+        return CampaignDBModel(
+            campaign_id=row["campaign_id"],
+            player_id=row["player_id"],
+            name=row["name"],
+            description=row["description"],
+            state=row["state"],
+            created_at=datetime.fromisoformat(row["created_at"]),
+        )
+
+    def count_player_campaigns(self, player_id: str) -> int:
+        row = self.conn.execute(
+            "SELECT COUNT(*) AS total FROM campaigns WHERE player_id = ?",
+            (player_id,),
+        ).fetchone()
+        return int(row["total"] or 0)
+
+    def count_player_requests_since(self, player_id: str, since_iso: str) -> int:
+        row = self.conn.execute(
+            "SELECT COUNT(*) AS total FROM model_requests WHERE player_id = ? AND created_at >= ?",
+            (player_id, since_iso),
+        ).fetchone()
+        return int(row["total"] or 0)
+
+    def sum_player_estimated_input_tokens_since(self, player_id: str, since_iso: str) -> int:
+        row = self.conn.execute(
+            "SELECT COALESCE(SUM(estimated_input_tokens), 0) AS total FROM model_requests WHERE player_id = ? AND created_at >= ?",
+            (player_id, since_iso),
+        ).fetchone()
+        return int(row["total"] or 0)
+
+    def count_campaign_turns(self, player_id: str, campaign_id: str) -> int:
+        row = self.conn.execute(
+            "SELECT COUNT(*) AS total FROM turns t JOIN campaigns c ON t.campaign_id = c.campaign_id WHERE t.campaign_id = ? AND c.player_id = ?",
+            (campaign_id, player_id),
+        ).fetchone()
+        return int(row["total"] or 0)
+
+    def log_model_request(
+        self,
+        request_id: str,
+        player_id: str,
+        campaign_id: str,
+        turn_id: str,
+        agent_name: str,
+        model: str,
+        estimated_input_tokens: int,
+        actual_input_tokens: int,
+        actual_output_tokens: int,
+        latency_ms: int,
+        success: bool,
+        failure_reason: str | None = None,
+        cost_estimate: float | None = None,
+    ) -> None:
+        created_at = datetime.utcnow().isoformat()
+        self.conn.execute(
+            "INSERT INTO model_requests (request_id, player_id, campaign_id, turn_id, agent_name, model, estimated_input_tokens, actual_input_tokens, actual_output_tokens, latency_ms, success, failure_reason, cost_estimate, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                request_id,
+                player_id,
+                campaign_id,
+                turn_id,
+                agent_name,
+                model,
+                estimated_input_tokens,
+                actual_input_tokens,
+                actual_output_tokens,
+                latency_ms,
+                int(success),
+                failure_reason,
+                cost_estimate,
+                created_at,
+            ),
+        )
+
     def save_turn(
         self,
         campaign_id: str,

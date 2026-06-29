@@ -1,10 +1,11 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 
+from app.api.dependencies import require_internal_api_token
 from app.db.session import session
 from app.schemas.campaign import CampaignDetail, CampaignSummary, CampaignTurn
 from app.schemas.character import CharacterInfo, CharacterList
 
-router = APIRouter(prefix="/api", tags=["campaign"])
+router = APIRouter(prefix="/api", tags=["campaign"], dependencies=[Depends(require_internal_api_token)])
 
 
 def _validate_player_id(player_id: str) -> str:
@@ -17,12 +18,13 @@ def _validate_player_id(player_id: str) -> str:
 
 
 @router.get("/campaign/{campaign_id}", response_model=CampaignDetail)
-async def get_campaign(campaign_id: str) -> CampaignDetail:
-    with session() as repo:
-        campaign, turns, truncated = repo.get_campaign_with_turns(campaign_id)
-
-    if campaign is None:
-        raise HTTPException(status_code=404, detail="Campaign not found")
+async def get_campaign(campaign_id: str, player_id: str) -> CampaignDetail:
+    player_id = _validate_player_id(player_id)
+    with session() as db:
+        campaign = db.get_player_campaign(player_id, campaign_id)
+        if campaign is None:
+            raise HTTPException(status_code=404, detail="Campaign not found")
+        _, turns, truncated = db.get_campaign_with_turns(campaign_id)
 
     return CampaignDetail(
         campaign_id=campaign.campaign_id,
@@ -46,8 +48,8 @@ async def get_campaign(campaign_id: str) -> CampaignDetail:
 async def list_campaigns(player_id: str) -> list[CampaignSummary]:
     player_id = _validate_player_id(player_id)
 
-    with session() as repo:
-        campaigns = repo.list_campaign_summaries_for_player(player_id)
+    with session() as db:
+        campaigns = db.list_campaign_summaries_for_player(player_id)
 
     summaries: list[CampaignSummary] = []
     for campaign in campaigns:
@@ -68,11 +70,12 @@ async def list_campaigns(player_id: str) -> list[CampaignSummary]:
 
 
 @router.get("/character/{character_id}", response_model=CharacterInfo)
-async def get_character(character_id: str) -> CharacterInfo:
-    with session() as repo:
-        character = repo.get_character(character_id)
+async def get_character(character_id: str, player_id: str) -> CharacterInfo:
+    player_id = _validate_player_id(player_id)
+    with session() as db:
+        character = db.get_character(character_id)
 
-    if character is None:
+    if character is None or character.player_id != player_id:
         raise HTTPException(status_code=404, detail="Character not found")
 
     return CharacterInfo(character_id=character.character_id, name=character.name)
@@ -82,8 +85,8 @@ async def get_character(character_id: str) -> CharacterInfo:
 async def list_characters(player_id: str) -> CharacterList:
     player_id = _validate_player_id(player_id)
 
-    with session() as repo:
-        characters = repo.list_characters_for_player(player_id)
+    with session() as db:
+        characters = db.list_characters_for_player(player_id)
 
     return CharacterList(
         characters=[
