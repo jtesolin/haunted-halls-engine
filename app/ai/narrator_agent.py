@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any
+from openai.types.chat import ChatCompletionMessageParam
 
 from app.ai.model_client import model_client
 from app.ai.prompts import narrator_prompt
@@ -16,40 +16,55 @@ class NarratorAgent2:
         message: str,
         model: str | None = None,
     ) -> str:
-        prompt = self._build_prompt(
+        messages = self._build_messages(
             campaign_state=campaign_state,
             recent_turns=recent_turns,
             message=message,
         )
         return await model_client.generate_text(
-            prompt,
+            messages=messages,
             model=model or settings.DEFAULT_MODEL_NAME or "gpt-4o-mini",
             max_output_tokens=settings.MAX_OUTPUT_TOKENS,
             temperature=0.7,
             timeout=20,
         )
 
-    def _build_prompt(
+    def _build_messages(
         self,
         *,
         campaign_state: str,
         recent_turns: list[dict[str, str]],
         message: str,
-    ) -> str:
-        history_lines: list[str] = []
-        for index, turn in enumerate(recent_turns[-8:], start=1):
-            history_lines.append(
-                f"{index}. Player: {turn.get('player_message', '')}\n   Narrator: {turn.get('ai_reply', '')}"
+    ) -> list[ChatCompletionMessageParam]:
+        messages: list[ChatCompletionMessageParam] = [
+            {
+                "role": "developer",
+                "content": narrator_prompt,
+            },
+            {
+                "role": "user",
+                "content": f"Campaign state:\n{campaign_state}".strip(),
+            },
+        ]
+
+        for turn in recent_turns[-8:]:
+            messages.append(
+                {
+                    "role": "user",
+                    "content": turn.get("player_message", ""),
+                }
+            )
+            messages.append(
+                {
+                    "role": "assistant",
+                    "content": turn.get("ai_reply", ""),
+                }
             )
 
-        if history_lines:
-            recent_history = "\n".join(history_lines)
-        else:
-            recent_history = "No prior turns yet."
-
-        return (
-            f"{narrator_prompt}\n\n"
-            f"Campaign state:\n{campaign_state}\n\n"
-            f"Recent conversation:\n{recent_history}\n\n"
-            f"Player says: {message}"
+        messages.append(
+            {
+                "role": "user",
+                "content": message,
+            }
         )
+        return messages

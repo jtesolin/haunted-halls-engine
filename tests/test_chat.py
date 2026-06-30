@@ -70,9 +70,12 @@ def test_orchestrator_uses_narrator_agent_and_persists_turn(monkeypatch) -> None
     settings.AI_ENABLED = True
     settings.OPENAI_API_KEY = None
 
-    async def fake_generate_text(prompt: str, **kwargs) -> str:
-        assert "Recent conversation" in prompt
-        assert "Player says: hello" in prompt
+    async def fake_generate_text(*, messages, **kwargs) -> str:
+        assert messages[0]["role"] == "developer"
+        assert messages[1]["role"] == "user"
+        assert "Campaign state:" in messages[1]["content"]
+        assert messages[-1]["role"] == "user"
+        assert messages[-1]["content"] == "hello"
         return "A haunted reply"
 
     monkeypatch.setattr(orchestrator_module.model_client, "generate_text", fake_generate_text)
