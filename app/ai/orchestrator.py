@@ -7,6 +7,7 @@ from uuid import uuid4
 from fastapi import HTTPException
 
 from app.ai.model_client import model_client
+from app.ai.narrator_agent import NarratorAgent2
 from app.ai.prompts import narrator_prompt
 from app.core.config import settings
 from app.db.session import session
@@ -22,6 +23,9 @@ from app.schemas.chat import ChatRequest, ChatResponse
 
 
 class ChatOrchestrator:
+    def __init__(self) -> None:
+        self.narrator_agent = NarratorAgent2()
+
     async def handle_chat(self, request: ChatRequest) -> ChatResponse:
         player_id = request.player_id.strip()
         campaign_id = request.campaign_id or f"auto_{uuid4().hex}"
@@ -45,7 +49,7 @@ class ChatOrchestrator:
                 description="Auto-created campaign",
             )
 
-            if not settings.AI_ENABLED:
+            if not (settings.AI_ENABLED or bool(settings.OPENAI_API_KEY)):
                 reply = self._stub_reply(request.message)
                 db.log_model_request(
                     request_id=f"req_{uuid4().hex}",
@@ -63,15 +67,15 @@ class ChatOrchestrator:
                     cost_estimate=0.0,
                 )
             else:
-                prompt = self._build_prompt(request)
+                campaign_state = self._build_campaign_state(db, campaign_id)
+                recent_turns = self._load_recent_turns(db, campaign_id)
                 start_time = time.perf_counter()
                 try:
-                    reply = await model_client.generate_text(
-                        prompt,
+                    reply = await self.narrator_agent.generate(
+                        campaign_state=campaign_state,
+                        recent_turns=recent_turns,
+                        message=request.message,
                         model=model,
-                        max_output_tokens=settings.MAX_OUTPUT_TOKENS,
-                        temperature=0.7,
-                        timeout=20,
                     )
                     latency_ms = int((time.perf_counter() - start_time) * 1000)
                     db.log_model_request(
@@ -123,6 +127,22 @@ class ChatOrchestrator:
 
     def _build_prompt(self, request: ChatRequest) -> str:
         return f"{narrator_prompt}\n\nPlayer says: {request.message}"
+
+    def _build_campaign_state(self, db, campaign_id: str) -> str:
+        campaign = db.get_campaign(campaign_id)
+        if campaign is None:
+            return "No campaign state yet."
+        return campaign.state or "No campaign state yet."
+
+    def _load_recent_turns(self, db, campaign_id: str) -> list[dict[str, str]]:
+        _, turns, _ = db.get_campaign_with_turns(campaign_id, limit=settings.MAX_RECENT_MESSAGES)
+        return [
+            {
+                "player_message": turn.player_message,
+                "ai_reply": turn.ai_reply,
+            }
+            for turn in turns
+        ]
 
     def _stub_reply(self, message: str) -> str:
         return f"AI narrator replies (stub): {message}"
