@@ -6,9 +6,9 @@ from pydantic_settings import BaseSettings
 class Settings(BaseSettings):
     AI_ENABLED: bool = False
     OPENAI_API_KEY: Optional[str] = None
-    ANTHROPIC_API_KEY: Optional[str] = None
-    MODEL_PROVIDER: Optional[str] = None
-    MODEL_NAME: Optional[str] = None
+    # ANTHROPIC_API_KEY: Optional[str] = None
+    # DEFAULT_MODEL_PROVIDER: Optional[str] = None
+    DEFAULT_MODEL_NAME: Optional[str] = None
     DATABASE_URL: Optional[str] = None
     INTERNAL_API_TOKEN: Optional[str] = "floop"
 

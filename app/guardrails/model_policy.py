@@ -2,10 +2,10 @@ from typing import Literal
 
 
 class ModelPolicy:
-    NARRATOR: Literal["gpt-3.5-turbo"] = "gpt-3.5-turbo"
-    ACTION_PARSER: Literal["gpt-3.5-turbo"] = "gpt-3.5-turbo"
-    SUMMARIZER: Literal["gpt-3.5-turbo"] = "gpt-3.5-turbo"
-    DIRECTOR: Literal["gpt-4o"] = "gpt-4o"
+    NARRATOR: Literal["gpt-4o-mini"] = "gpt-4o-mini"
+    ACTION_PARSER: Literal["gpt-4o-mini"] = "gpt-4o-mini"
+    SUMMARIZER: Literal["gpt-4o-mini"] = "gpt-4o-mini"
+    DIRECTOR: Literal["gpt-4.1-mini"] = "gpt-4.1-mini"
 
     @classmethod
     def narrator_model(cls) -> str:

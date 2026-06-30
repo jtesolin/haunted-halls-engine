@@ -23,7 +23,7 @@ class NarratorAgent2:
         )
         return await model_client.generate_text(
             prompt,
-            model=model or settings.MODEL_NAME or "gpt-3.5-turbo",
+            model=model or settings.DEFAULT_MODEL_NAME or "gpt-4o-mini",
             max_output_tokens=settings.MAX_OUTPUT_TOKENS,
             temperature=0.7,
             timeout=20,
