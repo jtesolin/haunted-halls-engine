@@ -1,8 +1,9 @@
 from fastapi import APIRouter, Depends, HTTPException
 
+from app.ai.orchestrator import orchestrator
 from app.api.dependencies import require_internal_api_token
 from app.db.session import session
-from app.schemas.campaign import CampaignDetail, CampaignSummary, CampaignTurn
+from app.schemas.campaign import CampaignCreateRequest, CampaignDetail, CampaignSummary, CampaignTurn
 from app.schemas.character import CharacterInfo, CharacterList
 
 router = APIRouter(prefix="/api", tags=["campaign"], dependencies=[Depends(require_internal_api_token)])
@@ -15,6 +16,11 @@ def _validate_player_id(player_id: str) -> str:
     if candidate.lower() == "anonymous":
         raise HTTPException(status_code=422, detail="player_id cannot be 'anonymous'")
     return candidate
+
+
+@router.post("/campaign", response_model=CampaignDetail, status_code=201)
+async def create_campaign(payload: CampaignCreateRequest) -> CampaignDetail:
+    return await orchestrator.create_campaign(payload)
 
 
 @router.get("/campaign/{campaign_id}", response_model=CampaignDetail)

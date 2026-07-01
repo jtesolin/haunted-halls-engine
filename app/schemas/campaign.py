@@ -3,7 +3,20 @@ from __future__ import annotations
 from datetime import datetime
 from typing import List, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
+
+from app.schemas.chat import PlayerId
+
+
+class CampaignCreateRequest(BaseModel):
+    player_id: PlayerId
+
+    @field_validator("player_id")
+    @classmethod
+    def validate_player_id(cls, value: str) -> str:
+        if value.lower() == "anonymous":
+            raise ValueError("player_id cannot be 'anonymous'")
+        return value
 
 
 class CampaignTurn(BaseModel):

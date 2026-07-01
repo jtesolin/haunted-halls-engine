@@ -38,7 +38,7 @@ def test_chat_echoes_message() -> None:
     data = response.json()
 
     assert data["reply"] == "AI narrator replies (stub): hello"
-    assert data["campaign_id"].startswith("auto_")
+    assert data["campaign_id"].startswith("campaign_")
     assert data["turn_id"].startswith("turn_")
 
 
@@ -77,6 +77,60 @@ def test_campaign_routes_reject_anonymous_player_id() -> None:
     )
 
     assert response.status_code == 422
+
+
+def test_create_campaign_returns_hydrated_campaign() -> None:
+    settings.INTERNAL_API_TOKEN = "test-token"
+    settings.AI_ENABLED = False
+    settings.OPENAI_API_KEY = None
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/campaign",
+        json={"player_id": "player-3"},
+        headers={"Authorization": "Bearer test-token"},
+    )
+
+    assert response.status_code == 201
+    data = response.json()
+
+    assert data["campaign_id"].startswith("campaign_")
+    assert data["name"] == "The Bell Beneath the Hall"
+    assert data["player_id"] == "player-3"
+    assert data["truncated"] is False
+    assert len(data["messages"]) == 1
+    assert data["messages"][0]["role"] == "assistant"
+    assert "What do you do first?" in data["messages"][0]["content"]
+
+
+def test_create_campaign_uses_narrator_for_opening_and_title(monkeypatch) -> None:
+    settings.INTERNAL_API_TOKEN = "test-token"
+    settings.AI_ENABLED = True
+    settings.OPENAI_API_KEY = None
+    prompts: list[str] = []
+
+    async def fake_generate_text(*, messages, **kwargs) -> str:
+        prompts.append(messages[-1]["content"])
+        if "provide only a short haunted campaign title" in messages[-1]["content"].lower():
+            return "Whispers in the West Wing"
+        return "The candles hiss awake in the corridor. Where do you step first?"
+
+    monkeypatch.setattr(orchestrator_module.model_client, "generate_text", fake_generate_text)
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/campaign",
+        json={"player_id": "player-4"},
+        headers={"Authorization": "Bearer test-token"},
+    )
+
+    assert response.status_code == 201
+    data = response.json()
+
+    assert len(prompts) == 2
+    assert "Start a new haunted halls campaign" in prompts[0]
+    assert data["name"] == "Whispers in the West Wing"
+    assert data["messages"][0]["content"] == "The candles hiss awake in the corridor. Where do you step first?"
 
 
 def test_orchestrator_uses_narrator_agent_and_persists_turn(monkeypatch) -> None:
