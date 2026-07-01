@@ -34,8 +34,9 @@ async def get_campaign(campaign_id: str, player_id: str) -> CampaignDetail:
         messages=[
             CampaignTurn(
                 turn_id=turn.turn_id,
-                player_message=turn.player_message,
-                ai_reply=turn.ai_reply,
+                player_id=turn.player_id,
+                role=turn.role,
+                content=turn.content,
                 created_at=turn.created_at,
             )
             for turn in turns

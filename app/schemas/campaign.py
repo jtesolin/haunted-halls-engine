@@ -8,8 +8,9 @@ from pydantic import BaseModel
 
 class CampaignTurn(BaseModel):
     turn_id: str
-    player_message: str
-    ai_reply: str
+    player_id: str
+    role: str
+    content: str
     created_at: datetime
 
 

@@ -1,5 +1,8 @@
 import asyncio
+import json
+from collections.abc import Iterator
 
+import pytest
 from fastapi.testclient import TestClient
 
 from app.ai import orchestrator as orchestrator_module
@@ -7,6 +10,16 @@ from app.core.config import settings
 from app.db.session import session
 from app.main import app
 from app.schemas.chat import ChatRequest
+
+
+@pytest.fixture(autouse=True)
+def isolated_database(tmp_path) -> Iterator[None]:
+    original_database_url = settings.DATABASE_URL
+    settings.DATABASE_URL = f"sqlite:///{tmp_path / 'test_chat.db'}"
+    try:
+        yield
+    finally:
+        settings.DATABASE_URL = original_database_url
 
 
 def test_chat_echoes_message() -> None:
@@ -90,5 +103,20 @@ def test_orchestrator_uses_narrator_agent_and_persists_turn(monkeypatch) -> None
 
     with session() as db:
         _, turns, _ = db.get_campaign_with_turns(response.campaign_id, limit=10)
-        assert turns[-1].player_message == "hello"
-        assert turns[-1].ai_reply == "A haunted reply"
+        assert len(turns) >= 2
+        assert turns[-2].player_id == "player-2"
+        assert turns[-2].role == "user"
+        assert turns[-2].content == "hello"
+        assert turns[-1].player_id == "player-2"
+        assert turns[-1].role == "assistant"
+        assert turns[-1].content == "A haunted reply"
+
+        events = db.list_campaign_events(response.campaign_id)
+        assert [event.type for event in events[-2:]] == [
+            "player_message_received",
+            "narrator_response_created",
+        ]
+        assert events[-2].turn_id == turns[-2].turn_id
+        assert events[-1].turn_id == turns[-1].turn_id
+        assert json.loads(events[-2].payload_json or "{}") == {"message": "hello"}
+        assert json.loads(events[-1].payload_json or "{}") == {"reply": "A haunted reply"}

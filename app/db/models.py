@@ -27,19 +27,22 @@ class CharacterDBModel:
 
 @dataclass
 class TurnDBModel:
-    campaign_id: str
     turn_id: str
-    player_message: str
-    ai_reply: str
+    player_id: str
+    campaign_id: str
+    role: str
+    content: str
     created_at: datetime
 
 
 @dataclass
 class GameEventDBModel:
     event_id: str
+    player_id: str
     campaign_id: str
+    turn_id: Optional[str]
     type: str
-    payload: Optional[str]
+    payload_json: Optional[str]
     created_at: datetime
 
 

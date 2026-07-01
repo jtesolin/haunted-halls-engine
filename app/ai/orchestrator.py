@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import time
 from uuid import uuid4
 
@@ -20,6 +19,7 @@ from app.guardrails.rate_limits import (
     validate_daily_token_limit,
 )
 from app.schemas.chat import ChatRequest, ChatResponse
+from app.schemas.events import NarratorResponseCreatedPayload, PlayerMessageReceivedPayload
 
 
 class ChatOrchestrator:
@@ -29,7 +29,8 @@ class ChatOrchestrator:
     async def handle_chat(self, request: ChatRequest) -> ChatResponse:
         player_id = request.player_id.strip()
         campaign_id = request.campaign_id or f"auto_{uuid4().hex}"
-        turn_id = f"turn_{uuid4().hex}"
+        player_turn_id = f"turn_{uuid4().hex}"
+        assistant_turn_id = f"turn_{uuid4().hex}"
         agent_name = "Narrator"
         model = ModelPolicy.narrator_model()
 
@@ -48,6 +49,21 @@ class ChatOrchestrator:
                 name=f"Campaign {campaign_id}",
                 description="Auto-created campaign",
             )
+            db.create_turn(
+                turn_id=player_turn_id,
+                player_id=player_id,
+                campaign_id=campaign_id,
+                role="user",
+                content=request.message,
+            )
+            db.add_event(
+                event_id=f"evt_{uuid4().hex}",
+                player_id=player_id,
+                campaign_id=campaign_id,
+                turn_id=player_turn_id,
+                type="player_message_received",
+                payload=PlayerMessageReceivedPayload(message=request.message),
+            )
 
             if not (settings.AI_ENABLED or bool(settings.OPENAI_API_KEY)):
                 reply = self._stub_reply(request.message)
@@ -55,7 +71,7 @@ class ChatOrchestrator:
                     request_id=f"req_{uuid4().hex}",
                     player_id=player_id,
                     campaign_id=campaign_id,
-                    turn_id=turn_id,
+                    turn_id=assistant_turn_id,
                     agent_name=agent_name,
                     model=model,
                     estimated_input_tokens=estimated_input_tokens,
@@ -82,7 +98,7 @@ class ChatOrchestrator:
                         request_id=f"req_{uuid4().hex}",
                         player_id=player_id,
                         campaign_id=campaign_id,
-                        turn_id=turn_id,
+                        turn_id=assistant_turn_id,
                         agent_name=agent_name,
                         model=model,
                         estimated_input_tokens=estimated_input_tokens,
@@ -99,7 +115,7 @@ class ChatOrchestrator:
                         request_id=f"req_{uuid4().hex}",
                         player_id=player_id,
                         campaign_id=campaign_id,
-                        turn_id=turn_id,
+                        turn_id=assistant_turn_id,
                         agent_name=agent_name,
                         model=model,
                         estimated_input_tokens=estimated_input_tokens,
@@ -112,17 +128,26 @@ class ChatOrchestrator:
                     )
                     raise HTTPException(status_code=502, detail="AI service failed.")
 
-            db.save_turn(
+            db.create_turn(
+                turn_id=assistant_turn_id,
+                player_id=player_id,
                 campaign_id=campaign_id,
-                turn_id=turn_id,
-                player_message=request.message,
-                ai_reply=reply,
+                role="assistant",
+                content=reply,
+            )
+            db.add_event(
+                event_id=f"evt_{uuid4().hex}",
+                player_id=player_id,
+                campaign_id=campaign_id,
+                turn_id=assistant_turn_id,
+                type="narrator_response_created",
+                payload=NarratorResponseCreatedPayload(reply=reply),
             )
 
         return ChatResponse(
             reply=reply,
             campaign_id=campaign_id,
-            turn_id=turn_id,
+            turn_id=assistant_turn_id,
         )
 
     def _build_prompt(self, request: ChatRequest) -> str:
@@ -138,8 +163,8 @@ class ChatOrchestrator:
         _, turns, _ = db.get_campaign_with_turns(campaign_id, limit=settings.MAX_RECENT_MESSAGES)
         return [
             {
-                "player_message": turn.player_message,
-                "ai_reply": turn.ai_reply,
+                "role": turn.role,
+                "content": turn.content,
             }
             for turn in turns
         ]

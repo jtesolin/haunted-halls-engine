@@ -3,9 +3,10 @@ from __future__ import annotations
 import json
 from datetime import datetime
 from sqlite3 import Connection
-from typing import Any, Optional
+from typing import Optional
 
 from app.db.models import CampaignDBModel, CharacterDBModel, GameEventDBModel, SummaryDBModel, TurnDBModel
+from app.schemas.events import GameEventPayload, GameEventType
 
 
 class Repository:
@@ -83,7 +84,7 @@ class Repository:
 
     def count_campaign_turns(self, player_id: str, campaign_id: str) -> int:
         row = self.conn.execute(
-            "SELECT COUNT(*) AS total FROM turns t JOIN campaigns c ON t.campaign_id = c.campaign_id WHERE t.campaign_id = ? AND c.player_id = ?",
+            "SELECT COUNT(*) AS total FROM turns t JOIN campaigns c ON t.campaign_id = c.campaign_id WHERE t.campaign_id = ? AND c.player_id = ? AND t.role = 'user'",
             (campaign_id, player_id),
         ).fetchone()
         return int(row["total"] or 0)
@@ -125,28 +126,37 @@ class Repository:
             ),
         )
 
-    def save_turn(
+    def create_turn(
         self,
+        player_id: str,
         campaign_id: str,
         turn_id: str,
-        player_message: str,
-        ai_reply: str,
+        role: str,
+        content: str,
     ) -> TurnDBModel:
         created_at = datetime.utcnow().isoformat()
         self.conn.execute(
-            "INSERT INTO turns (campaign_id, turn_id, player_message, ai_reply, created_at) VALUES (?, ?, ?, ?, ?)",
-            (campaign_id, turn_id, player_message, ai_reply, created_at),
+            "INSERT INTO turns (turn_id, player_id, campaign_id, role, content, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+            (turn_id, player_id, campaign_id, role, content, created_at),
         )
-        return TurnDBModel(campaign_id, turn_id, player_message, ai_reply, datetime.fromisoformat(created_at))
+        return TurnDBModel(turn_id, player_id, campaign_id, role, content, datetime.fromisoformat(created_at))
 
-    def add_event(self, event_id: str, campaign_id: str, type: str, payload: Optional[dict[str, Any]] = None) -> GameEventDBModel:
+    def add_event(
+        self,
+        event_id: str,
+        player_id: str,
+        campaign_id: str,
+        turn_id: str,
+        type: GameEventType,
+        payload: Optional[GameEventPayload] = None,
+    ) -> GameEventDBModel:
         created_at = datetime.utcnow().isoformat()
-        payload_json = json.dumps(payload) if payload is not None else None
+        payload_json = payload.model_dump_json() if payload is not None else None
         self.conn.execute(
-            "INSERT INTO game_events (event_id, campaign_id, type, payload, created_at) VALUES (?, ?, ?, ?, ?)",
-            (event_id, campaign_id, type, payload_json, created_at),
+            "INSERT INTO game_events (event_id, player_id, campaign_id, turn_id, type, payload_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (event_id, player_id, campaign_id, turn_id, type, payload_json, created_at),
         )
-        return GameEventDBModel(event_id, campaign_id, type, payload_json, datetime.fromisoformat(created_at))
+        return GameEventDBModel(event_id, player_id, campaign_id, turn_id, type, payload_json, datetime.fromisoformat(created_at))
 
     def add_summary(self, campaign_id: str, summary: str) -> SummaryDBModel:
         created_at = datetime.utcnow().isoformat()
@@ -162,15 +172,16 @@ class Repository:
             return None, [], False
 
         rows = self.conn.execute(
-            "SELECT campaign_id, turn_id, player_message, ai_reply, created_at FROM turns WHERE campaign_id = ? ORDER BY created_at DESC LIMIT ?",
+            "SELECT turn_id, player_id, campaign_id, role, content, created_at FROM turns WHERE campaign_id = ? ORDER BY created_at DESC LIMIT ?",
             (campaign_id, limit + 1),
         ).fetchall()
         turns = [
             TurnDBModel(
-                campaign_id=row["campaign_id"],
                 turn_id=row["turn_id"],
-                player_message=row["player_message"],
-                ai_reply=row["ai_reply"],
+                player_id=row["player_id"],
+                campaign_id=row["campaign_id"],
+                role=row["role"],
+                content=row["content"],
                 created_at=datetime.fromisoformat(row["created_at"]),
             )
             for row in rows[:limit]
@@ -179,13 +190,37 @@ class Repository:
         truncated = len(rows) > limit
         return campaign, turns, truncated
 
+    def list_campaign_events(self, campaign_id: str, limit: int = 100) -> list[GameEventDBModel]:
+        rows = self.conn.execute(
+            "SELECT event_id, player_id, campaign_id, turn_id, type, payload_json, created_at FROM game_events WHERE campaign_id = ? ORDER BY created_at ASC LIMIT ?",
+            (campaign_id, limit),
+        ).fetchall()
+        return [
+            GameEventDBModel(
+                event_id=row["event_id"],
+                player_id=row["player_id"],
+                campaign_id=row["campaign_id"],
+                turn_id=row["turn_id"],
+                type=row["type"],
+                payload_json=row["payload_json"],
+                created_at=datetime.fromisoformat(row["created_at"]),
+            )
+            for row in rows
+        ]
+
     def list_campaign_summaries_for_player(self, player_id: str) -> list[dict[str, Optional[str]]]:
         rows = self.conn.execute(
             """
             SELECT
                 c.campaign_id AS campaign_id,
                 c.name AS title,
-                (SELECT t.ai_reply FROM turns t WHERE t.campaign_id = c.campaign_id ORDER BY created_at DESC LIMIT 1) AS last_message
+                (
+                    SELECT t.content
+                    FROM turns t
+                    WHERE t.campaign_id = c.campaign_id AND t.role = 'assistant'
+                    ORDER BY created_at DESC
+                    LIMIT 1
+                ) AS last_message
             FROM campaigns c
             WHERE c.player_id = ?
             ORDER BY c.created_at DESC

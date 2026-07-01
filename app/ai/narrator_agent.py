@@ -48,16 +48,13 @@ class NarratorAgent2:
         ]
 
         for turn in recent_turns[-8:]:
+            role = turn.get("role", "")
+            if role not in {"user", "assistant", "system"}:
+                continue
             messages.append(
                 {
-                    "role": "user",
-                    "content": turn.get("player_message", ""),
-                }
-            )
-            messages.append(
-                {
-                    "role": "assistant",
-                    "content": turn.get("ai_reply", ""),
+                    "role": role,
+                    "content": turn.get("content", ""),
                 }
             )
 
