@@ -25,5 +25,5 @@ class CampaignDetail(BaseModel):
 
 class CampaignSummary(BaseModel):
     campaign_id: str
-    title: str
+    name: str
     last_message: Optional[str] = None

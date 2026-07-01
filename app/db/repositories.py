@@ -213,7 +213,7 @@ class Repository:
             """
             SELECT
                 c.campaign_id AS campaign_id,
-                c.name AS title,
+                c.name AS name,
                 (
                     SELECT t.content
                     FROM turns t
@@ -230,7 +230,7 @@ class Repository:
         return [
             {
                 "campaign_id": row["campaign_id"],
-                "title": row["title"],
+                "name": row["name"],
                 "last_message": row["last_message"],
             }
             for row in rows

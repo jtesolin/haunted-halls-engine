@@ -55,14 +55,14 @@ async def list_campaigns(player_id: str) -> list[CampaignSummary]:
     summaries: list[CampaignSummary] = []
     for campaign in campaigns:
         campaign_id = campaign["campaign_id"]
-        title = campaign["title"]
-        if campaign_id is None or title is None:
+        name = campaign["name"]
+        if campaign_id is None or name is None:
             continue
 
         summaries.append(
             CampaignSummary(
                 campaign_id=campaign_id,
-                title=title,
+                name=name,
                 last_message=campaign["last_message"],
             )
         )
