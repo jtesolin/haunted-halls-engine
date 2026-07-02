@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends
 
-from app.ai.orchestrator import orchestrator
+from app.orchestration.orchestrator import orchestrator
 from app.api.dependencies import require_internal_api_token
 from app.schemas.chat import ChatRequest, ChatResponse
 

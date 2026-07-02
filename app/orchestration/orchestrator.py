@@ -5,19 +5,19 @@ from uuid import uuid4
 
 from fastapi import HTTPException
 
+from app.agents.narrator import NarratorAgent2
 from app.ai.model_client import model_client
-from app.ai.narrator_agent import NarratorAgent2
 from app.ai.prompts import narrator_prompt
 from app.core.config import settings
 from app.db.session import session
 from app.guardrails.input_validation import validate_chat_request
 from app.guardrails.model_policy import ModelPolicy
-from app.guardrails.token_budget import estimate_tokens, validate_request_budget
 from app.guardrails.rate_limits import (
     validate_campaign_turn_limit,
     validate_daily_request_limit,
     validate_daily_token_limit,
 )
+from app.guardrails.token_budget import estimate_tokens, validate_request_budget
 from app.guardrails.usage_limits import UsageLimits
 from app.schemas.campaign import CampaignCreateRequest, CampaignDetail, CampaignTurn
 from app.schemas.chat import ChatRequest, ChatResponse

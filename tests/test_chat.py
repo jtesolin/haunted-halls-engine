@@ -5,7 +5,7 @@ from collections.abc import Iterator
 import pytest
 from fastapi.testclient import TestClient
 
-from app.ai import orchestrator as orchestrator_module
+from app.orchestration import orchestrator as orchestrator_module
 from app.core.config import settings
 from app.db.session import session
 from app.main import app
