@@ -1,6 +1,6 @@
-from typing import Annotated, Optional
+from typing import Annotated, Any, Literal, Optional
 
-from pydantic import BaseModel, StringConstraints, field_validator
+from pydantic import BaseModel, Field, StringConstraints, field_validator
 
 PlayerId = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
 
@@ -35,3 +35,22 @@ class GameTurnResult(BaseModel):
     reply: str
     campaign_id: str
     turn_id: str
+
+
+class ParsedAction(BaseModel):
+    raw_text: str
+    action: str
+    target: Optional[str] = None
+    parameters: dict[str, Any] = Field(default_factory=dict)
+    stealth: bool = False
+    confidence: float = 0.0
+    parse_status: Literal["ok", "ambiguous", "invalid"] = "invalid"
+    parser_notes: Optional[str] = None
+
+
+class ToolExecutionResult(BaseModel):
+    success: bool
+    applied_tools: list[str] = Field(default_factory=list)
+    summary: str
+    state_delta: dict[str, Any] = Field(default_factory=dict)
+    errors: list[str] = Field(default_factory=list)

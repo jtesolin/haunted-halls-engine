@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from datetime import datetime
 from sqlite3 import Connection
-from typing import Optional
+from typing import Any, Optional
 
 from app.db.models import CampaignDBModel, CharacterDBModel, GameEventDBModel, SummaryDBModel, TurnDBModel
 from app.schemas.events import GameEventPayload, GameEventType
@@ -43,6 +43,12 @@ class Repository:
             description=row["description"],
             state=row["state"],
             created_at=datetime.fromisoformat(row["created_at"]),
+        )
+
+    def update_campaign_state(self, campaign_id: str, state: dict[str, Any]) -> None:
+        self.conn.execute(
+            "UPDATE campaigns SET state = ? WHERE campaign_id = ?",
+            (json.dumps(state), campaign_id),
         )
 
     def get_player_campaign(self, player_id: str, campaign_id: str) -> Optional[CampaignDBModel]:

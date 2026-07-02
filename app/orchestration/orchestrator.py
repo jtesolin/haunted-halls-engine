@@ -5,9 +5,8 @@ from uuid import uuid4
 
 from fastapi import HTTPException
 
+from app.agents.action_parser import ActionParseProviderError, ActionParserAgent
 from app.agents.narrator import NarratorAgent2
-from app.ai.model_client import model_client
-from app.ai.prompts import narrator_prompt
 from app.core.config import settings
 from app.db.session import session
 from app.guardrails.input_validation import validate_chat_request
@@ -20,13 +19,24 @@ from app.guardrails.rate_limits import (
 from app.guardrails.token_budget import estimate_tokens, validate_request_budget
 from app.guardrails.usage_limits import UsageLimits
 from app.schemas.campaign import CampaignCreateRequest, CampaignDetail, CampaignTurn
-from app.schemas.chat import ChatRequest, ChatResponse
-from app.schemas.events import NarratorResponseCreatedPayload, PlayerMessageReceivedPayload
+from app.schemas.chat import ChatRequest, ChatResponse, ToolExecutionResult
+from app.schemas.events import (
+    ActionParseFailedPayload,
+    ActionParsedPayload,
+    GameStateUpdatedPayload,
+    NarratorResponseCreatedPayload,
+    PlayerMessageReceivedPayload,
+    ToolExecutedPayload,
+    ToolExecutionFailedPayload,
+)
+from app.services.tool_executor import ToolExecutor
 
 
 class ChatOrchestrator:
     def __init__(self) -> None:
+        self.action_parser_agent = ActionParserAgent()
         self.narrator_agent = NarratorAgent2()
+        self.tool_executor = ToolExecutor()
 
     async def create_campaign(self, request: CampaignCreateRequest) -> CampaignDetail:
         player_id = request.player_id.strip()
@@ -124,7 +134,9 @@ class ChatOrchestrator:
             validate_chat_request(db, request)
             validate_campaign_turn_limit(db, player_id, campaign_id)
 
-            estimated_input_tokens = estimate_tokens(request.message)
+            estimated_input_tokens = estimate_tokens(request.message) + estimate_tokens(
+                "structured action parsing and tool execution context"
+            )
             validate_request_budget(estimated_input_tokens, settings.MAX_OUTPUT_TOKENS)
             validate_daily_request_limit(db, player_id)
             validate_daily_token_limit(db, player_id, estimated_input_tokens)
@@ -151,7 +163,133 @@ class ChatOrchestrator:
                 payload=PlayerMessageReceivedPayload(message=request.message),
             )
 
-            if not (settings.AI_ENABLED or bool(settings.OPENAI_API_KEY)):
+            ai_enabled = settings.AI_ENABLED or bool(settings.OPENAI_API_KEY)
+            campaign_state = self._build_campaign_state(db, campaign_id)
+            recent_turns = self._load_recent_turns(db, campaign_id)
+
+            parser_start_time = time.perf_counter()
+            try:
+                parsed_action = await self.action_parser_agent.parse(
+                    message=request.message,
+                    campaign_state=campaign_state,
+                    recent_turns=recent_turns,
+                    model=ModelPolicy.action_parser_model(),
+                    deterministic_only=not ai_enabled,
+                )
+            except ActionParseProviderError as exc:
+                parser_latency_ms = int((time.perf_counter() - parser_start_time) * 1000)
+                db.log_model_request(
+                    request_id=f"req_{uuid4().hex}",
+                    player_id=player_id,
+                    campaign_id=campaign_id,
+                    turn_id=player_turn_id,
+                    agent_name="ActionParser",
+                    model=ModelPolicy.action_parser_model(),
+                    estimated_input_tokens=estimated_input_tokens,
+                    actual_input_tokens=estimated_input_tokens,
+                    actual_output_tokens=0,
+                    latency_ms=parser_latency_ms,
+                    success=False,
+                    failure_reason=str(exc),
+                    cost_estimate=0.0,
+                )
+                raise HTTPException(status_code=502, detail="Action parser service failed.") from exc
+
+            if ai_enabled:
+                parser_latency_ms = int((time.perf_counter() - parser_start_time) * 1000)
+                db.log_model_request(
+                    request_id=f"req_{uuid4().hex}",
+                    player_id=player_id,
+                    campaign_id=campaign_id,
+                    turn_id=player_turn_id,
+                    agent_name="ActionParser",
+                    model=ModelPolicy.action_parser_model(),
+                    estimated_input_tokens=estimated_input_tokens,
+                    actual_input_tokens=estimated_input_tokens,
+                    actual_output_tokens=estimate_tokens(parsed_action.model_dump_json()),
+                    latency_ms=parser_latency_ms,
+                    success=True,
+                    failure_reason=None,
+                    cost_estimate=0.0,
+                )
+
+            if parsed_action.parse_status == "invalid":
+                reason = parsed_action.parser_notes or "Action parser produced invalid output."
+                db.add_event(
+                    event_id=f"evt_{uuid4().hex}",
+                    player_id=player_id,
+                    campaign_id=campaign_id,
+                    turn_id=player_turn_id,
+                    type="action_parse_failed",
+                    payload=ActionParseFailedPayload(reason=reason),
+                )
+                raise HTTPException(status_code=422, detail=f"Unprocessable action: {reason}")
+
+            db.add_event(
+                event_id=f"evt_{uuid4().hex}",
+                player_id=player_id,
+                campaign_id=campaign_id,
+                turn_id=player_turn_id,
+                type="action_parsed",
+                payload=ActionParsedPayload(
+                    action=parsed_action.action,
+                    target=parsed_action.target,
+                    confidence=parsed_action.confidence,
+                    stealth=parsed_action.stealth,
+                    parse_status=parsed_action.parse_status,
+                    parser_notes=parsed_action.parser_notes,
+                ),
+            )
+
+            tool_result = ToolExecutionResult(
+                success=False,
+                summary="Action parse status was not executable.",
+            )
+            if parsed_action.parse_status == "ok":
+                updated_state, tool_result = self.tool_executor.execute(
+                    parsed_action=parsed_action,
+                    campaign_state=campaign_state,
+                )
+
+                if tool_result.success:
+                    db.add_event(
+                        event_id=f"evt_{uuid4().hex}",
+                        player_id=player_id,
+                        campaign_id=campaign_id,
+                        turn_id=player_turn_id,
+                        type="tool_executed",
+                        payload=ToolExecutedPayload(
+                            applied_tools=tool_result.applied_tools,
+                            summary=tool_result.summary,
+                            state_delta=tool_result.state_delta,
+                        ),
+                    )
+                else:
+                    db.add_event(
+                        event_id=f"evt_{uuid4().hex}",
+                        player_id=player_id,
+                        campaign_id=campaign_id,
+                        turn_id=player_turn_id,
+                        type="tool_execution_failed",
+                        payload=ToolExecutionFailedPayload(
+                            action=parsed_action.action,
+                            reason=tool_result.summary,
+                        ),
+                    )
+
+                if tool_result.state_delta:
+                    db.update_campaign_state(campaign_id, updated_state)
+                    db.add_event(
+                        event_id=f"evt_{uuid4().hex}",
+                        player_id=player_id,
+                        campaign_id=campaign_id,
+                        turn_id=player_turn_id,
+                        type="game_state_updated",
+                        payload=GameStateUpdatedPayload(state=updated_state),
+                    )
+                    campaign_state = self._build_campaign_state(db, campaign_id)
+
+            if not ai_enabled:
                 reply = self._stub_reply(request.message)
                 db.log_model_request(
                     request_id=f"req_{uuid4().hex}",
@@ -169,14 +307,14 @@ class ChatOrchestrator:
                     cost_estimate=0.0,
                 )
             else:
-                campaign_state = self._build_campaign_state(db, campaign_id)
-                recent_turns = self._load_recent_turns(db, campaign_id)
                 start_time = time.perf_counter()
                 try:
                     reply = await self.narrator_agent.generate(
                         campaign_state=campaign_state,
                         recent_turns=recent_turns,
                         message=request.message,
+                        parsed_action=parsed_action,
+                        tool_result=tool_result,
                         model=model,
                     )
                     latency_ms = int((time.perf_counter() - start_time) * 1000)
@@ -236,9 +374,6 @@ class ChatOrchestrator:
             turn_id=assistant_turn_id,
         )
 
-    def _build_prompt(self, request: ChatRequest) -> str:
-        return f"{narrator_prompt}\n\nPlayer says: {request.message}"
-
     def _build_campaign_opening_request(self) -> str:
         return (
             "Start a new haunted halls campaign. Write the opening scene for the player, "
@@ -291,6 +426,8 @@ class ChatOrchestrator:
                 campaign_state=campaign_state,
                 recent_turns=recent_turns,
                 message=message,
+                parsed_action=None,
+                tool_result=None,
                 model=model,
             )
             latency_ms = int((time.perf_counter() - start_time) * 1000)
