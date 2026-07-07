@@ -4,8 +4,10 @@ import copy
 import json
 from typing import Any
 
+from app.core.config import settings
 from app.schemas.chat import ParsedAction, ToolExecutionResult
-from app.tools.registry import ToolRegistry
+from app.tools.mcp_client import build_mcp_client
+from app.tools.registry import RegistryTransportError, ToolRegistry
 
 DEFAULT_CAMPAIGN_STATE: dict[str, Any] = {
     "player": {
@@ -21,14 +23,23 @@ DEFAULT_CAMPAIGN_STATE: dict[str, Any] = {
 
 
 class ToolExecutor:
-    def __init__(self) -> None:
-        self.registry = ToolRegistry()
-        self.registry.register("move_player", self.move_player)
-        self.registry.register("add_inventory", self.add_inventory)
-        self.registry.register("remove_inventory", self.remove_inventory)
-        self.registry.register("spawn_npc", self.spawn_npc)
-        self.registry.register("advance_clock", self.advance_clock)
-        self.registry.register("record_fact", self.record_fact)
+    def __init__(self, registry: ToolRegistry | None = None) -> None:
+        self.registry = registry or self._build_registry()
+
+    def _build_registry(self) -> ToolRegistry:
+        mcp_client = build_mcp_client() if settings.TOOL_REGISTRY_TRANSPORT in {"mcp", "hybrid"} else None
+        registry = ToolRegistry(mode=settings.TOOL_REGISTRY_TRANSPORT, mcp_client=mcp_client)
+        registry.register("move_player", self.move_player)
+        registry.register("add_inventory", self.add_inventory)
+        registry.register("remove_inventory", self.remove_inventory)
+        registry.register("spawn_npc", self.spawn_npc)
+        registry.register("advance_clock", self.advance_clock)
+        registry.register("record_fact", self.record_fact)
+        registry.register_mcp("spawn_npc", "create_npc")
+        registry.register_mcp("advance_clock", "advance_time")
+        registry.register_mcp("move_player", "get_room")
+        registry.register_mcp("record_fact", "search_lore")
+        return registry
 
     def execute(self, *, parsed_action: ParsedAction, campaign_state: str) -> tuple[dict[str, Any], ToolExecutionResult]:
         state = self._state_from_text(campaign_state)
@@ -48,20 +59,26 @@ class ToolExecutor:
 
         if action in {"move", "go", "walk", "run", "enter", "climb"}:
             room = target or "unknown_location"
-            self.registry.execute("move_player", state, room)
+            dispatch_error = self._dispatch_tool("move_player", state, room)
+            if dispatch_error is not None:
+                return state, dispatch_error
             result = ToolExecutionResult(
                 success=True,
                 applied_tools=["move_player"],
                 summary=f"Player moved to {room}.",
             )
             if parsed_action.stealth:
-                self.registry.execute("record_fact", state, f"player attempted stealth movement to {room}")
+                dispatch_error = self._dispatch_tool("record_fact", state, f"player attempted stealth movement to {room}")
+                if dispatch_error is not None:
+                    return state, dispatch_error
                 result.applied_tools.append("record_fact")
                 result.summary += " Stealth movement was recorded."
 
         elif action in {"take", "grab", "collect"}:
             item = target or parsed_action.parameters.get("item") or "unknown_item"
-            self.registry.execute("add_inventory", state, str(item))
+            dispatch_error = self._dispatch_tool("add_inventory", state, str(item))
+            if dispatch_error is not None:
+                return state, dispatch_error
             result = ToolExecutionResult(
                 success=True,
                 applied_tools=["add_inventory"],
@@ -70,7 +87,9 @@ class ToolExecutor:
 
         elif action in {"drop", "remove", "discard"}:
             item = target or parsed_action.parameters.get("item") or "unknown_item"
-            removed = bool(self.registry.execute("remove_inventory", state, str(item)))
+            removed, dispatch_error = self._dispatch_tool_with_value("remove_inventory", state, str(item))
+            if dispatch_error is not None:
+                return state, dispatch_error
             if removed:
                 result = ToolExecutionResult(
                     success=True,
@@ -87,7 +106,9 @@ class ToolExecutor:
         elif action == "spawn_npc":
             npc_id = target or parsed_action.parameters.get("npc") or "mysterious_figure"
             room = str(parsed_action.parameters.get("room") or state["player"]["location"])
-            self.registry.execute("spawn_npc", state, str(npc_id), room)
+            dispatch_error = self._dispatch_tool("spawn_npc", state, str(npc_id), room)
+            if dispatch_error is not None:
+                return state, dispatch_error
             result = ToolExecutionResult(
                 success=True,
                 applied_tools=["spawn_npc"],
@@ -100,7 +121,9 @@ class ToolExecutor:
                 ticks = max(1, int(amount))
             except (TypeError, ValueError):
                 ticks = 1
-            self.registry.execute("advance_clock", state, ticks)
+            dispatch_error = self._dispatch_tool("advance_clock", state, ticks)
+            if dispatch_error is not None:
+                return state, dispatch_error
             result = ToolExecutionResult(
                 success=True,
                 applied_tools=["advance_clock"],
@@ -109,7 +132,9 @@ class ToolExecutor:
 
         elif action == "record_fact":
             fact = str(parsed_action.parameters.get("fact") or parsed_action.raw_text)
-            self.registry.execute("record_fact", state, fact)
+            dispatch_error = self._dispatch_tool("record_fact", state, fact)
+            if dispatch_error is not None:
+                return state, dispatch_error
             result = ToolExecutionResult(
                 success=True,
                 applied_tools=["record_fact"],
@@ -166,3 +191,55 @@ class ToolExecutor:
             if before.get(key) != after.get(key):
                 delta[key] = after.get(key)
         return delta
+
+    def _dispatch_tool(self, tool_name: str, *args: Any, **kwargs: Any) -> ToolExecutionResult | None:
+        try:
+            result = self.registry.execute(tool_name, *args, **kwargs)
+            self._apply_remote_state_result(args, result)
+            return None
+        except (KeyError, RegistryTransportError) as exc:
+            return self._build_dispatch_error(tool_name, exc)
+
+    def _dispatch_tool_with_value(
+        self,
+        tool_name: str,
+        *args: Any,
+        **kwargs: Any,
+    ) -> tuple[Any, ToolExecutionResult | None]:
+        try:
+            result = self.registry.execute(tool_name, *args, **kwargs)
+            self._apply_remote_state_result(args, result)
+            return result, None
+        except (KeyError, RegistryTransportError) as exc:
+            return None, self._build_dispatch_error(tool_name, exc)
+
+    def _build_dispatch_error(self, tool_name: str, exc: Exception) -> ToolExecutionResult:
+        return ToolExecutionResult(
+            success=False,
+            summary=f"Tool dispatch failed for {tool_name}.",
+            errors=[
+                "tool_dispatch_failed",
+                f"tool:{tool_name}",
+                f"reason:{exc}",
+            ],
+        )
+
+    def _apply_remote_state_result(self, args: tuple[Any, ...], result: Any) -> None:
+        if not args:
+            return
+        state = args[0]
+        if not isinstance(state, dict):
+            return
+        if not isinstance(result, dict):
+            return
+
+        structured_content = result.get("structured_content")
+        if not isinstance(structured_content, dict):
+            return
+
+        next_state = structured_content.get("state")
+        if not isinstance(next_state, dict):
+            return
+
+        state.clear()
+        state.update(next_state)

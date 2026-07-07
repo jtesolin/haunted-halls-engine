@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic_settings import BaseSettings
 
@@ -11,6 +11,13 @@ class Settings(BaseSettings):
     DEFAULT_MODEL_NAME: Optional[str] = None
     DATABASE_URL: Optional[str] = None
     INTERNAL_API_TOKEN: Optional[str] = "floop"
+    TOOL_REGISTRY_TRANSPORT: Literal["local", "mcp", "hybrid"] = "mcp"
+    MCP_TRANSPORT: Literal["streamable_http", "sse", "stdio"] = "stdio"
+    MCP_SERVER_URL: Optional[str] = None
+    MCP_SERVER_COMMAND: Optional[str] = None
+    MCP_SERVER_ARGS: list[str] = []
+    MCP_SERVER_CWD: Optional[str] = None
+    MCP_REQUEST_TIMEOUT_MS: int = 2000
 
     MAX_INPUT_CHARACTERS: int = 2000
     MAX_OUTPUT_TOKENS: int = 500
