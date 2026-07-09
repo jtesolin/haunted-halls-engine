@@ -6,7 +6,9 @@ from uuid import uuid4
 from fastapi import HTTPException
 
 from app.agents.action_parser import ActionParseProviderError, ActionParserAgent
-from app.agents.narrator import NarratorAgent2
+from app.agents.memory_reflection import MemoryReflectionAgent, MemoryReflectionInput
+from app.agents.memory_summarizer import MemorySummarizerAgent, MemorySummarizerInput
+from app.agents.narrator import NarratorAgent, NarratorAgentInput
 from app.core.config import settings
 from app.db.session import session
 from app.guardrails.input_validation import validate_chat_request
@@ -18,6 +20,7 @@ from app.guardrails.rate_limits import (
 )
 from app.guardrails.token_budget import estimate_tokens, validate_request_budget
 from app.guardrails.usage_limits import UsageLimits
+from app.memory.services import MemoryService
 from app.schemas.campaign import CampaignCreateRequest, CampaignDetail, CampaignTurn
 from app.schemas.chat import ChatRequest, ChatResponse, ToolExecutionResult
 from app.schemas.events import (
@@ -35,7 +38,9 @@ from app.services.tool_executor import ToolExecutor
 class ChatOrchestrator:
     def __init__(self) -> None:
         self.action_parser_agent = ActionParserAgent()
-        self.narrator_agent = NarratorAgent2()
+        self.narrator_agent = NarratorAgent()
+        self.memory_summarizer_agent = MemorySummarizerAgent()
+        self.memory_reflection_agent = MemoryReflectionAgent()
         self.tool_executor = ToolExecutor()
 
     async def create_campaign(self, request: CampaignCreateRequest) -> CampaignDetail:
@@ -134,13 +139,6 @@ class ChatOrchestrator:
             validate_chat_request(db, request)
             validate_campaign_turn_limit(db, player_id, campaign_id)
 
-            estimated_input_tokens = estimate_tokens(request.message) + estimate_tokens(
-                "structured action parsing and tool execution context"
-            )
-            validate_request_budget(estimated_input_tokens, settings.MAX_OUTPUT_TOKENS)
-            validate_daily_request_limit(db, player_id)
-            validate_daily_token_limit(db, player_id, estimated_input_tokens)
-
             db.create_campaign(
                 campaign_id=campaign_id,
                 player_id=player_id,
@@ -164,8 +162,25 @@ class ChatOrchestrator:
             )
 
             ai_enabled = settings.AI_ENABLED or bool(settings.OPENAI_API_KEY)
-            campaign_state = self._build_campaign_state(db, campaign_id)
-            recent_turns = self._load_recent_turns(db, campaign_id)
+            memory_service = MemoryService(db)
+            campaign_state = memory_service.build_campaign_state(player_id=player_id, campaign_id=campaign_id)
+            recent_turns = memory_service.load_recent_turns(player_id=player_id, campaign_id=campaign_id)
+            memory_context = memory_service.load_memory_context(
+                player_id=player_id,
+                campaign_id=campaign_id,
+                query=request.message,
+                campaign_state=campaign_state,
+                recent_turns=recent_turns,
+            )
+
+            estimated_input_tokens = (
+                estimate_tokens(request.message)
+                + estimate_tokens("structured action parsing and tool execution context")
+                + estimate_tokens(memory_service.format_memory_context(memory_context))
+            )
+            validate_request_budget(estimated_input_tokens, settings.MAX_OUTPUT_TOKENS)
+            validate_daily_request_limit(db, player_id)
+            validate_daily_token_limit(db, player_id, estimated_input_tokens)
 
             parser_start_time = time.perf_counter()
             try:
@@ -173,6 +188,7 @@ class ChatOrchestrator:
                     message=request.message,
                     campaign_state=campaign_state,
                     recent_turns=recent_turns,
+                    memory_context=memory_context,
                     model=ModelPolicy.action_parser_model(),
                     deterministic_only=not ai_enabled,
                 )
@@ -287,7 +303,7 @@ class ChatOrchestrator:
                         type="game_state_updated",
                         payload=GameStateUpdatedPayload(state=updated_state),
                     )
-                    campaign_state = self._build_campaign_state(db, campaign_id)
+                    campaign_state = memory_service.build_campaign_state(player_id=player_id, campaign_id=campaign_id)
 
             if not ai_enabled:
                 reply = self._stub_reply(request.message)
@@ -309,14 +325,18 @@ class ChatOrchestrator:
             else:
                 start_time = time.perf_counter()
                 try:
-                    reply = await self.narrator_agent.generate(
-                        campaign_state=campaign_state,
-                        recent_turns=recent_turns,
-                        message=request.message,
-                        parsed_action=parsed_action,
-                        tool_result=tool_result,
+                    narrator_output = await self.narrator_agent.generate(
+                        payload=NarratorAgentInput(
+                            player_message=request.message,
+                            campaign_state=campaign_state,
+                            recent_turns=recent_turns,
+                            relevant_memories=memory_context,
+                            parsed_action=parsed_action,
+                            tool_result=tool_result,
+                        ),
                         model=model,
                     )
+                    reply = narrator_output.reply_text
                     latency_ms = int((time.perf_counter() - start_time) * 1000)
                     db.log_model_request(
                         request_id=f"req_{uuid4().hex}",
@@ -368,6 +388,22 @@ class ChatOrchestrator:
                 payload=NarratorResponseCreatedPayload(reply=reply),
             )
 
+            await self._maybe_update_memory_layers(
+                db=db,
+                memory_service=memory_service,
+                player_id=player_id,
+                campaign_id=campaign_id,
+                user_turn_id=player_turn_id,
+                assistant_turn_id=assistant_turn_id,
+                campaign_state=campaign_state,
+                recent_turns=memory_service.load_recent_turns(player_id=player_id, campaign_id=campaign_id),
+                parsed_action=parsed_action,
+                tool_result=tool_result,
+                reply=reply,
+                ai_enabled=ai_enabled,
+                request_message=request.message,
+            )
+
         return ChatResponse(
             reply=reply,
             campaign_id=campaign_id,
@@ -386,21 +422,153 @@ class ChatOrchestrator:
             f"and no extra commentary.\n\n{opening_prompt}"
         )
 
-    def _build_campaign_state(self, db, campaign_id: str) -> str:
-        campaign = db.get_campaign(campaign_id)
-        if campaign is None:
-            return "No campaign state yet."
-        return campaign.state or "No campaign state yet."
+    async def _maybe_update_memory_layers(
+        self,
+        *,
+        db,
+        memory_service: MemoryService,
+        player_id: str,
+        campaign_id: str,
+        user_turn_id: str,
+        assistant_turn_id: str,
+        campaign_state: str,
+        recent_turns: list[dict[str, str]],
+        parsed_action,
+        tool_result,
+        reply: str,
+        ai_enabled: bool,
+        request_message: str,
+    ) -> None:
+        try:
+            memory_service.maybe_store_semantic_memories(
+                player_id=player_id,
+                campaign_id=campaign_id,
+                user_turn_id=user_turn_id,
+                parsed_action=parsed_action,
+                tool_result=tool_result,
+                request_message=request_message,
+                campaign_state=campaign_state,
+            )
+            if memory_service.should_update_summary(player_id=player_id, campaign_id=campaign_id):
+                summary_model = ModelPolicy.summarizer_model()
+                previous_summary = memory_service.get_current_summary_text(player_id=player_id, campaign_id=campaign_id)
+                summarizer_payload = MemorySummarizerInput(
+                    previous_summary=previous_summary,
+                    recent_turns=recent_turns,
+                    campaign_state=campaign_state,
+                    latest_reply=reply,
+                )
+                summary_start_time = time.perf_counter()
+                try:
+                    summary_output = await self.memory_summarizer_agent.summarize(
+                        payload=summarizer_payload,
+                        model=summary_model,
+                        ai_enabled=ai_enabled,
+                    )
+                    if ai_enabled:
+                        summary_latency_ms = int((time.perf_counter() - summary_start_time) * 1000)
+                        estimated_tokens = estimate_tokens(summarizer_payload.model_dump_json())
+                        db.log_model_request(
+                            request_id=f"req_{uuid4().hex}",
+                            player_id=player_id,
+                            campaign_id=campaign_id,
+                            turn_id=assistant_turn_id,
+                            agent_name=self.memory_summarizer_agent.name,
+                            model=summary_model,
+                            estimated_input_tokens=estimated_tokens,
+                            actual_input_tokens=estimated_tokens,
+                            actual_output_tokens=summary_output.token_usage or estimate_tokens(summary_output.summary_text),
+                            latency_ms=summary_latency_ms,
+                            success=True,
+                            failure_reason=None,
+                            cost_estimate=0.0,
+                        )
+                    memory_service.store_summary(
+                        player_id=player_id,
+                        campaign_id=campaign_id,
+                        summary_text=summary_output.summary_text,
+                    )
+                except Exception as exc:
+                    if ai_enabled:
+                        summary_latency_ms = int((time.perf_counter() - summary_start_time) * 1000)
+                        estimated_tokens = estimate_tokens(summarizer_payload.model_dump_json())
+                        db.log_model_request(
+                            request_id=f"req_{uuid4().hex}",
+                            player_id=player_id,
+                            campaign_id=campaign_id,
+                            turn_id=assistant_turn_id,
+                            agent_name=self.memory_summarizer_agent.name,
+                            model=summary_model,
+                            estimated_input_tokens=estimated_tokens,
+                            actual_input_tokens=estimated_tokens,
+                            actual_output_tokens=0,
+                            latency_ms=summary_latency_ms,
+                            success=False,
+                            failure_reason=str(exc),
+                            cost_estimate=0.0,
+                        )
 
-    def _load_recent_turns(self, db, campaign_id: str) -> list[dict[str, str]]:
-        _, turns, _ = db.get_campaign_with_turns(campaign_id, limit=settings.MAX_RECENT_MESSAGES)
-        return [
-            {
-                "role": turn.role,
-                "content": turn.content,
-            }
-            for turn in turns
-        ]
+            if memory_service.should_reflect_memory(player_id=player_id, campaign_id=campaign_id):
+                reflection_model = ModelPolicy.memory_reflection_model()
+                current_summary = memory_service.get_current_summary_text(player_id=player_id, campaign_id=campaign_id)
+                reflection_payload = MemoryReflectionInput(
+                    recent_turns=recent_turns,
+                    campaign_state=campaign_state,
+                    current_summary=current_summary,
+                )
+                reflection_start_time = time.perf_counter()
+                try:
+                    reflection_output = await self.memory_reflection_agent.reflect(
+                        payload=reflection_payload,
+                        model=reflection_model,
+                        ai_enabled=ai_enabled,
+                    )
+                    if ai_enabled:
+                        reflection_latency_ms = int((time.perf_counter() - reflection_start_time) * 1000)
+                        estimated_tokens = estimate_tokens(reflection_payload.model_dump_json())
+                        db.log_model_request(
+                            request_id=f"req_{uuid4().hex}",
+                            player_id=player_id,
+                            campaign_id=campaign_id,
+                            turn_id=assistant_turn_id,
+                            agent_name=self.memory_reflection_agent.name,
+                            model=reflection_model,
+                            estimated_input_tokens=estimated_tokens,
+                            actual_input_tokens=estimated_tokens,
+                            actual_output_tokens=reflection_output.token_usage
+                            or estimate_tokens("\n".join(item.text for item in reflection_output.memories_to_store)),
+                            latency_ms=reflection_latency_ms,
+                            success=True,
+                            failure_reason=None,
+                            cost_estimate=0.0,
+                        )
+                    memory_service.store_reflection_memories(
+                        player_id=player_id,
+                        campaign_id=campaign_id,
+                        source_event_id=assistant_turn_id,
+                        memory_candidates=reflection_output.memories_to_store,
+                    )
+                except Exception as exc:
+                    if ai_enabled:
+                        reflection_latency_ms = int((time.perf_counter() - reflection_start_time) * 1000)
+                        estimated_tokens = estimate_tokens(reflection_payload.model_dump_json())
+                        db.log_model_request(
+                            request_id=f"req_{uuid4().hex}",
+                            player_id=player_id,
+                            campaign_id=campaign_id,
+                            turn_id=assistant_turn_id,
+                            agent_name=self.memory_reflection_agent.name,
+                            model=reflection_model,
+                            estimated_input_tokens=estimated_tokens,
+                            actual_input_tokens=estimated_tokens,
+                            actual_output_tokens=0,
+                            latency_ms=reflection_latency_ms,
+                            success=False,
+                            failure_reason=str(exc),
+                            cost_estimate=0.0,
+                        )
+        except Exception:
+            return
 
     async def _generate_narrator_response(
         self,
@@ -422,14 +590,15 @@ class ChatOrchestrator:
 
         start_time = time.perf_counter()
         try:
-            reply = await self.narrator_agent.generate(
-                campaign_state=campaign_state,
-                recent_turns=recent_turns,
-                message=message,
-                parsed_action=None,
-                tool_result=None,
+            narrator_output = await self.narrator_agent.generate(
+                payload=NarratorAgentInput(
+                    player_message=message,
+                    campaign_state=campaign_state,
+                    recent_turns=recent_turns,
+                ),
                 model=model,
             )
+            reply = narrator_output.reply_text
             latency_ms = int((time.perf_counter() - start_time) * 1000)
             db.log_model_request(
                 request_id=f"req_{uuid4().hex}",

@@ -2,10 +2,11 @@ from typing import Literal
 
 
 class ModelPolicy:
-    NARRATOR: Literal["gpt-4o-mini"] = "gpt-4o-mini"
-    ACTION_PARSER: Literal["gpt-4o-mini"] = "gpt-4o-mini"
-    SUMMARIZER: Literal["gpt-4o-mini"] = "gpt-4o-mini"
-    DIRECTOR: Literal["gpt-4.1-mini"] = "gpt-4.1-mini"
+    NARRATOR: Literal["gpt-5-nano"] = "gpt-5-nano"
+    ACTION_PARSER: Literal["gpt-5-nano"] = "gpt-5-nano"
+    SUMMARIZER: Literal["gpt-5-nano"] = "gpt-5-nano"
+    MEMORY_REFLECTION: Literal["gpt-5.4-nano"] = "gpt-5.4-nano"
+    DIRECTOR: Literal["gpt-5.4-nano"] = "gpt-5.4-nano"
 
     @classmethod
     def narrator_model(cls) -> str:
@@ -18,6 +19,10 @@ class ModelPolicy:
     @classmethod
     def summarizer_model(cls) -> str:
         return cls.SUMMARIZER
+
+    @classmethod
+    def memory_reflection_model(cls) -> str:
+        return cls.MEMORY_REFLECTION
 
     @classmethod
     def director_model(cls) -> str:

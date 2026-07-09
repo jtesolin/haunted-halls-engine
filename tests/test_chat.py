@@ -8,10 +8,11 @@ from fastapi.testclient import TestClient
 
 from app.agents import action_parser as action_parser_module
 from app.agents import narrator as narrator_module
-from app.orchestration import orchestrator as orchestrator_module
 from app.core.config import settings
 from app.db.session import session
+from app.guardrails.model_policy import ModelPolicy
 from app.main import app
+from app.orchestration import orchestrator as orchestrator_module
 from app.schemas.chat import ChatRequest
 
 
@@ -298,3 +299,209 @@ def test_ai_disabled_still_runs_parser_and_tools() -> None:
             "game_state_updated",
             "narrator_response_created",
         ]
+
+
+def test_orchestrator_includes_relevant_memory_context(monkeypatch) -> None:
+    settings.AI_ENABLED = True
+    settings.OPENAI_API_KEY = None
+    monkeypatch.setattr(settings, "MAX_RECENT_MESSAGES", 1)
+    monkeypatch.setattr(settings, "MEMORY_SUMMARY_EVERY_TURNS", 99)
+    monkeypatch.setattr(settings, "MEMORY_REFLECTION_EVERY_TURNS", 99)
+
+    narrator_calls = 0
+
+    async def fake_generate_text(*, messages, **kwargs) -> str:
+        nonlocal narrator_calls
+        prompt = str(messages[0]["content"])
+
+        if "Convert player text into strict JSON" in prompt:
+            return json.dumps(
+                {
+                    "action": "move",
+                    "target": "roof",
+                    "parameters": {},
+                    "stealth": True,
+                    "confidence": 0.94,
+                    "parse_status": "ok",
+                    "parser_notes": None,
+                }
+            )
+
+        narrator_calls += 1
+        if narrator_calls == 2:
+            assert any(
+                "relevant memory:" in str(message["content"]).lower()
+                and "roof" in str(message["content"]).lower()
+                for message in messages
+            )
+        return "A haunted reply"
+
+    monkeypatch.setattr(action_parser_module.model_client, "generate_text", fake_generate_text)
+    monkeypatch.setattr(narrator_module.model_client, "generate_text", fake_generate_text)
+
+    first_response = asyncio.run(
+        orchestrator_module.orchestrator.handle_chat(
+            ChatRequest(message="I quietly climb onto the roof.", player_id="player-memory-1")
+        )
+    )
+
+    second_response = asyncio.run(
+        orchestrator_module.orchestrator.handle_chat(
+            ChatRequest(
+                message="What do I notice from here?",
+                campaign_id=first_response.campaign_id,
+                player_id="player-memory-1",
+            )
+        )
+    )
+
+    assert second_response.campaign_id == first_response.campaign_id
+
+
+def test_orchestrator_writes_campaign_summary_and_reflection_memory(monkeypatch) -> None:
+    settings.AI_ENABLED = True
+    settings.OPENAI_API_KEY = None
+    monkeypatch.setattr(settings, "MEMORY_SUMMARY_EVERY_TURNS", 1)
+    monkeypatch.setattr(settings, "MEMORY_REFLECTION_EVERY_TURNS", 1)
+
+    async def fake_generate_text(*, messages, **kwargs) -> str:
+        prompt = str(messages[0]["content"])
+
+        if "Convert player text into strict JSON" in prompt:
+            return json.dumps(
+                {
+                    "action": "move",
+                    "target": "roof",
+                    "parameters": {},
+                    "stealth": False,
+                    "confidence": 0.91,
+                    "parse_status": "ok",
+                    "parser_notes": None,
+                }
+            )
+
+        if "Summarize the campaign" in prompt:
+            return "The player climbed to the roof and the hall answered in silence."
+
+        if "What important long-term facts should be remembered" in prompt:
+            return json.dumps(["The player is on the roof"])
+
+        return "A haunted reply"
+
+    monkeypatch.setattr(action_parser_module.model_client, "generate_text", fake_generate_text)
+    monkeypatch.setattr(narrator_module.model_client, "generate_text", fake_generate_text)
+
+    response = asyncio.run(
+        orchestrator_module.orchestrator.handle_chat(
+            ChatRequest(message="I climb to the roof.", player_id="player-memory-2")
+        )
+    )
+
+    with session() as db:
+        summary = db.get_latest_summary(response.campaign_id)
+        assert summary is not None
+        assert summary.summary == "The player climbed to the roof and the hall answered in silence."
+
+        memories = db.list_campaign_memories(response.campaign_id, limit=20)
+        assert any(memory.kind == "reflection" and "roof" in memory.content for memory in memories)
+        assert any(memory.kind == "event" and "roof" in memory.content for memory in memories)
+
+
+def test_orchestrator_logs_memory_agent_usage(monkeypatch) -> None:
+    settings.AI_ENABLED = True
+    settings.OPENAI_API_KEY = None
+    monkeypatch.setattr(settings, "MEMORY_SUMMARY_EVERY_TURNS", 1)
+    monkeypatch.setattr(settings, "MEMORY_REFLECTION_EVERY_TURNS", 1)
+
+    async def fake_generate_text(*, messages, **kwargs) -> str:
+        prompt = str(messages[0]["content"])
+
+        if "Convert player text into strict JSON" in prompt:
+            return json.dumps(
+                {
+                    "action": "move",
+                    "target": "roof",
+                    "parameters": {},
+                    "stealth": False,
+                    "confidence": 0.91,
+                    "parse_status": "ok",
+                    "parser_notes": None,
+                }
+            )
+
+        if "Summarize the campaign" in prompt:
+            return "The player climbed to the roof and the hall answered in silence."
+
+        if "What important long-term facts should be remembered" in prompt:
+            return json.dumps(["The player is on the roof"])
+
+        return "A haunted reply"
+
+    monkeypatch.setattr(action_parser_module.model_client, "generate_text", fake_generate_text)
+    monkeypatch.setattr(narrator_module.model_client, "generate_text", fake_generate_text)
+
+    response = asyncio.run(
+        orchestrator_module.orchestrator.handle_chat(
+            ChatRequest(message="I climb to the roof.", player_id="player-memory-3")
+        )
+    )
+
+    with session() as db:
+        rows = db.conn.execute(
+            "SELECT agent_name FROM model_requests WHERE campaign_id = ?",
+            (response.campaign_id,),
+        ).fetchall()
+        agent_names = {row["agent_name"] for row in rows}
+        assert "MemorySummarizer" in agent_names
+        assert "MemoryReflection" in agent_names
+
+
+def test_orchestrator_uses_policy_models_per_agent(monkeypatch) -> None:
+    settings.AI_ENABLED = True
+    settings.OPENAI_API_KEY = None
+    monkeypatch.setattr(settings, "MEMORY_SUMMARY_EVERY_TURNS", 1)
+    monkeypatch.setattr(settings, "MEMORY_REFLECTION_EVERY_TURNS", 1)
+
+    observed_models: dict[str, str] = {}
+
+    async def fake_generate_text(*, messages, model=None, **kwargs) -> str:  # noqa: ANN003
+        prompt = str(messages[0]["content"])
+
+        if "Convert player text into strict JSON" in prompt:
+            observed_models["ActionParser"] = str(model)
+            return json.dumps(
+                {
+                    "action": "move",
+                    "target": "roof",
+                    "parameters": {},
+                    "stealth": False,
+                    "confidence": 0.91,
+                    "parse_status": "ok",
+                    "parser_notes": None,
+                }
+            )
+
+        if "Summarize the campaign" in prompt:
+            observed_models["MemorySummarizer"] = str(model)
+            return "The player climbed to the roof and the hall answered in silence."
+
+        if "What important long-term facts should be remembered" in prompt:
+            observed_models["MemoryReflection"] = str(model)
+            return json.dumps(["The player is on the roof"])
+
+        observed_models["Narrator"] = str(model)
+        return "A haunted reply"
+
+    monkeypatch.setattr(action_parser_module.model_client, "generate_text", fake_generate_text)
+    monkeypatch.setattr(narrator_module.model_client, "generate_text", fake_generate_text)
+
+    asyncio.run(
+        orchestrator_module.orchestrator.handle_chat(
+            ChatRequest(message="I climb to the roof.", player_id="player-model-policy-1")
+        )
+    )
+
+    assert observed_models["ActionParser"] == ModelPolicy.action_parser_model()
+    assert observed_models["Narrator"] == ModelPolicy.narrator_model()
+    assert observed_models["MemorySummarizer"] == ModelPolicy.summarizer_model()
+    assert observed_models["MemoryReflection"] == ModelPolicy.memory_reflection_model()

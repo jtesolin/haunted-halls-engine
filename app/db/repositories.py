@@ -4,8 +4,10 @@ import json
 from datetime import datetime
 from sqlite3 import Connection
 from typing import Any, Optional
+from uuid import uuid4
 
-from app.db.models import CampaignDBModel, CharacterDBModel, GameEventDBModel, SummaryDBModel, TurnDBModel
+from app.db.models import CampaignDBModel, CharacterDBModel, GameEventDBModel, MemoryDBModel, SummaryDBModel, TurnDBModel
+from app.memory.retriever import build_embedding, cosine_similarity, deserialize_embedding, serialize_embedding
 from app.schemas.events import GameEventPayload, GameEventType
 
 
@@ -167,10 +169,101 @@ class Repository:
     def add_summary(self, campaign_id: str, summary: str) -> SummaryDBModel:
         created_at = datetime.utcnow().isoformat()
         self.conn.execute(
-            "INSERT INTO summaries (campaign_id, summary, created_at) VALUES (?, ?, ?, ?)",
+            "INSERT INTO summaries (campaign_id, summary, created_at) VALUES (?, ?, ?)",
             (campaign_id, summary, created_at),
         )
         return SummaryDBModel(campaign_id, summary, datetime.fromisoformat(created_at))
+
+    def get_latest_summary(self, campaign_id: str) -> SummaryDBModel | None:
+        row = self.conn.execute(
+            "SELECT campaign_id, summary, created_at FROM summaries WHERE campaign_id = ? ORDER BY created_at DESC LIMIT 1",
+            (campaign_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        return SummaryDBModel(
+            campaign_id=row["campaign_id"],
+            summary=row["summary"],
+            created_at=datetime.fromisoformat(row["created_at"]),
+        )
+
+    def list_campaign_summaries(self, campaign_id: str, limit: int = 5) -> list[SummaryDBModel]:
+        rows = self.conn.execute(
+            "SELECT campaign_id, summary, created_at FROM summaries WHERE campaign_id = ? ORDER BY created_at DESC LIMIT ?",
+            (campaign_id, limit),
+        ).fetchall()
+        return [
+            SummaryDBModel(
+                campaign_id=row["campaign_id"],
+                summary=row["summary"],
+                created_at=datetime.fromisoformat(row["created_at"]),
+            )
+            for row in rows
+        ]
+
+    def add_memory(
+        self,
+        campaign_id: str,
+        kind: str,
+        content: str,
+        *,
+        importance: float = 0.5,
+        source_event_id: str | None = None,
+        embedding: list[float] | None = None,
+    ) -> MemoryDBModel:
+        memory_id = f"memory_{uuid4().hex}"
+        created_at = datetime.utcnow().isoformat()
+        embedding_json = serialize_embedding(embedding or build_embedding(content))
+        self.conn.execute(
+            "INSERT INTO memories (memory_id, campaign_id, kind, content, embedding_json, importance, source_event_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (memory_id, campaign_id, kind, content, embedding_json, importance, source_event_id, created_at),
+        )
+        return MemoryDBModel(
+            memory_id=memory_id,
+            campaign_id=campaign_id,
+            kind=kind,
+            content=content,
+            embedding_json=embedding_json,
+            importance=importance,
+            source_event_id=source_event_id,
+            created_at=datetime.fromisoformat(created_at),
+        )
+
+    def list_campaign_memories(self, campaign_id: str, limit: int = 20) -> list[MemoryDBModel]:
+        rows = self.conn.execute(
+            "SELECT memory_id, campaign_id, kind, content, embedding_json, importance, source_event_id, created_at FROM memories WHERE campaign_id = ? ORDER BY created_at DESC LIMIT ?",
+            (campaign_id, limit),
+        ).fetchall()
+        return [
+            MemoryDBModel(
+                memory_id=row["memory_id"],
+                campaign_id=row["campaign_id"],
+                kind=row["kind"],
+                content=row["content"],
+                embedding_json=row["embedding_json"],
+                importance=float(row["importance"] or 0.0),
+                source_event_id=row["source_event_id"],
+                created_at=datetime.fromisoformat(row["created_at"]),
+            )
+            for row in rows
+        ]
+
+    def search_campaign_memories(self, campaign_id: str, query: str, limit: int = 4) -> list[MemoryDBModel]:
+        memories = self.list_campaign_memories(campaign_id, limit=50)
+        if not memories:
+            return []
+
+        query_embedding = build_embedding(query)
+
+        scored_memories: list[tuple[float, MemoryDBModel]] = []
+        for memory in memories:
+            memory_embedding = deserialize_embedding(memory.embedding_json)
+            similarity = cosine_similarity(query_embedding, memory_embedding)
+            score = similarity + float(memory.importance) * 0.1
+            scored_memories.append((score, memory))
+
+        scored_memories.sort(key=lambda item: (item[0], item[1].created_at), reverse=True)
+        return [memory for _, memory in scored_memories[:limit]]
 
     def get_campaign_with_turns(self, campaign_id: str, limit: int = 10) -> tuple[Optional[CampaignDBModel], list[TurnDBModel], bool]:
         campaign = self.get_campaign(campaign_id)

@@ -33,6 +33,7 @@ class ActionParserAgent(BaseAgent):
         message: str,
         campaign_state: str,
         recent_turns: list[dict[str, str]],
+        memory_context: list[dict[str, str]] | None = None,
         model: str | None = None,
         deterministic_only: bool = False,
     ) -> ParsedAction:
@@ -43,13 +44,14 @@ class ActionParserAgent(BaseAgent):
             message=message,
             campaign_state=campaign_state,
             recent_turns=recent_turns,
+            memory_context=memory_context or [],
         )
         try:
             raw_reply = await model_client.generate_text(
                 messages=messages,
                 model=model or ModelPolicy.action_parser_model(),
-                max_output_tokens=220,
-                temperature=0,
+                max_output_tokens=320,
+                reasoning_effort="minimal",
                 timeout=15,
             )
         except Exception as exc:
@@ -75,6 +77,7 @@ class ActionParserAgent(BaseAgent):
         message: str,
         campaign_state: str,
         recent_turns: list[dict[str, str]],
+        memory_context: list[dict[str, str]],
     ) -> list[ChatCompletionMessageParam]:
         short_history = recent_turns[-4:]
         messages: list[ChatCompletionMessageParam] = [
@@ -91,15 +94,30 @@ class ActionParserAgent(BaseAgent):
                 "role": "user",
                 "content": f"Campaign state:\n{campaign_state}",
             },
-            {
-                "role": "user",
-                "content": f"Recent turns:\n{json.dumps(short_history)}",
-            },
-            {
-                "role": "user",
-                "content": f"Player text:\n{message}",
-            },
         ]
+
+        if memory_context:
+            messages.append(
+                {
+                    "role": "user",
+                    "content": "Relevant memory:\n" + "\n\n".join(
+                        entry.get("content", "") for entry in memory_context if entry.get("content")
+                    ),
+                }
+            )
+
+        messages.extend(
+            [
+                {
+                    "role": "user",
+                    "content": f"Recent turns:\n{json.dumps(short_history)}",
+                },
+                {
+                    "role": "user",
+                    "content": f"Player text:\n{message}",
+                },
+            ]
+        )
         return messages
 
     def _parse_model_output(self, raw_text: str, model_output: str) -> ParsedAction | None:

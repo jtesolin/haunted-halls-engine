@@ -51,3 +51,15 @@ class SummaryDBModel:
     campaign_id: str
     summary: str
     created_at: datetime
+
+
+@dataclass
+class MemoryDBModel:
+    memory_id: str
+    campaign_id: str
+    kind: str
+    content: str
+    embedding_json: str
+    importance: float
+    source_event_id: Optional[str]
+    created_at: datetime

@@ -205,6 +205,19 @@ def init_db(conn: sqlite3.Connection) -> None:
             created_at TEXT NOT NULL,
             FOREIGN KEY(campaign_id) REFERENCES campaigns(campaign_id) ON DELETE CASCADE
         );
+
+        CREATE TABLE IF NOT EXISTS memories (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            memory_id TEXT NOT NULL UNIQUE,
+            campaign_id TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            content TEXT NOT NULL,
+            embedding_json TEXT NOT NULL,
+            importance REAL NOT NULL,
+            source_event_id TEXT,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY(campaign_id) REFERENCES campaigns(campaign_id) ON DELETE CASCADE
+        );
         """
     )
     _migrate_turns_table(conn)
