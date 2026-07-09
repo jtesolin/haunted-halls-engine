@@ -18,7 +18,7 @@ from app.guardrails.rate_limits import (
     validate_daily_request_limit,
     validate_daily_token_limit,
 )
-from app.guardrails.token_budget import estimate_tokens, validate_request_budget
+from app.guardrails.token_budget import TokenBudget, estimate_tokens, validate_request_budget
 from app.guardrails.usage_limits import UsageLimits
 from app.memory.services import MemoryService
 from app.schemas.campaign import CampaignCreateRequest, CampaignDetail, CampaignTurn
@@ -178,7 +178,7 @@ class ChatOrchestrator:
                 + estimate_tokens("structured action parsing and tool execution context")
                 + estimate_tokens(memory_service.format_memory_context(memory_context))
             )
-            validate_request_budget(estimated_input_tokens, settings.MAX_OUTPUT_TOKENS)
+            validate_request_budget(estimated_input_tokens, TokenBudget.narrator_max_output_tokens())
             validate_daily_request_limit(db, player_id)
             validate_daily_token_limit(db, player_id, estimated_input_tokens)
 
@@ -584,7 +584,7 @@ class ChatOrchestrator:
         message: str,
     ) -> str:
         estimated_input_tokens = estimate_tokens(message)
-        validate_request_budget(estimated_input_tokens, settings.MAX_OUTPUT_TOKENS)
+        validate_request_budget(estimated_input_tokens, TokenBudget.narrator_max_output_tokens())
         validate_daily_request_limit(db, player_id)
         validate_daily_token_limit(db, player_id, estimated_input_tokens)
 

@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 from app.agents.base import BaseAgent
 from app.ai.model_client import model_client
 from app.guardrails.model_policy import ModelPolicy
-from app.guardrails.token_budget import estimate_tokens
+from app.guardrails.token_budget import TokenBudget, estimate_tokens
 
 
 class MemorySummarizerInput(BaseModel):
@@ -43,7 +43,7 @@ class MemorySummarizerAgent(BaseAgent):
             summary_text = await model_client.generate_text(
                 messages=messages,
                 model=model or ModelPolicy.summarizer_model(),
-                max_output_tokens=180,
+                max_output_tokens=TokenBudget.summarizer_max_output_tokens(),
                 reasoning_effort="minimal",
                 timeout=15,
             )

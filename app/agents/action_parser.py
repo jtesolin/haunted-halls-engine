@@ -8,6 +8,7 @@ from openai.types.chat import ChatCompletionMessageParam
 from app.agents.base import BaseAgent
 from app.ai.model_client import model_client
 from app.guardrails.model_policy import ModelPolicy
+from app.guardrails.token_budget import TokenBudget
 from app.schemas.chat import ParsedAction
 
 
@@ -50,7 +51,7 @@ class ActionParserAgent(BaseAgent):
             raw_reply = await model_client.generate_text(
                 messages=messages,
                 model=model or ModelPolicy.action_parser_model(),
-                max_output_tokens=320,
+                max_output_tokens=TokenBudget.action_parser_max_output_tokens(),
                 reasoning_effort="minimal",
                 timeout=15,
             )

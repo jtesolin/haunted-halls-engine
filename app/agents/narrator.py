@@ -8,8 +8,8 @@ from pydantic import BaseModel, Field
 from app.agents.base import BaseAgent
 from app.ai.model_client import model_client
 from app.ai.prompts import narrator_prompt
-from app.core.config import settings
 from app.guardrails.model_policy import ModelPolicy
+from app.guardrails.token_budget import TokenBudget
 from app.schemas.chat import ParsedAction, ToolExecutionResult
 
 
@@ -59,7 +59,7 @@ class NarratorAgent(BaseAgent):
         reply = await model_client.generate_text(
             messages=messages,
             model=model or ModelPolicy.narrator_model(),
-            max_output_tokens=settings.MAX_OUTPUT_TOKENS,
+            max_output_tokens=TokenBudget.narrator_max_output_tokens(),
             reasoning_effort="medium",
             timeout=20,
         )
