@@ -137,6 +137,64 @@ def test_create_campaign_uses_narrator_for_opening_and_title(monkeypatch) -> Non
     assert data["messages"][0]["content"] == "The candles hiss awake in the corridor. Where do you step first?"
 
 
+def test_delete_campaign_removes_player_campaign() -> None:
+    settings.INTERNAL_API_TOKEN = "test-token"
+    settings.AI_ENABLED = False
+    settings.OPENAI_API_KEY = None
+    client = TestClient(app)
+
+    create_response = client.post(
+        "/api/campaign",
+        json={"player_id": "player-delete-1"},
+        headers={"Authorization": "Bearer test-token"},
+    )
+    assert create_response.status_code == 201
+    campaign_id = create_response.json()["campaign_id"]
+
+    delete_response = client.delete(
+        f"/api/campaign/{campaign_id}",
+        params={"player_id": "player-delete-1"},
+        headers={"Authorization": "Bearer test-token"},
+    )
+
+    assert delete_response.status_code == 204
+
+    get_response = client.get(
+        f"/api/campaign/{campaign_id}",
+        params={"player_id": "player-delete-1"},
+        headers={"Authorization": "Bearer test-token"},
+    )
+    assert get_response.status_code == 404
+
+
+def test_delete_campaign_returns_404_for_missing_or_unowned_campaign() -> None:
+    settings.INTERNAL_API_TOKEN = "test-token"
+    settings.AI_ENABLED = False
+    settings.OPENAI_API_KEY = None
+    client = TestClient(app)
+
+    response = client.delete(
+        "/api/campaign/campaign_missing",
+        params={"player_id": "player-delete-2"},
+        headers={"Authorization": "Bearer test-token"},
+    )
+
+    assert response.status_code == 404
+
+
+def test_delete_campaign_requires_authorization() -> None:
+    settings.AI_ENABLED = False
+    settings.OPENAI_API_KEY = None
+    client = TestClient(app)
+
+    response = client.delete(
+        "/api/campaign/campaign_any",
+        params={"player_id": "player-delete-3"},
+    )
+
+    assert response.status_code == 401
+
+
 def test_orchestrator_uses_narrator_agent_and_persists_turn(monkeypatch) -> None:
     settings.AI_ENABLED = True
     settings.OPENAI_API_KEY = None

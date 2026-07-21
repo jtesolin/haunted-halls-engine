@@ -69,6 +69,13 @@ class Repository:
             created_at=datetime.fromisoformat(row["created_at"]),
         )
 
+    def delete_player_campaign(self, player_id: str, campaign_id: str) -> bool:
+        cursor = self.conn.execute(
+            "DELETE FROM campaigns WHERE campaign_id = ? AND player_id = ?",
+            (campaign_id, player_id),
+        )
+        return cursor.rowcount > 0
+
     def count_player_campaigns(self, player_id: str) -> int:
         row = self.conn.execute(
             "SELECT COUNT(*) AS total FROM campaigns WHERE player_id = ?",

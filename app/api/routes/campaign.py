@@ -51,6 +51,16 @@ async def get_campaign(campaign_id: str, player_id: str) -> CampaignDetail:
     )
 
 
+@router.delete("/campaign/{campaign_id}", status_code=204)
+async def delete_campaign(campaign_id: str, player_id: str) -> None:
+    player_id = _validate_player_id(player_id)
+    with session() as db:
+        deleted = db.delete_player_campaign(player_id=player_id, campaign_id=campaign_id)
+
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+
+
 @router.get("/campaigns/{player_id}", response_model=list[CampaignSummary])
 async def list_campaigns(player_id: str) -> list[CampaignSummary]:
     player_id = _validate_player_id(player_id)
