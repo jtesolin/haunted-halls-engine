@@ -1,6 +1,5 @@
 import asyncio
 import json
-from collections.abc import Iterator
 
 import pytest
 from fastapi import HTTPException
@@ -14,16 +13,6 @@ from app.guardrails.model_policy import ModelPolicy
 from app.main import app
 from app.orchestration import orchestrator as orchestrator_module
 from app.schemas.chat import ChatRequest
-
-
-@pytest.fixture(autouse=True)
-def isolated_database(tmp_path) -> Iterator[None]:
-    original_database_url = settings.DATABASE_URL
-    settings.DATABASE_URL = f"sqlite:///{tmp_path / 'test_chat.db'}"
-    try:
-        yield
-    finally:
-        settings.DATABASE_URL = original_database_url
 
 
 def test_chat_echoes_message() -> None:
