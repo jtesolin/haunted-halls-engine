@@ -64,23 +64,27 @@ class SDKMCPClient(MCPToolClient):
     async def _connect(self) -> ClientSession:
         self._exit_stack = AsyncExitStack()
         timeout = timedelta(milliseconds=settings.MCP_REQUEST_TIMEOUT_MS)
+        is_url_transport = settings.MCP_TRANSPORT in {"sse", "streamable_http"}
+
+        if settings.MCP_TRANSPORT == "stdio" and not settings.MCP_SERVER_COMMAND:
+            raise RegistryTransportError("MCP_SERVER_COMMAND is required for stdio transport.")
+
+        if is_url_transport and not settings.MCP_SERVER_URL:
+            raise RegistryTransportError(
+                f"MCP_SERVER_URL is required for {settings.MCP_TRANSPORT} transport."
+            )
 
         if settings.MCP_TRANSPORT == "stdio":
-            command = settings.MCP_SERVER_COMMAND
-            if not command:
-                raise RegistryTransportError("MCP_SERVER_COMMAND is required for stdio transport.")
             read_stream, write_stream = await self._exit_stack.enter_async_context(
                 stdio_client(
                     StdioServerParameters(
-                        command=command,
+                        command=settings.MCP_SERVER_COMMAND,
                         args=settings.MCP_SERVER_ARGS,
                         cwd=settings.MCP_SERVER_CWD,
                     )
                 )
             )
         elif settings.MCP_TRANSPORT == "sse":
-            if not settings.MCP_SERVER_URL:
-                raise RegistryTransportError("MCP_SERVER_URL is required for SSE transport.")
             read_stream, write_stream = await self._exit_stack.enter_async_context(
                 sse_client(
                     settings.MCP_SERVER_URL,
@@ -89,8 +93,6 @@ class SDKMCPClient(MCPToolClient):
                 )
             )
         else:
-            if not settings.MCP_SERVER_URL:
-                raise RegistryTransportError("MCP_SERVER_URL is required for streamable HTTP transport.")
             http_client = await self._exit_stack.enter_async_context(
                 httpx.AsyncClient(
                     timeout=httpx.Timeout(

@@ -78,9 +78,11 @@ class ToolRegistry:
         except Exception as exc:  # noqa: BLE001
             raise RegistryTransportError(f"MCP call failed for tool: {mcp_name}") from exc
 
-        if isinstance(response, dict):
-            if "structured_content" in response or "content" in response:
-                return response
-            if "return" in response:
-                return response["return"]
+        if not isinstance(response, dict):
+            return response
+
+        if "structured_content" in response or "content" in response:
+            return response
+        if "return" in response:
+            return response["return"]
         return response
