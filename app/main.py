@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.api.dependencies import get_internal_engine_service_token
 from app.api.routes import campaign, chat, health
 
 app = FastAPI(
@@ -23,6 +24,11 @@ app.add_middleware(
 app.include_router(health.router)
 app.include_router(chat.router)
 app.include_router(campaign.router)
+
+
+@app.on_event("startup")
+async def validate_internal_service_auth_configuration() -> None:
+    get_internal_engine_service_token()
 
 
 @app.get("/")

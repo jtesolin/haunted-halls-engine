@@ -10,7 +10,7 @@ class Settings(BaseSettings):
     # DEFAULT_MODEL_PROVIDER: Optional[str] = None
     DEFAULT_MODEL_NAME: Optional[str] = None
     DATABASE_URL: Optional[str] = None
-    INTERNAL_API_TOKEN: Optional[str] = "floop"
+    INTERNAL_ENGINE_SERVICE_TOKEN: Optional[str] = None
     TOOL_REGISTRY_TRANSPORT: Literal["local", "mcp", "hybrid"] = "mcp"
     MCP_TRANSPORT: Literal["streamable_http", "sse", "stdio"] = "stdio"
     MCP_SERVER_URL: Optional[str] = None

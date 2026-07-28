@@ -27,7 +27,7 @@ def isolated_database(tmp_path) -> Iterator[None]:
 
 
 def test_chat_echoes_message() -> None:
-    settings.INTERNAL_API_TOKEN = "test-token"
+    settings.INTERNAL_ENGINE_SERVICE_TOKEN = "test-token"
     settings.AI_ENABLED = False
     settings.OPENAI_API_KEY = None
     client = TestClient(app)
@@ -47,7 +47,7 @@ def test_chat_echoes_message() -> None:
 
 
 def test_chat_requires_real_player_id() -> None:
-    settings.INTERNAL_API_TOKEN = "test-token"
+    settings.INTERNAL_ENGINE_SERVICE_TOKEN = "test-token"
     settings.AI_ENABLED = False
     settings.OPENAI_API_KEY = None
     client = TestClient(app)
@@ -70,7 +70,7 @@ def test_chat_requires_authorization() -> None:
 
 
 def test_campaign_routes_reject_anonymous_player_id() -> None:
-    settings.INTERNAL_API_TOKEN = "test-token"
+    settings.INTERNAL_ENGINE_SERVICE_TOKEN = "test-token"
     settings.AI_ENABLED = False
     settings.OPENAI_API_KEY = None
     client = TestClient(app)
@@ -84,7 +84,7 @@ def test_campaign_routes_reject_anonymous_player_id() -> None:
 
 
 def test_create_campaign_returns_hydrated_campaign() -> None:
-    settings.INTERNAL_API_TOKEN = "test-token"
+    settings.INTERNAL_ENGINE_SERVICE_TOKEN = "test-token"
     settings.AI_ENABLED = False
     settings.OPENAI_API_KEY = None
     client = TestClient(app)
@@ -108,7 +108,7 @@ def test_create_campaign_returns_hydrated_campaign() -> None:
 
 
 def test_create_campaign_uses_narrator_for_opening_and_title(monkeypatch) -> None:
-    settings.INTERNAL_API_TOKEN = "test-token"
+    settings.INTERNAL_ENGINE_SERVICE_TOKEN = "test-token"
     settings.AI_ENABLED = True
     settings.OPENAI_API_KEY = None
     prompts: list[str] = []
@@ -138,7 +138,7 @@ def test_create_campaign_uses_narrator_for_opening_and_title(monkeypatch) -> Non
 
 
 def test_delete_campaign_removes_player_campaign() -> None:
-    settings.INTERNAL_API_TOKEN = "test-token"
+    settings.INTERNAL_ENGINE_SERVICE_TOKEN = "test-token"
     settings.AI_ENABLED = False
     settings.OPENAI_API_KEY = None
     client = TestClient(app)
@@ -168,7 +168,7 @@ def test_delete_campaign_removes_player_campaign() -> None:
 
 
 def test_delete_campaign_returns_404_for_missing_or_unowned_campaign() -> None:
-    settings.INTERNAL_API_TOKEN = "test-token"
+    settings.INTERNAL_ENGINE_SERVICE_TOKEN = "test-token"
     settings.AI_ENABLED = False
     settings.OPENAI_API_KEY = None
     client = TestClient(app)

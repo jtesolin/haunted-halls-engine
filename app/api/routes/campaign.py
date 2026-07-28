@@ -1,12 +1,12 @@
 from fastapi import APIRouter, Depends, HTTPException
 
+from app.api.dependencies import require_internal_service_auth
 from app.orchestration.orchestrator import orchestrator
-from app.api.dependencies import require_internal_api_token
 from app.db.session import session
 from app.schemas.campaign import CampaignCreateRequest, CampaignDetail, CampaignSummary, CampaignTurn
 from app.schemas.character import CharacterInfo, CharacterList
 
-router = APIRouter(prefix="/api", tags=["campaign"], dependencies=[Depends(require_internal_api_token)])
+router = APIRouter(prefix="/api", tags=["campaign"], dependencies=[Depends(require_internal_service_auth)])
 
 
 def _validate_player_id(player_id: str) -> str:
