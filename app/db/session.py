@@ -218,6 +218,22 @@ def init_db(conn: sqlite3.Connection) -> None:
             created_at TEXT NOT NULL,
             FOREIGN KEY(campaign_id) REFERENCES campaigns(campaign_id) ON DELETE CASCADE
         );
+
+        CREATE TABLE IF NOT EXISTS internal_users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT NOT NULL UNIQUE,
+            identity_provider TEXT NOT NULL,
+            provider_issuer TEXT NOT NULL,
+            provider_subject TEXT NOT NULL,
+            email TEXT NOT NULL,
+            email_verified INTEGER NOT NULL,
+            display_name TEXT,
+            avatar_url TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            last_login_at TEXT NOT NULL,
+            UNIQUE(provider_issuer, provider_subject)
+        );
         """
     )
     _migrate_turns_table(conn)

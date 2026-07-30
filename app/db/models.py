@@ -63,3 +63,18 @@ class MemoryDBModel:
     importance: float
     source_event_id: Optional[str]
     created_at: datetime
+
+
+@dataclass
+class InternalUserDBModel:
+    id: str
+    identity_provider: str
+    provider_issuer: str
+    provider_subject: str
+    email: str
+    email_verified: bool
+    display_name: Optional[str]
+    avatar_url: Optional[str]
+    created_at: datetime
+    updated_at: datetime
+    last_login_at: datetime

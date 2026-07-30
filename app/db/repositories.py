@@ -1,12 +1,22 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from datetime import datetime
+from datetime import timezone
 from sqlite3 import Connection
 from typing import Any, Optional
 from uuid import uuid4
 
-from app.db.models import CampaignDBModel, CharacterDBModel, GameEventDBModel, MemoryDBModel, SummaryDBModel, TurnDBModel
+from app.db.models import (
+    CampaignDBModel,
+    CharacterDBModel,
+    GameEventDBModel,
+    InternalUserDBModel,
+    MemoryDBModel,
+    SummaryDBModel,
+    TurnDBModel,
+)
 from app.memory.retriever import build_embedding, cosine_similarity, deserialize_embedding, serialize_embedding
 from app.schemas.events import GameEventPayload, GameEventType
 
@@ -14,6 +24,159 @@ from app.schemas.events import GameEventPayload, GameEventType
 class Repository:
     def __init__(self, conn: Connection) -> None:
         self.conn = conn
+
+    def _now_utc_iso(self) -> str:
+        return datetime.now(timezone.utc).isoformat()
+
+    def _row_to_internal_user(self, row) -> InternalUserDBModel:
+        return InternalUserDBModel(
+            id=row["user_id"],
+            identity_provider=row["identity_provider"],
+            provider_issuer=row["provider_issuer"],
+            provider_subject=row["provider_subject"],
+            email=row["email"],
+            email_verified=bool(row["email_verified"]),
+            display_name=row["display_name"],
+            avatar_url=row["avatar_url"],
+            created_at=datetime.fromisoformat(row["created_at"]),
+            updated_at=datetime.fromisoformat(row["updated_at"]),
+            last_login_at=datetime.fromisoformat(row["last_login_at"]),
+        )
+
+    def get_internal_user_by_identity(self, provider_issuer: str, provider_subject: str) -> InternalUserDBModel | None:
+        row = self.conn.execute(
+            """
+            SELECT user_id, identity_provider, provider_issuer, provider_subject, email, email_verified,
+                   display_name, avatar_url, created_at, updated_at, last_login_at
+            FROM internal_users
+            WHERE provider_issuer = ? AND provider_subject = ?
+            """,
+            (provider_issuer, provider_subject),
+        ).fetchone()
+        if row is None:
+            return None
+        return self._row_to_internal_user(row)
+
+    def _insert_internal_user(
+        self,
+        *,
+        user_id: str,
+        identity_provider: str,
+        provider_issuer: str,
+        provider_subject: str,
+        email: str,
+        email_verified: bool,
+        display_name: str | None,
+        avatar_url: str | None,
+        created_at: str,
+    ) -> None:
+        self.conn.execute(
+            """
+            INSERT INTO internal_users (
+                user_id, identity_provider, provider_issuer, provider_subject,
+                email, email_verified, display_name, avatar_url,
+                created_at, updated_at, last_login_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                user_id,
+                identity_provider,
+                provider_issuer,
+                provider_subject,
+                email,
+                int(email_verified),
+                display_name,
+                avatar_url,
+                created_at,
+                created_at,
+                created_at,
+            ),
+        )
+
+    def _update_internal_user_profile_and_login(
+        self,
+        *,
+        user_id: str,
+        email: str,
+        email_verified: bool,
+        display_name: str | None,
+        avatar_url: str | None,
+        now_iso: str,
+    ) -> None:
+        self.conn.execute(
+            """
+            UPDATE internal_users
+            SET email = ?,
+                email_verified = ?,
+                display_name = ?,
+                avatar_url = ?,
+                updated_at = ?,
+                last_login_at = ?
+            WHERE user_id = ?
+            """,
+            (email, int(email_verified), display_name, avatar_url, now_iso, now_iso, user_id),
+        )
+
+    def resolve_internal_user(
+        self,
+        *,
+        identity_provider: str,
+        provider_issuer: str,
+        provider_subject: str,
+        email: str,
+        email_verified: bool,
+        display_name: str | None,
+        avatar_url: str | None,
+    ) -> InternalUserDBModel:
+        existing = self.get_internal_user_by_identity(provider_issuer, provider_subject)
+        now_iso = self._now_utc_iso()
+
+        if existing is not None:
+            self._update_internal_user_profile_and_login(
+                user_id=existing.id,
+                email=email,
+                email_verified=email_verified,
+                display_name=display_name,
+                avatar_url=avatar_url,
+                now_iso=now_iso,
+            )
+            refreshed = self.get_internal_user_by_identity(provider_issuer, provider_subject)
+            if refreshed is None:
+                raise RuntimeError("internal user disappeared during update")
+            return refreshed
+
+        user_id = f"user_{uuid4().hex}"
+        try:
+            self._insert_internal_user(
+                user_id=user_id,
+                identity_provider=identity_provider,
+                provider_issuer=provider_issuer,
+                provider_subject=provider_subject,
+                email=email,
+                email_verified=email_verified,
+                display_name=display_name,
+                avatar_url=avatar_url,
+                created_at=now_iso,
+            )
+        except sqlite3.IntegrityError:
+            pass
+
+        resolved = self.get_internal_user_by_identity(provider_issuer, provider_subject)
+        if resolved is None:
+            raise RuntimeError("failed to resolve internal user")
+
+        self._update_internal_user_profile_and_login(
+            user_id=resolved.id,
+            email=email,
+            email_verified=email_verified,
+            display_name=display_name,
+            avatar_url=avatar_url,
+            now_iso=self._now_utc_iso(),
+        )
+        refreshed = self.get_internal_user_by_identity(provider_issuer, provider_subject)
+        if refreshed is None:
+            raise RuntimeError("failed to reload resolved internal user")
+        return refreshed
 
     def create_campaign(
         self,

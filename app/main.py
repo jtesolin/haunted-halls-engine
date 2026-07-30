@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.dependencies import get_internal_engine_service_token
-from app.api.routes import campaign, chat, health
+from app.api.routes import campaign, chat, health, internal_auth
 
 app = FastAPI(
     title="Haunted Halls API",
@@ -24,6 +24,7 @@ app.add_middleware(
 app.include_router(health.router)
 app.include_router(chat.router)
 app.include_router(campaign.router)
+app.include_router(internal_auth.router)
 
 
 @app.on_event("startup")
