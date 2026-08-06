@@ -183,8 +183,6 @@ def test_no_provider_tokens_or_raw_claims_are_persisted() -> None:
 
 
 def test_duplicate_creation_race_returns_existing_user(monkeypatch) -> None:
-    client = TestClient(app)
-
     with session() as db:
         original_insert = db._insert_internal_user
         race_triggered = {"value": False}

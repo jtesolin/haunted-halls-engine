@@ -2,7 +2,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+import re
 from typing import Optional
+
+
+INTERNAL_USER_ID_REGEX = re.compile(r"^user_[0-9a-f]{32}$")
+
+
+def is_valid_internal_user_id(value: str) -> bool:
+    return bool(INTERNAL_USER_ID_REGEX.fullmatch(value))
 
 
 @dataclass

@@ -1,12 +1,12 @@
 from fastapi import APIRouter, Depends, HTTPException
 
-from app.api.dependencies import require_internal_service_auth
+from app.api.dependencies import AuthenticatedUserContext, require_authenticated_user_context
 from app.orchestration.orchestrator import orchestrator
 from app.db.session import session
 from app.schemas.campaign import CampaignCreateRequest, CampaignDetail, CampaignSummary, CampaignTurn
 from app.schemas.character import CharacterInfo, CharacterList
 
-router = APIRouter(prefix="/api", tags=["campaign"], dependencies=[Depends(require_internal_service_auth)])
+router = APIRouter(prefix="/api", tags=["campaign"])
 
 
 def _validate_player_id(player_id: str) -> str:
@@ -19,12 +19,19 @@ def _validate_player_id(player_id: str) -> str:
 
 
 @router.post("/campaign", response_model=CampaignDetail, status_code=201)
-async def create_campaign(payload: CampaignCreateRequest) -> CampaignDetail:
+async def create_campaign(
+    payload: CampaignCreateRequest,
+    _user_context: AuthenticatedUserContext = Depends(require_authenticated_user_context),
+) -> CampaignDetail:
     return await orchestrator.create_campaign(payload)
 
 
 @router.get("/campaign/{campaign_id}", response_model=CampaignDetail)
-async def get_campaign(campaign_id: str, player_id: str) -> CampaignDetail:
+async def get_campaign(
+    campaign_id: str,
+    player_id: str,
+    _user_context: AuthenticatedUserContext = Depends(require_authenticated_user_context),
+) -> CampaignDetail:
     player_id = _validate_player_id(player_id)
     with session() as db:
         campaign = db.get_player_campaign(player_id, campaign_id)
@@ -52,7 +59,11 @@ async def get_campaign(campaign_id: str, player_id: str) -> CampaignDetail:
 
 
 @router.delete("/campaign/{campaign_id}", status_code=204)
-async def delete_campaign(campaign_id: str, player_id: str) -> None:
+async def delete_campaign(
+    campaign_id: str,
+    player_id: str,
+    _user_context: AuthenticatedUserContext = Depends(require_authenticated_user_context),
+) -> None:
     player_id = _validate_player_id(player_id)
     with session() as db:
         deleted = db.delete_player_campaign(player_id=player_id, campaign_id=campaign_id)
@@ -62,7 +73,10 @@ async def delete_campaign(campaign_id: str, player_id: str) -> None:
 
 
 @router.get("/campaigns/{player_id}", response_model=list[CampaignSummary])
-async def list_campaigns(player_id: str) -> list[CampaignSummary]:
+async def list_campaigns(
+    player_id: str,
+    _user_context: AuthenticatedUserContext = Depends(require_authenticated_user_context),
+) -> list[CampaignSummary]:
     player_id = _validate_player_id(player_id)
 
     with session() as db:
@@ -87,7 +101,11 @@ async def list_campaigns(player_id: str) -> list[CampaignSummary]:
 
 
 @router.get("/character/{character_id}", response_model=CharacterInfo)
-async def get_character(character_id: str, player_id: str) -> CharacterInfo:
+async def get_character(
+    character_id: str,
+    player_id: str,
+    _user_context: AuthenticatedUserContext = Depends(require_authenticated_user_context),
+) -> CharacterInfo:
     player_id = _validate_player_id(player_id)
     with session() as db:
         character = db.get_character(character_id)
@@ -99,7 +117,10 @@ async def get_character(character_id: str, player_id: str) -> CharacterInfo:
 
 
 @router.get("/characters/{player_id}", response_model=CharacterList)
-async def list_characters(player_id: str) -> CharacterList:
+async def list_characters(
+    player_id: str,
+    _user_context: AuthenticatedUserContext = Depends(require_authenticated_user_context),
+) -> CharacterList:
     player_id = _validate_player_id(player_id)
 
     with session() as db:

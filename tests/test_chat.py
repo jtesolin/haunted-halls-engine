@@ -7,12 +7,36 @@ from fastapi.testclient import TestClient
 
 from app.agents import action_parser as action_parser_module
 from app.agents import narrator as narrator_module
+from app.api.dependencies import INTERNAL_USER_ID_HEADER_NAME
 from app.core.config import settings
 from app.db.session import session
 from app.guardrails.model_policy import ModelPolicy
 from app.main import app
 from app.orchestration import orchestrator as orchestrator_module
 from app.schemas.chat import ChatRequest
+from app.schemas.internal_auth import CANONICAL_GOOGLE_ISSUER
+
+
+def _user_scoped_headers(client: TestClient, provider_subject: str = "chat-test-user") -> dict[str, str]:
+    resolve_response = client.post(
+        "/internal/auth/users/resolve",
+        json={
+            "identity_provider": "google",
+            "provider_issuer": CANONICAL_GOOGLE_ISSUER,
+            "provider_subject": provider_subject,
+            "email": f"{provider_subject}@example.com",
+            "email_verified": True,
+            "display_name": "Test Player",
+            "avatar_url": "https://example.com/avatar.png",
+        },
+        headers={"Authorization": "Bearer test-token"},
+    )
+    assert resolve_response.status_code == 200
+    user_id = resolve_response.json()["user_id"]
+    return {
+        "Authorization": "Bearer test-token",
+        INTERNAL_USER_ID_HEADER_NAME: user_id,
+    }
 
 
 def test_chat_echoes_message() -> None:
@@ -20,11 +44,12 @@ def test_chat_echoes_message() -> None:
     settings.AI_ENABLED = False
     settings.OPENAI_API_KEY = None
     client = TestClient(app)
+    headers = _user_scoped_headers(client, "chat-echo")
 
     response = client.post(
         "/api/chat",
         json={"message": "hello", "player_id": "player-1"},
-        headers={"Authorization": "Bearer test-token"},
+        headers=headers,
     )
 
     assert response.status_code == 200
@@ -40,11 +65,12 @@ def test_chat_requires_real_player_id() -> None:
     settings.AI_ENABLED = False
     settings.OPENAI_API_KEY = None
     client = TestClient(app)
+    headers = _user_scoped_headers(client, "chat-missing-player")
 
     response = client.post(
         "/api/chat",
         json={"message": "hello"},
-        headers={"Authorization": "Bearer test-token"},
+        headers=headers,
     )
 
     assert response.status_code == 422
@@ -63,10 +89,11 @@ def test_campaign_routes_reject_anonymous_player_id() -> None:
     settings.AI_ENABLED = False
     settings.OPENAI_API_KEY = None
     client = TestClient(app)
+    headers = _user_scoped_headers(client, "campaign-anonymous")
 
     response = client.get(
         "/api/campaigns/anonymous",
-        headers={"Authorization": "Bearer test-token"},
+        headers=headers,
     )
 
     assert response.status_code == 422
@@ -77,11 +104,12 @@ def test_create_campaign_returns_hydrated_campaign() -> None:
     settings.AI_ENABLED = False
     settings.OPENAI_API_KEY = None
     client = TestClient(app)
+    headers = _user_scoped_headers(client, "campaign-create")
 
     response = client.post(
         "/api/campaign",
         json={"player_id": "player-3"},
-        headers={"Authorization": "Bearer test-token"},
+        headers=headers,
     )
 
     assert response.status_code == 201
@@ -110,11 +138,12 @@ def test_create_campaign_uses_narrator_for_opening_and_title(monkeypatch) -> Non
 
     monkeypatch.setattr(narrator_module.model_client, "generate_text", fake_generate_text)
     client = TestClient(app)
+    headers = _user_scoped_headers(client, "campaign-narrator")
 
     response = client.post(
         "/api/campaign",
         json={"player_id": "player-4"},
-        headers={"Authorization": "Bearer test-token"},
+        headers=headers,
     )
 
     assert response.status_code == 201
@@ -131,11 +160,12 @@ def test_delete_campaign_removes_player_campaign() -> None:
     settings.AI_ENABLED = False
     settings.OPENAI_API_KEY = None
     client = TestClient(app)
+    headers = _user_scoped_headers(client, "campaign-delete")
 
     create_response = client.post(
         "/api/campaign",
         json={"player_id": "player-delete-1"},
-        headers={"Authorization": "Bearer test-token"},
+        headers=headers,
     )
     assert create_response.status_code == 201
     campaign_id = create_response.json()["campaign_id"]
@@ -143,7 +173,7 @@ def test_delete_campaign_removes_player_campaign() -> None:
     delete_response = client.delete(
         f"/api/campaign/{campaign_id}",
         params={"player_id": "player-delete-1"},
-        headers={"Authorization": "Bearer test-token"},
+        headers=headers,
     )
 
     assert delete_response.status_code == 204
@@ -151,7 +181,7 @@ def test_delete_campaign_removes_player_campaign() -> None:
     get_response = client.get(
         f"/api/campaign/{campaign_id}",
         params={"player_id": "player-delete-1"},
-        headers={"Authorization": "Bearer test-token"},
+        headers=headers,
     )
     assert get_response.status_code == 404
 
@@ -161,11 +191,12 @@ def test_delete_campaign_returns_404_for_missing_or_unowned_campaign() -> None:
     settings.AI_ENABLED = False
     settings.OPENAI_API_KEY = None
     client = TestClient(app)
+    headers = _user_scoped_headers(client, "campaign-missing")
 
     response = client.delete(
         "/api/campaign/campaign_missing",
         params={"player_id": "player-delete-2"},
-        headers={"Authorization": "Bearer test-token"},
+        headers=headers,
     )
 
     assert response.status_code == 404

@@ -57,6 +57,20 @@ class Repository:
             return None
         return self._row_to_internal_user(row)
 
+    def get_internal_user_by_id(self, user_id: str) -> InternalUserDBModel | None:
+        row = self.conn.execute(
+            """
+            SELECT user_id, identity_provider, provider_issuer, provider_subject, email, email_verified,
+                   display_name, avatar_url, created_at, updated_at, last_login_at
+            FROM internal_users
+            WHERE user_id = ?
+            """,
+            (user_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        return self._row_to_internal_user(row)
+
     def _insert_internal_user(
         self,
         *,

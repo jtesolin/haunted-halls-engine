@@ -18,4 +18,14 @@
 - Email is mutable profile data and is not used as an identity key.
 - Resolution occurs during initial sign-in, updates profile fields + `last_login_at`, and returns only `user_id`.
 - Development sessions created before Phase 1C may require signing out and signing back in.
-- Campaign ownership and `player_id` migration remain future work.
+- Campaign ownership enforcement and `player_id` removal remain future work.
+
+## Service And User Context
+
+- FastAPI uses a two-step trust model for user-scoped endpoints: authenticate the calling service, then validate propagated user context.
+- Next.js sends user context through `X-Haunted-Halls-User-Id` on user-scoped requests while continuing to use `Authorization: Bearer <internal-service-token>` for service authentication.
+- The user ID header is trusted only when service authentication succeeds; missing, empty, malformed, unknown, or conflicting values are rejected with a generic auth error.
+- User-scoped endpoints require both service auth and validated internal user context.
+- Service-only endpoints, including `POST /internal/auth/users/resolve`, require service authentication but do not require the user-context header.
+- Public liveness endpoints remain intentionally unauthenticated.
+- Existing `player_id` remains temporary legacy gameplay input and is not trusted authentication identity.
