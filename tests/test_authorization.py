@@ -10,6 +10,8 @@ from app.api.dependencies import INTERNAL_USER_ID_HEADER_NAME
 from app.core.config import settings
 from app.db.session import init_db, session
 from app.main import app
+from app.memory.services import MemoryService
+from app.orchestration import orchestrator as orchestrator_module
 from app.schemas.internal_auth import CANONICAL_GOOGLE_ISSUER
 
 
@@ -364,9 +366,16 @@ def test_chat_unauthorized_creates_no_turn_or_event() -> None:
     with session() as db:
         _, turns_after, _ = db.get_campaign_with_turns(campaign_id, limit=100)
         events_after = db.list_campaign_events(campaign_id, limit=100)
+        memories_after = db.list_campaign_memories(campaign_id, limit=100)
+        requests_after = db.conn.execute(
+            "SELECT COUNT(*) FROM model_requests WHERE campaign_id = ?",
+            (campaign_id,),
+        ).fetchone()[0]
 
     assert len(turns_after) == len(turns_before)
     assert len(events_after) == len(events_before)
+    assert len(memories_after) == 0
+    assert int(requests_after) == 0
 
 
 def test_chat_unauthorized_does_not_consume_usage_quota() -> None:
@@ -390,6 +399,36 @@ def test_chat_unauthorized_does_not_consume_usage_quota() -> None:
         requests_after = db.count_user_requests_since(user_id_b, "2000-01-01T00:00:00")
 
     assert requests_after == requests_before
+
+
+def test_chat_other_user_does_not_invoke_model_parsing(monkeypatch) -> None:
+    _setup()
+    client = TestClient(app)
+    _, headers_a = _resolve_user(client, "chat-orchestrator-a")
+    _, headers_b = _resolve_user(client, "chat-orchestrator-b")
+
+    campaign_id = _create_campaign(client, headers_a)
+    called = False
+
+    async def fake_parse(*args, **kwargs):
+        nonlocal called
+        called = True
+        raise AssertionError("model parsing should not run for cross-user requests")
+
+    monkeypatch.setattr(
+        orchestrator_module.orchestrator.action_parser_agent,
+        "parse",
+        fake_parse,
+    )
+
+    response = client.post(
+        "/api/chat",
+        json={"message": "look around", "campaign_id": campaign_id},
+        headers=headers_b,
+    )
+
+    assert response.status_code == 404
+    assert called is False
 
 
 def test_chat_unowned_campaign_returns_404(tmp_path) -> None:
@@ -418,6 +457,46 @@ def test_chat_unowned_campaign_returns_404(tmp_path) -> None:
         assert response.status_code == 404
     finally:
         settings.DATABASE_URL = original
+
+
+def test_memory_context_is_scoped_to_the_authorized_campaign_owner() -> None:
+    _setup()
+    client = TestClient(app)
+    user_id_a, headers_a = _resolve_user(client, "memory-owner-a")
+    user_id_b, _headers_b = _resolve_user(client, "memory-owner-b")
+
+    campaign_id = _create_campaign(client, headers_a)
+
+    with session() as db:
+        db.add_memory(
+            campaign_id,
+            "message",
+            "Hidden sigil beneath the west stair.",
+            importance=1.0,
+            source_event_id=None,
+        )
+
+        memory_service = MemoryService(db)
+        owner_context = memory_service.load_memory_context(
+            owner_user_id=user_id_a,
+            campaign_id=campaign_id,
+            query="west stair sigil",
+            campaign_state="No campaign state yet.",
+            recent_turns=[],
+        )
+        foreign_context = memory_service.load_memory_context(
+            owner_user_id=user_id_b,
+            campaign_id=campaign_id,
+            query="west stair sigil",
+            campaign_state="No campaign state yet.",
+            recent_turns=[],
+        )
+
+    assert any(
+        "Hidden sigil beneath the west stair." in entry["content"]
+        for entry in owner_context
+    )
+    assert foreign_context == []
 
 
 # ---------------------------------------------------------------------------

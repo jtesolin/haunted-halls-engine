@@ -18,6 +18,7 @@
 - Email is mutable profile data and is not used as an identity key.
 - Resolution occurs during initial sign-in, updates profile fields + `last_login_at`, and returns only `user_id`.
 - Development sessions created before Phase 1C may require signing out and signing back in.
+- Email remains mutable profile data only; it never becomes an authorization key or fallback identity path.
 
 ## Campaign Ownership
 
@@ -39,3 +40,14 @@
 - User-scoped endpoints require both service auth and validated internal user context.
 - Service-only endpoints, including `POST /internal/auth/users/resolve`, require service authentication but do not require the user-context header.
 - Public liveness endpoints remain intentionally unauthenticated.
+- Browser-controlled identity values such as `user_id`, `owner_user_id`, `player_id`, email, provider claims, or user-context headers never override the authenticated internal user.
+- Campaign ownership is the domain authorization boundary for campaigns and all child resources. Missing, cross-user, and legacy unowned resources return the same `404`.
+- Chat authorization and quota checks complete before turns, events, memories, summaries, state changes, or model-usage records are persisted.
+- Memory retrieval and semantic search remain campaign-scoped before results enter model context.
+
+## Local Security Verification
+
+- `.venv/bin/python -m pytest tests/test_internal_service_auth.py tests/test_authorization.py tests/test_chat.py`
+- `.venv/bin/python -m pytest`
+- `make lint`
+- `.venv/bin/python -c "import app.main"`

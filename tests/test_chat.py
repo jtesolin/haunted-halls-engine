@@ -223,6 +223,57 @@ def test_delete_campaign_requires_authorization() -> None:
     assert response.status_code == 401
 
 
+def test_chat_daily_request_limit_rejects_before_persisting_side_effects() -> None:
+    settings.INTERNAL_ENGINE_SERVICE_TOKEN = "test-token"
+    settings.AI_ENABLED = False
+    settings.OPENAI_API_KEY = None
+    original_limit = settings.MAX_DAILY_PLAYER_REQUESTS
+    settings.MAX_DAILY_PLAYER_REQUESTS = 0
+    client = TestClient(app)
+    headers = _user_scoped_headers(client, "chat-limit-no-write")
+
+    try:
+        with session() as db:
+            counts_before = {
+                "campaigns": int(
+                    db.conn.execute("SELECT COUNT(*) FROM campaigns").fetchone()[0]
+                ),
+                "turns": int(db.conn.execute("SELECT COUNT(*) FROM turns").fetchone()[0]),
+                "events": int(
+                    db.conn.execute("SELECT COUNT(*) FROM game_events").fetchone()[0]
+                ),
+                "requests": int(
+                    db.conn.execute("SELECT COUNT(*) FROM model_requests").fetchone()[0]
+                ),
+            }
+
+        response = client.post(
+            "/api/chat",
+            json={"message": "hello"},
+            headers=headers,
+        )
+
+        assert response.status_code == 429
+
+        with session() as db:
+            counts_after = {
+                "campaigns": int(
+                    db.conn.execute("SELECT COUNT(*) FROM campaigns").fetchone()[0]
+                ),
+                "turns": int(db.conn.execute("SELECT COUNT(*) FROM turns").fetchone()[0]),
+                "events": int(
+                    db.conn.execute("SELECT COUNT(*) FROM game_events").fetchone()[0]
+                ),
+                "requests": int(
+                    db.conn.execute("SELECT COUNT(*) FROM model_requests").fetchone()[0]
+                ),
+            }
+
+        assert counts_after == counts_before
+    finally:
+        settings.MAX_DAILY_PLAYER_REQUESTS = original_limit
+
+
 def test_orchestrator_uses_narrator_agent_and_persists_turn(monkeypatch) -> None:
     settings.AI_ENABLED = True
     settings.OPENAI_API_KEY = None

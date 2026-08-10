@@ -141,26 +141,6 @@ class ChatOrchestrator:
             validate_chat_request(db, request, owner_user_id)
             validate_campaign_turn_limit(db, owner_user_id, campaign_id)
 
-            db.create_campaign(
-                campaign_id=campaign_id,
-                owner_user_id=owner_user_id,
-                name=f"Campaign {campaign_id}",
-                description="Auto-created campaign",
-            )
-            db.create_turn(
-                turn_id=player_turn_id,
-                campaign_id=campaign_id,
-                role="user",
-                content=request.message,
-            )
-            db.add_event(
-                event_id=f"evt_{uuid4().hex}",
-                campaign_id=campaign_id,
-                turn_id=player_turn_id,
-                type="player_message_received",
-                payload=PlayerMessageReceivedPayload(message=request.message),
-            )
-
             ai_enabled = settings.AI_ENABLED or bool(settings.OPENAI_API_KEY)
             memory_service = MemoryService(db)
             campaign_state = memory_service.build_campaign_state(
@@ -189,6 +169,26 @@ class ChatOrchestrator:
             )
             validate_daily_request_limit(db, owner_user_id)
             validate_daily_token_limit(db, owner_user_id, estimated_input_tokens)
+
+            db.create_campaign(
+                campaign_id=campaign_id,
+                owner_user_id=owner_user_id,
+                name=f"Campaign {campaign_id}",
+                description="Auto-created campaign",
+            )
+            db.create_turn(
+                turn_id=player_turn_id,
+                campaign_id=campaign_id,
+                role="user",
+                content=request.message,
+            )
+            db.add_event(
+                event_id=f"evt_{uuid4().hex}",
+                campaign_id=campaign_id,
+                turn_id=player_turn_id,
+                type="player_message_received",
+                payload=PlayerMessageReceivedPayload(message=request.message),
+            )
 
             parser_start_time = time.perf_counter()
             try:
