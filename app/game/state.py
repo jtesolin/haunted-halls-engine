@@ -13,7 +13,6 @@ class RoomState:
 
 @dataclass
 class PlayerState:
-    player_id: str
     name: str
     current_room: str
     inventory: Optional[list[str]] = None

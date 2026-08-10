@@ -12,7 +12,9 @@ def _auth_headers(token: str, user_id: str | None = None) -> dict[str, str]:
     return headers
 
 
-def _resolve_internal_user_id(client: TestClient, provider_subject: str = "internal-auth-user") -> str:
+def _resolve_internal_user_id(
+    client: TestClient, provider_subject: str = "internal-auth-user"
+) -> str:
     response = client.post(
         "/internal/auth/users/resolve",
         json={
@@ -24,7 +26,9 @@ def _resolve_internal_user_id(client: TestClient, provider_subject: str = "inter
             "display_name": "Internal Auth User",
             "avatar_url": "https://example.com/avatar.png",
         },
-        headers={"Authorization": f"Bearer {settings.INTERNAL_ENGINE_SERVICE_TOKEN or ''}"},
+        headers={
+            "Authorization": f"Bearer {settings.INTERNAL_ENGINE_SERVICE_TOKEN or ''}"
+        },
     )
     assert response.status_code == 200
     return response.json()["user_id"]
@@ -35,7 +39,7 @@ def test_protected_endpoint_rejects_missing_authorization_header() -> None:
 
     response = client.post(
         "/api/chat",
-        json={"message": "hello", "player_id": "player-1"},
+        json={"message": "hello"},
     )
 
     assert response.status_code == 401
@@ -47,7 +51,7 @@ def test_protected_endpoint_rejects_wrong_authentication_scheme() -> None:
 
     response = client.post(
         "/api/chat",
-        json={"message": "hello", "player_id": "player-1"},
+        json={"message": "hello"},
         headers={"Authorization": "Basic Zm9vOmJhcg=="},
     )
 
@@ -60,7 +64,7 @@ def test_protected_endpoint_rejects_empty_bearer_token() -> None:
 
     response = client.post(
         "/api/chat",
-        json={"message": "hello", "player_id": "player-1"},
+        json={"message": "hello"},
         headers={"Authorization": "Bearer   "},
     )
 
@@ -73,7 +77,7 @@ def test_protected_endpoint_rejects_incorrect_token() -> None:
 
     response = client.post(
         "/api/chat",
-        json={"message": "hello", "player_id": "player-1"},
+        json={"message": "hello"},
         headers=_auth_headers("wrong-token"),
     )
 
@@ -90,7 +94,7 @@ def test_protected_endpoint_accepts_the_configured_token() -> None:
 
     response = client.post(
         "/api/chat",
-        json={"message": "hello", "player_id": "player-1"},
+        json={"message": "hello"},
         headers=_auth_headers(settings.INTERNAL_ENGINE_SERVICE_TOKEN or "", user_id),
     )
 
@@ -102,7 +106,7 @@ def test_user_scoped_endpoint_rejects_missing_user_context_header() -> None:
 
     response = client.post(
         "/api/chat",
-        json={"message": "hello", "player_id": "player-1"},
+        json={"message": "hello"},
         headers=_auth_headers(settings.INTERNAL_ENGINE_SERVICE_TOKEN or ""),
     )
 
@@ -115,7 +119,7 @@ def test_user_scoped_endpoint_rejects_empty_user_context_header() -> None:
 
     response = client.post(
         "/api/chat",
-        json={"message": "hello", "player_id": "player-1"},
+        json={"message": "hello"},
         headers=_auth_headers(settings.INTERNAL_ENGINE_SERVICE_TOKEN or "", "   "),
     )
 
@@ -128,8 +132,10 @@ def test_user_scoped_endpoint_rejects_malformed_user_context_header() -> None:
 
     response = client.post(
         "/api/chat",
-        json={"message": "hello", "player_id": "player-1"},
-        headers=_auth_headers(settings.INTERNAL_ENGINE_SERVICE_TOKEN or "", "not-a-valid-user-id"),
+        json={"message": "hello"},
+        headers=_auth_headers(
+            settings.INTERNAL_ENGINE_SERVICE_TOKEN or "", "not-a-valid-user-id"
+        ),
     )
 
     assert response.status_code == 401
@@ -141,7 +147,7 @@ def test_user_scoped_endpoint_rejects_unknown_internal_user_id() -> None:
 
     response = client.post(
         "/api/chat",
-        json={"message": "hello", "player_id": "player-1"},
+        json={"message": "hello"},
         headers=_auth_headers(
             settings.INTERNAL_ENGINE_SERVICE_TOKEN or "",
             "user_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -158,7 +164,7 @@ def test_user_scoped_endpoint_rejects_multiple_user_context_values() -> None:
 
     response = client.post(
         "/api/chat",
-        json={"message": "hello", "player_id": "player-1"},
+        json={"message": "hello"},
         headers=[
             ("Authorization", f"Bearer {settings.INTERNAL_ENGINE_SERVICE_TOKEN or ''}"),
             (INTERNAL_USER_ID_HEADER_NAME, user_id),
@@ -180,12 +186,14 @@ def test_route_logic_is_not_invoked_after_failed_service_auth(monkeypatch) -> No
         called = True
         raise AssertionError("route logic should not run after auth failure")
 
-    monkeypatch.setattr(orchestrator_module.orchestrator, "handle_chat", fake_handle_chat)
+    monkeypatch.setattr(
+        orchestrator_module.orchestrator, "handle_chat", fake_handle_chat
+    )
     client = TestClient(app)
 
     response = client.post(
         "/api/chat",
-        json={"message": "hello", "player_id": "player-1"},
+        json={"message": "hello"},
         headers={"Authorization": "Token nope"},
     )
 
@@ -193,7 +201,9 @@ def test_route_logic_is_not_invoked_after_failed_service_auth(monkeypatch) -> No
     assert called is False
 
 
-def test_route_logic_is_not_invoked_after_failed_user_context_validation(monkeypatch) -> None:
+def test_route_logic_is_not_invoked_after_failed_user_context_validation(
+    monkeypatch,
+) -> None:
     from app.orchestration import orchestrator as orchestrator_module
 
     called = False
@@ -201,14 +211,18 @@ def test_route_logic_is_not_invoked_after_failed_user_context_validation(monkeyp
     async def fake_handle_chat(*args, **kwargs):
         nonlocal called
         called = True
-        raise AssertionError("route logic should not run after user context validation failure")
+        raise AssertionError(
+            "route logic should not run after user context validation failure"
+        )
 
-    monkeypatch.setattr(orchestrator_module.orchestrator, "handle_chat", fake_handle_chat)
+    monkeypatch.setattr(
+        orchestrator_module.orchestrator, "handle_chat", fake_handle_chat
+    )
     client = TestClient(app)
 
     response = client.post(
         "/api/chat",
-        json={"message": "hello", "player_id": "player-1", "internal_user_id": "spoofed"},
+        json={"message": "hello", "internal_user_id": "spoofed"},
         headers=_auth_headers(settings.INTERNAL_ENGINE_SERVICE_TOKEN or ""),
     )
 
@@ -230,7 +244,7 @@ def test_auth_failures_do_not_echo_supplied_credentials() -> None:
 
     response = client.post(
         "/api/chat",
-        json={"message": "hello", "player_id": "player-1"},
+        json={"message": "hello"},
         headers=_auth_headers("leaked-secret"),
     )
 

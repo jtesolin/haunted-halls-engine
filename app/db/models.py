@@ -16,7 +16,6 @@ def is_valid_internal_user_id(value: str) -> bool:
 @dataclass
 class CampaignDBModel:
     campaign_id: str
-    player_id: str
     name: str
     description: Optional[str]
     state: Optional[str]
@@ -27,7 +26,6 @@ class CampaignDBModel:
 @dataclass
 class CharacterDBModel:
     character_id: str
-    player_id: str
     campaign_id: str
     name: str
     description: Optional[str]
@@ -37,7 +35,6 @@ class CharacterDBModel:
 @dataclass
 class TurnDBModel:
     turn_id: str
-    player_id: str
     campaign_id: str
     role: str
     content: str
@@ -47,7 +44,6 @@ class TurnDBModel:
 @dataclass
 class GameEventDBModel:
     event_id: str
-    player_id: str
     campaign_id: str
     turn_id: Optional[str]
     type: str

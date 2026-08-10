@@ -16,13 +16,9 @@ def _parse_campaign_state(state: str | None) -> dict[str, object] | None:
         return None
 
 
-def validate_chat_request(db: Repository, request: ChatRequest, owner_user_id: str) -> None:
-    candidate = request.player_id.strip()
-    if not candidate:
-        raise HTTPException(status_code=422, detail="player_id is required")
-    if candidate.lower() == "anonymous":
-        raise HTTPException(status_code=422, detail="player_id cannot be 'anonymous'")
-
+def validate_chat_request(
+    db: Repository, request: ChatRequest, owner_user_id: str
+) -> None:
     if not request.message or not request.message.strip():
         raise HTTPException(status_code=400, detail="message cannot be empty")
 
@@ -55,4 +51,3 @@ def validate_chat_request(db: Repository, request: ChatRequest, owner_user_id: s
                     f"Player has reached the maximum number of campaigns ({UsageLimits.MAX_CAMPAIGNS_PER_PLAYER})."
                 ),
             )
-

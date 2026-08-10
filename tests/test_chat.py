@@ -17,7 +17,9 @@ from app.schemas.chat import ChatRequest
 from app.schemas.internal_auth import CANONICAL_GOOGLE_ISSUER
 
 
-def _user_scoped_headers(client: TestClient, provider_subject: str = "chat-test-user") -> dict[str, str]:
+def _user_scoped_headers(
+    client: TestClient, provider_subject: str = "chat-test-user"
+) -> dict[str, str]:
     resolve_response = client.post(
         "/internal/auth/users/resolve",
         json={
@@ -29,7 +31,9 @@ def _user_scoped_headers(client: TestClient, provider_subject: str = "chat-test-
             "display_name": "Test Player",
             "avatar_url": "https://example.com/avatar.png",
         },
-        headers={"Authorization": f"Bearer {settings.INTERNAL_ENGINE_SERVICE_TOKEN or ''}"},
+        headers={
+            "Authorization": f"Bearer {settings.INTERNAL_ENGINE_SERVICE_TOKEN or ''}"
+        },
     )
     assert resolve_response.status_code == 200
     user_id = resolve_response.json()["user_id"]
@@ -51,7 +55,9 @@ def _resolved_internal_user_id(client: TestClient, provider_subject: str) -> str
             "display_name": "Test Player",
             "avatar_url": "https://example.com/avatar.png",
         },
-        headers={"Authorization": f"Bearer {settings.INTERNAL_ENGINE_SERVICE_TOKEN or ''}"},
+        headers={
+            "Authorization": f"Bearer {settings.INTERNAL_ENGINE_SERVICE_TOKEN or ''}"
+        },
     )
     assert resolve_response.status_code == 200
     return resolve_response.json()["user_id"]
@@ -66,7 +72,7 @@ def test_chat_echoes_message() -> None:
 
     response = client.post(
         "/api/chat",
-        json={"message": "hello", "player_id": "player-1"},
+        json={"message": "hello"},
         headers=headers,
     )
 
@@ -78,42 +84,22 @@ def test_chat_echoes_message() -> None:
     assert data["turn_id"].startswith("turn_")
 
 
-def test_chat_requires_real_player_id() -> None:
-    settings.INTERNAL_ENGINE_SERVICE_TOKEN = "test-token"
-    settings.AI_ENABLED = False
-    settings.OPENAI_API_KEY = None
-    client = TestClient(app)
-    headers = _user_scoped_headers(client, "chat-missing-player")
-
-    response = client.post(
-        "/api/chat",
-        json={"message": "hello"},
-        headers=headers,
-    )
-
-    assert response.status_code == 422
-
-
 def test_chat_requires_authorization() -> None:
     client = TestClient(app)
 
-    response = client.post("/api/chat", json={"message": "hello", "player_id": "player-1"})
+    response = client.post("/api/chat", json={"message": "hello"})
 
     assert response.status_code == 401
 
 
-def test_campaign_routes_player_id_path_param_ignored_for_auth() -> None:
+def test_campaign_routes_list_without_legacy_identity_param() -> None:
     settings.INTERNAL_ENGINE_SERVICE_TOKEN = "test-token"
     settings.AI_ENABLED = False
     settings.OPENAI_API_KEY = None
     client = TestClient(app)
     headers = _user_scoped_headers(client, "campaign-anonymous")
 
-    # Phase 2B: player_id path param is no longer used for authorization; any value is accepted
-    response = client.get(
-        "/api/campaigns/anonymous",
-        headers=headers,
-    )
+    response = client.get("/api/campaigns", headers=headers)
 
     assert response.status_code == 200
 
@@ -127,7 +113,7 @@ def test_create_campaign_returns_hydrated_campaign() -> None:
 
     response = client.post(
         "/api/campaign",
-        json={"player_id": "player-3"},
+        json={},
         headers=headers,
     )
 
@@ -136,7 +122,6 @@ def test_create_campaign_returns_hydrated_campaign() -> None:
 
     assert data["campaign_id"].startswith("campaign_")
     assert data["name"] == "The Bell Beneath the Hall"
-    assert data["player_id"] == "player-3"
     assert data["truncated"] is False
     assert len(data["messages"]) == 1
     assert data["messages"][0]["role"] == "assistant"
@@ -151,17 +136,22 @@ def test_create_campaign_uses_narrator_for_opening_and_title(monkeypatch) -> Non
 
     async def fake_generate_text(*, messages, **kwargs) -> str:
         prompts.append(messages[-1]["content"])
-        if "provide only a short haunted campaign title" in messages[-1]["content"].lower():
+        if (
+            "provide only a short haunted campaign title"
+            in messages[-1]["content"].lower()
+        ):
             return "Whispers in the West Wing"
         return "The candles hiss awake in the corridor. Where do you step first?"
 
-    monkeypatch.setattr(narrator_module.model_client, "generate_text", fake_generate_text)
+    monkeypatch.setattr(
+        narrator_module.model_client, "generate_text", fake_generate_text
+    )
     client = TestClient(app)
     headers = _user_scoped_headers(client, "campaign-narrator")
 
     response = client.post(
         "/api/campaign",
-        json={"player_id": "player-4"},
+        json={},
         headers=headers,
     )
 
@@ -171,7 +161,10 @@ def test_create_campaign_uses_narrator_for_opening_and_title(monkeypatch) -> Non
     assert len(prompts) == 2
     assert "Start a new haunted halls campaign" in prompts[0]
     assert data["name"] == "Whispers in the West Wing"
-    assert data["messages"][0]["content"] == "The candles hiss awake in the corridor. Where do you step first?"
+    assert (
+        data["messages"][0]["content"]
+        == "The candles hiss awake in the corridor. Where do you step first?"
+    )
 
 
 def test_delete_campaign_removes_player_campaign() -> None:
@@ -183,7 +176,7 @@ def test_delete_campaign_removes_player_campaign() -> None:
 
     create_response = client.post(
         "/api/campaign",
-        json={"player_id": "player-delete-1"},
+        json={},
         headers=headers,
     )
     assert create_response.status_code == 201
@@ -191,7 +184,6 @@ def test_delete_campaign_removes_player_campaign() -> None:
 
     delete_response = client.delete(
         f"/api/campaign/{campaign_id}",
-        params={"player_id": "player-delete-1"},
         headers=headers,
     )
 
@@ -199,7 +191,6 @@ def test_delete_campaign_removes_player_campaign() -> None:
 
     get_response = client.get(
         f"/api/campaign/{campaign_id}",
-        params={"player_id": "player-delete-1"},
         headers=headers,
     )
     assert get_response.status_code == 404
@@ -214,7 +205,6 @@ def test_delete_campaign_returns_404_for_missing_or_unowned_campaign() -> None:
 
     response = client.delete(
         "/api/campaign/campaign_missing",
-        params={"player_id": "player-delete-2"},
         headers=headers,
     )
 
@@ -228,7 +218,6 @@ def test_delete_campaign_requires_authorization() -> None:
 
     response = client.delete(
         "/api/campaign/campaign_any",
-        params={"player_id": "player-delete-3"},
     )
 
     assert response.status_code == 401
@@ -259,19 +248,27 @@ def test_orchestrator_uses_narrator_agent_and_persists_turn(monkeypatch) -> None
 
         assert messages[1]["role"] == "user"
         assert "Campaign state:" in messages[1]["content"]
-        assert any("Tool execution result:" in str(message["content"]) for message in messages)
+        assert any(
+            "Tool execution result:" in str(message["content"]) for message in messages
+        )
         saw_tool_context = True
         assert messages[-1]["role"] == "user"
         assert messages[-1]["content"] == "hello"
         return "A haunted reply"
 
-    monkeypatch.setattr(action_parser_module.model_client, "generate_text", fake_generate_text)
-    monkeypatch.setattr(narrator_module.model_client, "generate_text", fake_generate_text)
+    monkeypatch.setattr(
+        action_parser_module.model_client, "generate_text", fake_generate_text
+    )
+    monkeypatch.setattr(
+        narrator_module.model_client, "generate_text", fake_generate_text
+    )
 
     response = asyncio.run(
         orchestrator_module.orchestrator.handle_chat(
-            ChatRequest(message="hello", player_id="player-2"),
-            owner_user_id=_resolved_internal_user_id(TestClient(app), "orchestrator-chat"),
+            ChatRequest(message="hello"),
+            owner_user_id=_resolved_internal_user_id(
+                TestClient(app), "orchestrator-chat"
+            ),
         )
     )
 
@@ -287,10 +284,8 @@ def test_orchestrator_uses_narrator_agent_and_persists_turn(monkeypatch) -> None
 
         _, turns, _ = db.get_campaign_with_turns(response.campaign_id, limit=10)
         assert len(turns) >= 2
-        assert turns[-2].player_id == "player-2"
         assert turns[-2].role == "user"
         assert turns[-2].content == "hello"
-        assert turns[-1].player_id == "player-2"
         assert turns[-1].role == "assistant"
         assert turns[-1].content == "A haunted reply"
 
@@ -308,7 +303,9 @@ def test_orchestrator_uses_narrator_agent_and_persists_turn(monkeypatch) -> None
         assert events[-2].turn_id == turns[-2].turn_id
         assert events[-1].turn_id == turns[-1].turn_id
         assert json.loads(events[-5].payload_json or "{}") == {"message": "hello"}
-        assert json.loads(events[-1].payload_json or "{}") == {"reply": "A haunted reply"}
+        assert json.loads(events[-1].payload_json or "{}") == {
+            "reply": "A haunted reply"
+        }
 
 
 def test_orchestrator_records_parse_failure_for_invalid_action(monkeypatch) -> None:
@@ -330,14 +327,20 @@ def test_orchestrator_records_parse_failure_for_invalid_action(monkeypatch) -> N
             )
         return "I cannot decode your intent, but the hall waits."
 
-    monkeypatch.setattr(action_parser_module.model_client, "generate_text", fake_generate_text)
-    monkeypatch.setattr(narrator_module.model_client, "generate_text", fake_generate_text)
+    monkeypatch.setattr(
+        action_parser_module.model_client, "generate_text", fake_generate_text
+    )
+    monkeypatch.setattr(
+        narrator_module.model_client, "generate_text", fake_generate_text
+    )
 
     with pytest.raises(HTTPException) as exc_info:
         asyncio.run(
             orchestrator_module.orchestrator.handle_chat(
-                ChatRequest(message="???", player_id="player-5"),
-                owner_user_id=_resolved_internal_user_id(TestClient(app), "orchestrator-invalid-action"),
+                ChatRequest(message="???"),
+                owner_user_id=_resolved_internal_user_id(
+                    TestClient(app), "orchestrator-invalid-action"
+                ),
             )
         )
 
@@ -345,11 +348,15 @@ def test_orchestrator_records_parse_failure_for_invalid_action(monkeypatch) -> N
     assert "Unprocessable action" in str(exc_info.value.detail)
 
     with session() as db:
-        campaign_count = db.count_player_campaigns("player-5")
+        campaign_count = db.count_owner_campaigns(
+            _resolved_internal_user_id(TestClient(app), "orchestrator-invalid-action")
+        )
         assert campaign_count == 0
 
 
-def test_orchestrator_returns_502_when_action_parser_provider_fails(monkeypatch) -> None:
+def test_orchestrator_returns_502_when_action_parser_provider_fails(
+    monkeypatch,
+) -> None:
     settings.AI_ENABLED = True
     settings.OPENAI_API_KEY = None
 
@@ -358,13 +365,17 @@ def test_orchestrator_returns_502_when_action_parser_provider_fails(monkeypatch)
             raise RuntimeError("parser upstream failure")
         return "unused"
 
-    monkeypatch.setattr(action_parser_module.model_client, "generate_text", broken_generate_text)
+    monkeypatch.setattr(
+        action_parser_module.model_client, "generate_text", broken_generate_text
+    )
 
     with pytest.raises(HTTPException) as exc_info:
         asyncio.run(
             orchestrator_module.orchestrator.handle_chat(
-                ChatRequest(message="move to roof", player_id="player-6"),
-                owner_user_id=_resolved_internal_user_id(TestClient(app), "orchestrator-parser-fail"),
+                ChatRequest(message="move to roof"),
+                owner_user_id=_resolved_internal_user_id(
+                    TestClient(app), "orchestrator-parser-fail"
+                ),
             )
         )
 
@@ -378,12 +389,16 @@ def test_ai_disabled_still_runs_parser_and_tools() -> None:
 
     response = asyncio.run(
         orchestrator_module.orchestrator.handle_chat(
-            ChatRequest(message="I quietly climb onto the roof.", player_id="player-7"),
-            owner_user_id=_resolved_internal_user_id(TestClient(app), "orchestrator-ai-disabled"),
+            ChatRequest(message="I quietly climb onto the roof."),
+            owner_user_id=_resolved_internal_user_id(
+                TestClient(app), "orchestrator-ai-disabled"
+            ),
         )
     )
 
-    assert response.reply == "AI narrator replies (stub): I quietly climb onto the roof."
+    assert (
+        response.reply == "AI narrator replies (stub): I quietly climb onto the roof."
+    )
 
     with session() as db:
         campaign = db.get_campaign(response.campaign_id)
@@ -437,13 +452,19 @@ def test_orchestrator_includes_relevant_memory_context(monkeypatch) -> None:
             )
         return "A haunted reply"
 
-    monkeypatch.setattr(action_parser_module.model_client, "generate_text", fake_generate_text)
-    monkeypatch.setattr(narrator_module.model_client, "generate_text", fake_generate_text)
+    monkeypatch.setattr(
+        action_parser_module.model_client, "generate_text", fake_generate_text
+    )
+    monkeypatch.setattr(
+        narrator_module.model_client, "generate_text", fake_generate_text
+    )
 
     first_response = asyncio.run(
         orchestrator_module.orchestrator.handle_chat(
-            ChatRequest(message="I quietly climb onto the roof.", player_id="player-memory-1"),
-            owner_user_id=_resolved_internal_user_id(TestClient(app), "orchestrator-memory-context"),
+            ChatRequest(message="I quietly climb onto the roof."),
+            owner_user_id=_resolved_internal_user_id(
+                TestClient(app), "orchestrator-memory-context"
+            ),
         )
     )
 
@@ -452,16 +473,19 @@ def test_orchestrator_includes_relevant_memory_context(monkeypatch) -> None:
             ChatRequest(
                 message="What do I notice from here?",
                 campaign_id=first_response.campaign_id,
-                player_id="player-memory-1",
             ),
-            owner_user_id=_resolved_internal_user_id(TestClient(app), "orchestrator-memory-context"),
+            owner_user_id=_resolved_internal_user_id(
+                TestClient(app), "orchestrator-memory-context"
+            ),
         )
     )
 
     assert second_response.campaign_id == first_response.campaign_id
 
 
-def test_orchestrator_writes_campaign_summary_and_reflection_memory(monkeypatch) -> None:
+def test_orchestrator_writes_campaign_summary_and_reflection_memory(
+    monkeypatch,
+) -> None:
     settings.AI_ENABLED = True
     settings.OPENAI_API_KEY = None
     monkeypatch.setattr(settings, "MEMORY_SUMMARY_EVERY_TURNS", 1)
@@ -491,24 +515,38 @@ def test_orchestrator_writes_campaign_summary_and_reflection_memory(monkeypatch)
 
         return "A haunted reply"
 
-    monkeypatch.setattr(action_parser_module.model_client, "generate_text", fake_generate_text)
-    monkeypatch.setattr(narrator_module.model_client, "generate_text", fake_generate_text)
+    monkeypatch.setattr(
+        action_parser_module.model_client, "generate_text", fake_generate_text
+    )
+    monkeypatch.setattr(
+        narrator_module.model_client, "generate_text", fake_generate_text
+    )
 
     response = asyncio.run(
         orchestrator_module.orchestrator.handle_chat(
-            ChatRequest(message="I climb to the roof.", player_id="player-memory-2"),
-            owner_user_id=_resolved_internal_user_id(TestClient(app), "orchestrator-memory-summary"),
+            ChatRequest(message="I climb to the roof."),
+            owner_user_id=_resolved_internal_user_id(
+                TestClient(app), "orchestrator-memory-summary"
+            ),
         )
     )
 
     with session() as db:
         summary = db.get_latest_summary(response.campaign_id)
         assert summary is not None
-        assert summary.summary == "The player climbed to the roof and the hall answered in silence."
+        assert (
+            summary.summary
+            == "The player climbed to the roof and the hall answered in silence."
+        )
 
         memories = db.list_campaign_memories(response.campaign_id, limit=20)
-        assert any(memory.kind == "reflection" and "roof" in memory.content for memory in memories)
-        assert any(memory.kind == "event" and "roof" in memory.content for memory in memories)
+        assert any(
+            memory.kind == "reflection" and "roof" in memory.content
+            for memory in memories
+        )
+        assert any(
+            memory.kind == "event" and "roof" in memory.content for memory in memories
+        )
 
 
 def test_orchestrator_logs_memory_agent_usage(monkeypatch) -> None:
@@ -541,13 +579,19 @@ def test_orchestrator_logs_memory_agent_usage(monkeypatch) -> None:
 
         return "A haunted reply"
 
-    monkeypatch.setattr(action_parser_module.model_client, "generate_text", fake_generate_text)
-    monkeypatch.setattr(narrator_module.model_client, "generate_text", fake_generate_text)
+    monkeypatch.setattr(
+        action_parser_module.model_client, "generate_text", fake_generate_text
+    )
+    monkeypatch.setattr(
+        narrator_module.model_client, "generate_text", fake_generate_text
+    )
 
     response = asyncio.run(
         orchestrator_module.orchestrator.handle_chat(
-            ChatRequest(message="I climb to the roof.", player_id="player-memory-3"),
-            owner_user_id=_resolved_internal_user_id(TestClient(app), "orchestrator-memory-usage"),
+            ChatRequest(message="I climb to the roof."),
+            owner_user_id=_resolved_internal_user_id(
+                TestClient(app), "orchestrator-memory-usage"
+            ),
         )
     )
 
@@ -597,13 +641,19 @@ def test_orchestrator_uses_policy_models_per_agent(monkeypatch) -> None:
         observed_models["Narrator"] = str(model)
         return "A haunted reply"
 
-    monkeypatch.setattr(action_parser_module.model_client, "generate_text", fake_generate_text)
-    monkeypatch.setattr(narrator_module.model_client, "generate_text", fake_generate_text)
+    monkeypatch.setattr(
+        action_parser_module.model_client, "generate_text", fake_generate_text
+    )
+    monkeypatch.setattr(
+        narrator_module.model_client, "generate_text", fake_generate_text
+    )
 
     asyncio.run(
         orchestrator_module.orchestrator.handle_chat(
-            ChatRequest(message="I climb to the roof.", player_id="player-model-policy-1"),
-            owner_user_id=_resolved_internal_user_id(TestClient(app), "orchestrator-policy"),
+            ChatRequest(message="I climb to the roof."),
+            owner_user_id=_resolved_internal_user_id(
+                TestClient(app), "orchestrator-policy"
+            ),
         )
     )
 

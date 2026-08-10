@@ -13,7 +13,9 @@ from app.main import app
 from app.schemas.internal_auth import CANONICAL_GOOGLE_ISSUER
 
 
-def _resolve_user(client: TestClient, provider_subject: str) -> tuple[str, dict[str, str]]:
+def _resolve_user(
+    client: TestClient, provider_subject: str
+) -> tuple[str, dict[str, str]]:
     """Register a user and return (user_id, auth_headers)."""
     response = client.post(
         "/internal/auth/users/resolve",
@@ -37,8 +39,8 @@ def _resolve_user(client: TestClient, provider_subject: str) -> tuple[str, dict[
     return user_id, headers
 
 
-def _create_campaign(client: TestClient, headers: dict[str, str], player_id: str = "player-1") -> str:
-    response = client.post("/api/campaign", json={"player_id": player_id}, headers=headers)
+def _create_campaign(client: TestClient, headers: dict[str, str]) -> str:
+    response = client.post("/api/campaign", json={}, headers=headers)
     assert response.status_code == 201
     return response.json()["campaign_id"]
 
@@ -60,16 +62,16 @@ def test_list_campaigns_returns_only_owned() -> None:
     _, headers_a = _resolve_user(client, "list-user-a")
     _, headers_b = _resolve_user(client, "list-user-b")
 
-    _create_campaign(client, headers_a, "player-a")
-    _create_campaign(client, headers_a, "player-a")
-    _create_campaign(client, headers_b, "player-b")
+    _create_campaign(client, headers_a)
+    _create_campaign(client, headers_a)
+    _create_campaign(client, headers_b)
 
-    response = client.get("/api/campaigns/player-a", headers=headers_a)
+    response = client.get("/api/campaigns", headers=headers_a)
     assert response.status_code == 200
     campaigns = response.json()
     assert len(campaigns) == 2
 
-    response_b = client.get("/api/campaigns/player-b", headers=headers_b)
+    response_b = client.get("/api/campaigns", headers=headers_b)
     assert response_b.status_code == 200
     assert len(response_b.json()) == 1
 
@@ -82,7 +84,7 @@ def test_list_campaigns_does_not_return_other_users_campaigns() -> None:
 
     campaign_id = _create_campaign(client, headers_a)
 
-    response = client.get("/api/campaigns/player-1", headers=headers_b)
+    response = client.get("/api/campaigns", headers=headers_b)
     assert response.status_code == 200
     ids = [c["campaign_id"] for c in response.json()]
     assert campaign_id not in ids
@@ -97,37 +99,21 @@ def test_list_campaigns_excludes_legacy_unowned(tmp_path) -> None:
         with sqlite3.connect(str(db_path)) as conn:
             init_db(conn)
             conn.execute(
-                "INSERT INTO campaigns (campaign_id, player_id, owner_user_id, name, description, state, created_at) "
-                "VALUES (?, ?, NULL, ?, NULL, NULL, ?)",
-                ("campaign_legacy_list", "player-legacy", "Legacy Campaign", "2024-01-01T00:00:00"),
+                "INSERT INTO campaigns (campaign_id, owner_user_id, name, description, state, created_at) "
+                "VALUES (?, NULL, ?, NULL, NULL, ?)",
+                ("campaign_legacy_list", "Legacy Campaign", "2024-01-01T00:00:00"),
             )
             conn.commit()
 
         client = TestClient(app)
         _, headers = _resolve_user(client, "legacy-list-user")
 
-        response = client.get("/api/campaigns/player-legacy", headers=headers)
+        response = client.get("/api/campaigns", headers=headers)
         assert response.status_code == 200
         ids = [c["campaign_id"] for c in response.json()]
         assert "campaign_legacy_list" not in ids
     finally:
         settings.DATABASE_URL = original
-
-
-def test_list_campaigns_player_id_path_param_does_not_affect_authorization() -> None:
-    """The player_id in the URL path must not override ownership from auth context."""
-    _setup()
-    client = TestClient(app)
-    _, headers_a = _resolve_user(client, "path-param-a")
-    _, headers_b = _resolve_user(client, "path-param-b")
-
-    campaign_a = _create_campaign(client, headers_a)
-
-    # User B requests with user A's player_id in path - must not see user A's campaign
-    response = client.get("/api/campaigns/player-1", headers=headers_b)
-    assert response.status_code == 200
-    ids = [c["campaign_id"] for c in response.json()]
-    assert campaign_a not in ids
 
 
 # ---------------------------------------------------------------------------
@@ -177,9 +163,9 @@ def test_get_campaign_unowned_returns_404(tmp_path) -> None:
         with sqlite3.connect(str(db_path)) as conn:
             init_db(conn)
             conn.execute(
-                "INSERT INTO campaigns (campaign_id, player_id, owner_user_id, name, description, state, created_at) "
-                "VALUES (?, ?, NULL, ?, NULL, NULL, ?)",
-                ("campaign_legacy_get", "player-legacy", "Legacy", "2024-01-01T00:00:00"),
+                "INSERT INTO campaigns (campaign_id, owner_user_id, name, description, state, created_at) "
+                "VALUES (?, NULL, ?, NULL, NULL, ?)",
+                ("campaign_legacy_get", "Legacy", "2024-01-01T00:00:00"),
             )
             conn.commit()
 
@@ -277,9 +263,9 @@ def test_delete_campaign_unowned_returns_404(tmp_path) -> None:
         with sqlite3.connect(str(db_path)) as conn:
             init_db(conn)
             conn.execute(
-                "INSERT INTO campaigns (campaign_id, player_id, owner_user_id, name, description, state, created_at) "
-                "VALUES (?, ?, NULL, ?, NULL, NULL, ?)",
-                ("campaign_legacy_del", "player-legacy", "Legacy", "2024-01-01T00:00:00"),
+                "INSERT INTO campaigns (campaign_id, owner_user_id, name, description, state, created_at) "
+                "VALUES (?, NULL, ?, NULL, NULL, ?)",
+                ("campaign_legacy_del", "Legacy", "2024-01-01T00:00:00"),
             )
             conn.commit()
 
@@ -310,7 +296,7 @@ def test_create_campaign_assigns_owner_from_auth_context() -> None:
     client = TestClient(app)
     user_id, headers = _resolve_user(client, "create-owner-check")
 
-    response = client.post("/api/campaign", json={"player_id": "player-x"}, headers=headers)
+    response = client.post("/api/campaign", json={}, headers=headers)
     assert response.status_code == 201
 
     campaign_id = response.json()["campaign_id"]
@@ -318,26 +304,6 @@ def test_create_campaign_assigns_owner_from_auth_context() -> None:
         campaign = db.get_campaign(campaign_id)
     assert campaign is not None
     assert campaign.owner_user_id == user_id
-
-
-def test_create_campaign_ignores_owner_in_request_body() -> None:
-    _setup()
-    client = TestClient(app)
-    user_id, headers = _resolve_user(client, "create-no-body-owner")
-
-    response = client.post(
-        "/api/campaign",
-        json={"player_id": "player-y", "owner_user_id": "user_attacker"},
-        headers=headers,
-    )
-    assert response.status_code == 201
-    campaign_id = response.json()["campaign_id"]
-
-    with session() as db:
-        campaign = db.get_campaign(campaign_id)
-    assert campaign is not None
-    assert campaign.owner_user_id == user_id
-    assert campaign.owner_user_id != "user_attacker"
 
 
 # ---------------------------------------------------------------------------
@@ -354,7 +320,7 @@ def test_chat_owner_can_play_own_campaign() -> None:
 
     response = client.post(
         "/api/chat",
-        json={"message": "look around", "player_id": "player-1", "campaign_id": campaign_id},
+        json={"message": "look around", "campaign_id": campaign_id},
         headers=headers,
     )
     assert response.status_code == 200
@@ -370,7 +336,7 @@ def test_chat_other_user_receives_404() -> None:
 
     response = client.post(
         "/api/chat",
-        json={"message": "look around", "player_id": "player-1", "campaign_id": campaign_id},
+        json={"message": "look around", "campaign_id": campaign_id},
         headers=headers_b,
     )
     assert response.status_code == 404
@@ -391,7 +357,7 @@ def test_chat_unauthorized_creates_no_turn_or_event() -> None:
 
     client.post(
         "/api/chat",
-        json={"message": "unauthorized action", "player_id": "player-1", "campaign_id": campaign_id},
+        json={"message": "unauthorized action", "campaign_id": campaign_id},
         headers=headers_b,
     )
 
@@ -407,21 +373,21 @@ def test_chat_unauthorized_does_not_consume_usage_quota() -> None:
     _setup()
     client = TestClient(app)
     _, headers_a = _resolve_user(client, "quota-owner-a")
-    _, headers_b = _resolve_user(client, "quota-attacker-b")
+    user_id_b, headers_b = _resolve_user(client, "quota-attacker-b")
 
     campaign_id = _create_campaign(client, headers_a)
 
     with session() as db:
-        requests_before = db.count_player_requests_since("player-1", "2000-01-01T00:00:00")
+        requests_before = db.count_user_requests_since(user_id_b, "2000-01-01T00:00:00")
 
     client.post(
         "/api/chat",
-        json={"message": "steal quota", "player_id": "player-1", "campaign_id": campaign_id},
+        json={"message": "steal quota", "campaign_id": campaign_id},
         headers=headers_b,
     )
 
     with session() as db:
-        requests_after = db.count_player_requests_since("player-1", "2000-01-01T00:00:00")
+        requests_after = db.count_user_requests_since(user_id_b, "2000-01-01T00:00:00")
 
     assert requests_after == requests_before
 
@@ -435,9 +401,9 @@ def test_chat_unowned_campaign_returns_404(tmp_path) -> None:
         with sqlite3.connect(str(db_path)) as conn:
             init_db(conn)
             conn.execute(
-                "INSERT INTO campaigns (campaign_id, player_id, owner_user_id, name, description, state, created_at) "
-                "VALUES (?, ?, NULL, ?, NULL, NULL, ?)",
-                ("campaign_legacy_chat", "player-legacy", "Legacy", "2024-01-01T00:00:00"),
+                "INSERT INTO campaigns (campaign_id, owner_user_id, name, description, state, created_at) "
+                "VALUES (?, NULL, ?, NULL, NULL, ?)",
+                ("campaign_legacy_chat", "Legacy", "2024-01-01T00:00:00"),
             )
             conn.commit()
 
@@ -446,7 +412,7 @@ def test_chat_unowned_campaign_returns_404(tmp_path) -> None:
 
         response = client.post(
             "/api/chat",
-            json={"message": "hello", "player_id": "player-legacy", "campaign_id": "campaign_legacy_chat"},
+            json={"message": "hello", "campaign_id": "campaign_legacy_chat"},
             headers=headers,
         )
         assert response.status_code == 404
@@ -490,9 +456,9 @@ def test_repo_get_campaign_for_owner_excludes_null_owner(tmp_path) -> None:
         with sqlite3.connect(str(db_path)) as conn:
             init_db(conn)
             conn.execute(
-                "INSERT INTO campaigns (campaign_id, player_id, owner_user_id, name, description, state, created_at) "
-                "VALUES (?, ?, NULL, ?, NULL, NULL, ?)",
-                ("campaign_null_owner", "player-null", "Null Owned", "2024-01-01T00:00:00"),
+                "INSERT INTO campaigns (campaign_id, owner_user_id, name, description, state, created_at) "
+                "VALUES (?, NULL, ?, NULL, NULL, ?)",
+                ("campaign_null_owner", "Null Owned", "2024-01-01T00:00:00"),
             )
             conn.commit()
 
@@ -544,24 +510,6 @@ def test_repo_count_owner_campaigns_does_not_count_other_users() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_player_id_cannot_bypass_ownership() -> None:
-    """Sending another user's player_id must not grant access to their campaign."""
-    _setup()
-    client = TestClient(app)
-    _, headers_a = _resolve_user(client, "idor-pid-a")
-    _, headers_b = _resolve_user(client, "idor-pid-b")
-
-    campaign_id = _create_campaign(client, headers_a, player_id="player-victim")
-
-    # User B sends the victim's player_id but has their own auth context
-    response = client.post(
-        "/api/chat",
-        json={"message": "attack", "player_id": "player-victim", "campaign_id": campaign_id},
-        headers=headers_b,
-    )
-    assert response.status_code == 404
-
-
 def test_request_body_owner_cannot_bypass_ownership() -> None:
     """An attacker injecting owner_user_id in the request body must not gain access."""
     _setup()
@@ -576,13 +524,12 @@ def test_request_body_owner_cannot_bypass_ownership() -> None:
         "/api/chat",
         json={
             "message": "attack",
-            "player_id": "player-1",
             "campaign_id": campaign_id,
             "owner_user_id": user_id_a,
         },
         headers=headers_b,
     )
-    assert response.status_code == 404
+    assert response.status_code == 422
 
 
 def test_campaign_id_in_url_cannot_access_other_users_campaign() -> None:
@@ -655,7 +602,9 @@ def test_memory_search_scoped_to_campaign() -> None:
     # User B searches in their own campaign - must not see user A's memory
     campaign_b = _create_campaign(client, headers_b)
     with session() as db:
-        results = db.search_campaign_memories(campaign_b, "secret memory content", limit=10)
+        results = db.search_campaign_memories(
+            campaign_b, "secret memory content", limit=10
+        )
 
     assert all(m.campaign_id == campaign_b for m in results)
     assert not any("User A secret memory content" in m.content for m in results)

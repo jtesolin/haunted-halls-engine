@@ -17,7 +17,12 @@ from app.db.models import (
     SummaryDBModel,
     TurnDBModel,
 )
-from app.memory.retriever import build_embedding, cosine_similarity, deserialize_embedding, serialize_embedding
+from app.memory.retriever import (
+    build_embedding,
+    cosine_similarity,
+    deserialize_embedding,
+    serialize_embedding,
+)
 from app.schemas.events import GameEventPayload, GameEventType
 
 
@@ -43,7 +48,9 @@ class Repository:
             last_login_at=datetime.fromisoformat(row["last_login_at"]),
         )
 
-    def get_internal_user_by_identity(self, provider_issuer: str, provider_subject: str) -> InternalUserDBModel | None:
+    def get_internal_user_by_identity(
+        self, provider_issuer: str, provider_subject: str
+    ) -> InternalUserDBModel | None:
         row = self.conn.execute(
             """
             SELECT user_id, identity_provider, provider_issuer, provider_subject, email, email_verified,
@@ -128,7 +135,15 @@ class Repository:
                 last_login_at = ?
             WHERE user_id = ?
             """,
-            (email, int(email_verified), display_name, avatar_url, now_iso, now_iso, user_id),
+            (
+                email,
+                int(email_verified),
+                display_name,
+                avatar_url,
+                now_iso,
+                now_iso,
+                user_id,
+            ),
         )
 
     def resolve_internal_user(
@@ -154,7 +169,9 @@ class Repository:
                 avatar_url=avatar_url,
                 now_iso=now_iso,
             )
-            refreshed = self.get_internal_user_by_identity(provider_issuer, provider_subject)
+            refreshed = self.get_internal_user_by_identity(
+                provider_issuer, provider_subject
+            )
             if refreshed is None:
                 raise RuntimeError("internal user disappeared during update")
             return refreshed
@@ -187,7 +204,9 @@ class Repository:
             avatar_url=avatar_url,
             now_iso=self._now_utc_iso(),
         )
-        refreshed = self.get_internal_user_by_identity(provider_issuer, provider_subject)
+        refreshed = self.get_internal_user_by_identity(
+            provider_issuer, provider_subject
+        )
         if refreshed is None:
             raise RuntimeError("failed to reload resolved internal user")
         return refreshed
@@ -195,7 +214,6 @@ class Repository:
     def create_campaign(
         self,
         campaign_id: str,
-        player_id: str,
         owner_user_id: str,
         name: str,
         description: Optional[str] = None,
@@ -204,12 +222,11 @@ class Repository:
         created_at = datetime.utcnow().isoformat()
         state_json = json.dumps(state) if state is not None else None
         self.conn.execute(
-            "INSERT OR IGNORE INTO campaigns (campaign_id, player_id, owner_user_id, name, description, state, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (campaign_id, player_id, owner_user_id, name, description, state_json, created_at),
+            "INSERT OR IGNORE INTO campaigns (campaign_id, owner_user_id, name, description, state, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+            (campaign_id, owner_user_id, name, description, state_json, created_at),
         )
         return CampaignDBModel(
             campaign_id,
-            player_id,
             name,
             description,
             state_json,
@@ -220,7 +237,6 @@ class Repository:
     def _row_to_campaign(self, row) -> CampaignDBModel:
         return CampaignDBModel(
             campaign_id=row["campaign_id"],
-            player_id=row["player_id"],
             name=row["name"],
             description=row["description"],
             state=row["state"],
@@ -230,7 +246,7 @@ class Repository:
 
     def get_campaign(self, campaign_id: str) -> Optional[CampaignDBModel]:
         row = self.conn.execute(
-            "SELECT campaign_id, player_id, owner_user_id, name, description, state, created_at FROM campaigns WHERE campaign_id = ?",
+            "SELECT campaign_id, owner_user_id, name, description, state, created_at FROM campaigns WHERE campaign_id = ?",
             (campaign_id,),
         ).fetchone()
         if row is None:
@@ -243,29 +259,6 @@ class Repository:
             (json.dumps(state), campaign_id),
         )
 
-    def get_player_campaign(self, player_id: str, campaign_id: str) -> Optional[CampaignDBModel]:
-        row = self.conn.execute(
-            "SELECT campaign_id, player_id, owner_user_id, name, description, state, created_at FROM campaigns WHERE campaign_id = ? AND player_id = ?",
-            (campaign_id, player_id),
-        ).fetchone()
-        if row is None:
-            return None
-        return self._row_to_campaign(row)
-
-    def delete_player_campaign(self, player_id: str, campaign_id: str) -> bool:
-        cursor = self.conn.execute(
-            "DELETE FROM campaigns WHERE campaign_id = ? AND player_id = ?",
-            (campaign_id, player_id),
-        )
-        return cursor.rowcount > 0
-
-    def count_player_campaigns(self, player_id: str) -> int:
-        row = self.conn.execute(
-            "SELECT COUNT(*) AS total FROM campaigns WHERE player_id = ?",
-            (player_id,),
-        ).fetchone()
-        return int(row["total"] or 0)
-
     def count_owner_campaigns(self, owner_user_id: str) -> int:
         row = self.conn.execute(
             "SELECT COUNT(*) AS total FROM campaigns WHERE owner_user_id = ?",
@@ -273,7 +266,9 @@ class Repository:
         ).fetchone()
         return int(row["total"] or 0)
 
-    def list_campaigns_for_owner(self, owner_user_id: str) -> list[dict[str, Optional[str]]]:
+    def list_campaigns_for_owner(
+        self, owner_user_id: str
+    ) -> list[dict[str, Optional[str]]]:
         rows = self.conn.execute(
             """
             SELECT
@@ -301,9 +296,11 @@ class Repository:
             for row in rows
         ]
 
-    def get_campaign_for_owner(self, campaign_id: str, owner_user_id: str) -> Optional[CampaignDBModel]:
+    def get_campaign_for_owner(
+        self, campaign_id: str, owner_user_id: str
+    ) -> Optional[CampaignDBModel]:
         row = self.conn.execute(
-            "SELECT campaign_id, player_id, owner_user_id, name, description, state, created_at FROM campaigns WHERE campaign_id = ? AND owner_user_id = ?",
+            "SELECT campaign_id, owner_user_id, name, description, state, created_at FROM campaigns WHERE campaign_id = ? AND owner_user_id = ?",
             (campaign_id, owner_user_id),
         ).fetchone()
         if row is None:
@@ -324,13 +321,12 @@ class Repository:
         if campaign is None:
             return None, [], False
         rows = self.conn.execute(
-            "SELECT turn_id, player_id, campaign_id, role, content, created_at FROM turns WHERE campaign_id = ? ORDER BY created_at DESC LIMIT ?",
+            "SELECT turn_id, campaign_id, role, content, created_at FROM turns WHERE campaign_id = ? ORDER BY created_at DESC LIMIT ?",
             (campaign_id, limit + 1),
         ).fetchall()
         turns = [
             TurnDBModel(
                 turn_id=row["turn_id"],
-                player_id=row["player_id"],
                 campaign_id=row["campaign_id"],
                 role=row["role"],
                 content=row["content"],
@@ -342,10 +338,12 @@ class Repository:
         truncated = len(rows) > limit
         return campaign, turns, truncated
 
-    def get_character_for_owner(self, character_id: str, owner_user_id: str) -> Optional[CharacterDBModel]:
+    def get_character_for_owner(
+        self, character_id: str, owner_user_id: str
+    ) -> Optional[CharacterDBModel]:
         row = self.conn.execute(
             """
-            SELECT ch.character_id, ch.player_id, ch.campaign_id, ch.name, ch.description, ch.created_at
+            SELECT ch.character_id, ch.campaign_id, ch.name, ch.description, ch.created_at
             FROM characters ch
             JOIN campaigns c ON ch.campaign_id = c.campaign_id
             WHERE ch.character_id = ? AND c.owner_user_id = ?
@@ -356,7 +354,6 @@ class Repository:
             return None
         return CharacterDBModel(
             character_id=row["character_id"],
-            player_id=row["player_id"],
             campaign_id=row["campaign_id"],
             name=row["name"],
             description=row["description"],
@@ -366,7 +363,7 @@ class Repository:
     def list_characters_for_owner(self, owner_user_id: str) -> list[CharacterDBModel]:
         rows = self.conn.execute(
             """
-            SELECT ch.character_id, ch.player_id, ch.campaign_id, ch.name, ch.description, ch.created_at
+            SELECT ch.character_id, ch.campaign_id, ch.name, ch.description, ch.created_at
             FROM characters ch
             JOIN campaigns c ON ch.campaign_id = c.campaign_id
             WHERE c.owner_user_id = ?
@@ -377,7 +374,6 @@ class Repository:
         return [
             CharacterDBModel(
                 character_id=row["character_id"],
-                player_id=row["player_id"],
                 campaign_id=row["campaign_id"],
                 name=row["name"],
                 description=row["description"],
@@ -386,31 +382,33 @@ class Repository:
             for row in rows
         ]
 
-    def count_player_requests_since(self, player_id: str, since_iso: str) -> int:
+    def count_user_requests_since(self, owner_user_id: str, since_iso: str) -> int:
         row = self.conn.execute(
-            "SELECT COUNT(*) AS total FROM model_requests WHERE player_id = ? AND created_at >= ?",
-            (player_id, since_iso),
+            "SELECT COUNT(*) AS total FROM model_requests WHERE owner_user_id = ? AND created_at >= ?",
+            (owner_user_id, since_iso),
         ).fetchone()
         return int(row["total"] or 0)
 
-    def sum_player_estimated_input_tokens_since(self, player_id: str, since_iso: str) -> int:
+    def sum_user_estimated_input_tokens_since(
+        self, owner_user_id: str, since_iso: str
+    ) -> int:
         row = self.conn.execute(
-            "SELECT COALESCE(SUM(estimated_input_tokens), 0) AS total FROM model_requests WHERE player_id = ? AND created_at >= ?",
-            (player_id, since_iso),
+            "SELECT COALESCE(SUM(estimated_input_tokens), 0) AS total FROM model_requests WHERE owner_user_id = ? AND created_at >= ?",
+            (owner_user_id, since_iso),
         ).fetchone()
         return int(row["total"] or 0)
 
-    def count_campaign_turns(self, player_id: str, campaign_id: str) -> int:
+    def count_campaign_turns(self, campaign_id: str, owner_user_id: str) -> int:
         row = self.conn.execute(
-            "SELECT COUNT(*) AS total FROM turns t JOIN campaigns c ON t.campaign_id = c.campaign_id WHERE t.campaign_id = ? AND c.player_id = ? AND t.role = 'user'",
-            (campaign_id, player_id),
+            "SELECT COUNT(*) AS total FROM turns t JOIN campaigns c ON t.campaign_id = c.campaign_id WHERE t.campaign_id = ? AND c.owner_user_id = ? AND t.role= 'user'",
+            (campaign_id, owner_user_id),
         ).fetchone()
         return int(row["total"] or 0)
 
     def log_model_request(
         self,
         request_id: str,
-        player_id: str,
+        owner_user_id: str,
         campaign_id: str,
         turn_id: str,
         agent_name: str,
@@ -425,10 +423,10 @@ class Repository:
     ) -> None:
         created_at = datetime.utcnow().isoformat()
         self.conn.execute(
-            "INSERT INTO model_requests (request_id, player_id, campaign_id, turn_id, agent_name, model, estimated_input_tokens, actual_input_tokens, actual_output_tokens, latency_ms, success, failure_reason, cost_estimate, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO model_requests (request_id, owner_user_id, campaign_id, turn_id, agent_name, model, estimated_input_tokens, actual_input_tokens, actual_output_tokens, latency_ms, success, failure_reason, cost_estimate, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 request_id,
-                player_id,
+                owner_user_id,
                 campaign_id,
                 turn_id,
                 agent_name,
@@ -446,7 +444,6 @@ class Repository:
 
     def create_turn(
         self,
-        player_id: str,
         campaign_id: str,
         turn_id: str,
         role: str,
@@ -454,15 +451,16 @@ class Repository:
     ) -> TurnDBModel:
         created_at = datetime.utcnow().isoformat()
         self.conn.execute(
-            "INSERT INTO turns (turn_id, player_id, campaign_id, role, content, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-            (turn_id, player_id, campaign_id, role, content, created_at),
+            "INSERT INTO turns (turn_id, campaign_id, role, content, created_at) VALUES (?, ?, ?, ?, ?)",
+            (turn_id, campaign_id, role, content, created_at),
         )
-        return TurnDBModel(turn_id, player_id, campaign_id, role, content, datetime.fromisoformat(created_at))
+        return TurnDBModel(
+            turn_id, campaign_id, role, content, datetime.fromisoformat(created_at)
+        )
 
     def add_event(
         self,
         event_id: str,
-        player_id: str,
         campaign_id: str,
         turn_id: str,
         type: GameEventType,
@@ -471,10 +469,17 @@ class Repository:
         created_at = datetime.utcnow().isoformat()
         payload_json = payload.model_dump_json() if payload is not None else None
         self.conn.execute(
-            "INSERT INTO game_events (event_id, player_id, campaign_id, turn_id, type, payload_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (event_id, player_id, campaign_id, turn_id, type, payload_json, created_at),
+            "INSERT INTO game_events (event_id, campaign_id, turn_id, type, payload_json, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+            (event_id, campaign_id, turn_id, type, payload_json, created_at),
         )
-        return GameEventDBModel(event_id, player_id, campaign_id, turn_id, type, payload_json, datetime.fromisoformat(created_at))
+        return GameEventDBModel(
+            event_id,
+            campaign_id,
+            turn_id,
+            type,
+            payload_json,
+            datetime.fromisoformat(created_at),
+        )
 
     def add_summary(self, campaign_id: str, summary: str) -> SummaryDBModel:
         created_at = datetime.utcnow().isoformat()
@@ -497,7 +502,9 @@ class Repository:
             created_at=datetime.fromisoformat(row["created_at"]),
         )
 
-    def list_campaign_summaries(self, campaign_id: str, limit: int = 5) -> list[SummaryDBModel]:
+    def list_campaign_summaries(
+        self, campaign_id: str, limit: int = 5
+    ) -> list[SummaryDBModel]:
         rows = self.conn.execute(
             "SELECT campaign_id, summary, created_at FROM summaries WHERE campaign_id = ? ORDER BY created_at DESC LIMIT ?",
             (campaign_id, limit),
@@ -526,7 +533,16 @@ class Repository:
         embedding_json = serialize_embedding(embedding or build_embedding(content))
         self.conn.execute(
             "INSERT INTO memories (memory_id, campaign_id, kind, content, embedding_json, importance, source_event_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (memory_id, campaign_id, kind, content, embedding_json, importance, source_event_id, created_at),
+            (
+                memory_id,
+                campaign_id,
+                kind,
+                content,
+                embedding_json,
+                importance,
+                source_event_id,
+                created_at,
+            ),
         )
         return MemoryDBModel(
             memory_id=memory_id,
@@ -539,7 +555,9 @@ class Repository:
             created_at=datetime.fromisoformat(created_at),
         )
 
-    def list_campaign_memories(self, campaign_id: str, limit: int = 20) -> list[MemoryDBModel]:
+    def list_campaign_memories(
+        self, campaign_id: str, limit: int = 20
+    ) -> list[MemoryDBModel]:
         rows = self.conn.execute(
             "SELECT memory_id, campaign_id, kind, content, embedding_json, importance, source_event_id, created_at FROM memories WHERE campaign_id = ? ORDER BY created_at DESC LIMIT ?",
             (campaign_id, limit),
@@ -558,7 +576,9 @@ class Repository:
             for row in rows
         ]
 
-    def search_campaign_memories(self, campaign_id: str, query: str, limit: int = 4) -> list[MemoryDBModel]:
+    def search_campaign_memories(
+        self, campaign_id: str, query: str, limit: int = 4
+    ) -> list[MemoryDBModel]:
         memories = self.list_campaign_memories(campaign_id, limit=50)
         if not memories:
             return []
@@ -572,22 +592,25 @@ class Repository:
             score = similarity + float(memory.importance) * 0.1
             scored_memories.append((score, memory))
 
-        scored_memories.sort(key=lambda item: (item[0], item[1].created_at), reverse=True)
+        scored_memories.sort(
+            key=lambda item: (item[0], item[1].created_at), reverse=True
+        )
         return [memory for _, memory in scored_memories[:limit]]
 
-    def get_campaign_with_turns(self, campaign_id: str, limit: int = 10) -> tuple[Optional[CampaignDBModel], list[TurnDBModel], bool]:
+    def get_campaign_with_turns(
+        self, campaign_id: str, limit: int = 10
+    ) -> tuple[Optional[CampaignDBModel], list[TurnDBModel], bool]:
         campaign = self.get_campaign(campaign_id)
         if campaign is None:
             return None, [], False
 
         rows = self.conn.execute(
-            "SELECT turn_id, player_id, campaign_id, role, content, created_at FROM turns WHERE campaign_id = ? ORDER BY created_at DESC LIMIT ?",
+            "SELECT turn_id, campaign_id, role, content, created_at FROM turns WHERE campaign_id = ? ORDER BY created_at DESC LIMIT ?",
             (campaign_id, limit + 1),
         ).fetchall()
         turns = [
             TurnDBModel(
                 turn_id=row["turn_id"],
-                player_id=row["player_id"],
                 campaign_id=row["campaign_id"],
                 role=row["role"],
                 content=row["content"],
@@ -599,15 +622,16 @@ class Repository:
         truncated = len(rows) > limit
         return campaign, turns, truncated
 
-    def list_campaign_events(self, campaign_id: str, limit: int = 100) -> list[GameEventDBModel]:
+    def list_campaign_events(
+        self, campaign_id: str, limit: int = 100
+    ) -> list[GameEventDBModel]:
         rows = self.conn.execute(
-            "SELECT event_id, player_id, campaign_id, turn_id, type, payload_json, created_at FROM game_events WHERE campaign_id = ? ORDER BY created_at ASC LIMIT ?",
+            "SELECT event_id, campaign_id, turn_id, type, payload_json, created_at FROM game_events WHERE campaign_id = ? ORDER BY created_at ASC LIMIT ?",
             (campaign_id, limit),
         ).fetchall()
         return [
             GameEventDBModel(
                 event_id=row["event_id"],
-                player_id=row["player_id"],
                 campaign_id=row["campaign_id"],
                 turn_id=row["turn_id"],
                 type=row["type"],
@@ -617,63 +641,17 @@ class Repository:
             for row in rows
         ]
 
-    def list_campaign_summaries_for_player(self, player_id: str) -> list[dict[str, Optional[str]]]:
-        rows = self.conn.execute(
-            """
-            SELECT
-                c.campaign_id AS campaign_id,
-                c.name AS name,
-                (
-                    SELECT t.content
-                    FROM turns t
-                    WHERE t.campaign_id = c.campaign_id AND t.role = 'assistant'
-                    ORDER BY created_at DESC
-                    LIMIT 1
-                ) AS last_message
-            FROM campaigns c
-            WHERE c.player_id = ?
-            ORDER BY c.created_at DESC
-            """,
-            (player_id,),
-        ).fetchall()
-        return [
-            {
-                "campaign_id": row["campaign_id"],
-                "name": row["name"],
-                "last_message": row["last_message"],
-            }
-            for row in rows
-        ]
-
     def get_character(self, character_id: str) -> Optional[CharacterDBModel]:
         row = self.conn.execute(
-            "SELECT character_id, player_id, campaign_id, name, description, created_at FROM characters WHERE character_id = ?",
+            "SELECT character_id, campaign_id, name, description, created_at FROM characters WHERE character_id = ?",
             (character_id,),
         ).fetchone()
         if row is None:
             return None
         return CharacterDBModel(
             character_id=row["character_id"],
-            player_id=row["player_id"],
             campaign_id=row["campaign_id"],
             name=row["name"],
             description=row["description"],
             created_at=datetime.fromisoformat(row["created_at"]),
         )
-
-    def list_characters_for_player(self, player_id: str) -> list[CharacterDBModel]:
-        rows = self.conn.execute(
-            "SELECT character_id, player_id, campaign_id, name, description, created_at FROM characters WHERE player_id = ? ORDER BY created_at DESC",
-            (player_id,),
-        ).fetchall()
-        return [
-            CharacterDBModel(
-                character_id=row["character_id"],
-                player_id=row["player_id"],
-                campaign_id=row["campaign_id"],
-                name=row["name"],
-                description=row["description"],
-                created_at=datetime.fromisoformat(row["created_at"]),
-            )
-            for row in rows
-        ]

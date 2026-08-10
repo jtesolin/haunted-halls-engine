@@ -24,13 +24,12 @@
 - Campaigns now persist an internal ownership relationship through `campaigns.owner_user_id -> internal_users.user_id`.
 - Campaign ownership is derived from the trusted authenticated user context propagated by the BFF and is persisted at campaign creation time.
 - The browser never supplies campaign ownership; request bodies and query parameters cannot override it.
-- **Phase 2B (current):** FastAPI is the domain authorization boundary. Campaign ownership is enforced using the Phase 1D authenticated internal user. All user-facing campaign operations require `campaigns.owner_user_id == authenticated_user.id`.
+- FastAPI is the domain authorization boundary. Campaign ownership is enforced using the Phase 1D authenticated internal user. All user-facing campaign operations require `campaigns.owner_user_id == authenticated_user.id`.
 - Child resources (turns, events, memories, summaries) inherit authorization through campaign ownership — no redundant owner columns are added to child tables.
 - Cross-user access and nonexistent resources both return `404`. The response does not reveal whether a resource exists, who owns it, or whether it is unowned.
 - Legacy campaigns with null `owner_user_id` are excluded from all normal user-facing APIs (list, get, update, delete, chat). They remain in the database and are not automatically claimed.
 - Local developers may delete and recreate legacy campaigns to associate them with their authenticated account.
-- `player_id` has no security authority. It is a legacy application/game field. It is never compared to authenticated user IDs for access decisions and cannot be used to bypass ownership.
-- Phase 2C will remove the remaining legacy `player_id` identity mechanism.
+- Browser-facing contracts use authenticated session context only.
 
 ## Service And User Context
 
@@ -40,4 +39,3 @@
 - User-scoped endpoints require both service auth and validated internal user context.
 - Service-only endpoints, including `POST /internal/auth/users/resolve`, require service authentication but do not require the user-context header.
 - Public liveness endpoints remain intentionally unauthenticated.
-- Existing `player_id` remains temporary legacy gameplay input and is not trusted authentication identity.

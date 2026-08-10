@@ -1,9 +1,17 @@
 from fastapi import APIRouter, Depends, HTTPException
 
-from app.api.dependencies import AuthenticatedUserContext, require_authenticated_user_context
+from app.api.dependencies import (
+    AuthenticatedUserContext,
+    require_authenticated_user_context,
+)
 from app.orchestration.orchestrator import orchestrator
 from app.db.session import session
-from app.schemas.campaign import CampaignCreateRequest, CampaignDetail, CampaignSummary, CampaignTurn
+from app.schemas.campaign import (
+    CampaignCreateRequest,
+    CampaignDetail,
+    CampaignSummary,
+    CampaignTurn,
+)
 from app.schemas.character import CharacterInfo, CharacterList
 
 router = APIRouter(prefix="/api", tags=["campaign"])
@@ -12,30 +20,36 @@ router = APIRouter(prefix="/api", tags=["campaign"])
 @router.post("/campaign", response_model=CampaignDetail, status_code=201)
 async def create_campaign(
     payload: CampaignCreateRequest,
-    _user_context: AuthenticatedUserContext = Depends(require_authenticated_user_context),
+    _user_context: AuthenticatedUserContext = Depends(
+        require_authenticated_user_context
+    ),
 ) -> CampaignDetail:
-    return await orchestrator.create_campaign(payload, owner_user_id=_user_context.internal_user_id)
+    return await orchestrator.create_campaign(
+        payload, owner_user_id=_user_context.internal_user_id
+    )
 
 
 @router.get("/campaign/{campaign_id}", response_model=CampaignDetail)
 async def get_campaign(
     campaign_id: str,
-    _user_context: AuthenticatedUserContext = Depends(require_authenticated_user_context),
+    _user_context: AuthenticatedUserContext = Depends(
+        require_authenticated_user_context
+    ),
 ) -> CampaignDetail:
     owner_user_id = _user_context.internal_user_id
     with session() as db:
-        campaign, turns, truncated = db.get_campaign_with_turns_for_owner(campaign_id, owner_user_id)
+        campaign, turns, truncated = db.get_campaign_with_turns_for_owner(
+            campaign_id, owner_user_id
+        )
     if campaign is None:
         raise HTTPException(status_code=404, detail="Campaign not found")
     return CampaignDetail(
         campaign_id=campaign.campaign_id,
         name=campaign.name,
         description=campaign.description,
-        player_id=campaign.player_id,
         messages=[
             CampaignTurn(
                 turn_id=turn.turn_id,
-                player_id=turn.player_id,
                 role=turn.role,
                 content=turn.content,
                 created_at=turn.created_at,
@@ -49,19 +63,24 @@ async def get_campaign(
 @router.delete("/campaign/{campaign_id}", status_code=204)
 async def delete_campaign(
     campaign_id: str,
-    _user_context: AuthenticatedUserContext = Depends(require_authenticated_user_context),
+    _user_context: AuthenticatedUserContext = Depends(
+        require_authenticated_user_context
+    ),
 ) -> None:
     owner_user_id = _user_context.internal_user_id
     with session() as db:
-        deleted = db.delete_campaign_for_owner(campaign_id=campaign_id, owner_user_id=owner_user_id)
+        deleted = db.delete_campaign_for_owner(
+            campaign_id=campaign_id, owner_user_id=owner_user_id
+        )
     if not deleted:
         raise HTTPException(status_code=404, detail="Campaign not found")
 
 
-@router.get("/campaigns/{player_id}", response_model=list[CampaignSummary])
+@router.get("/campaigns", response_model=list[CampaignSummary])
 async def list_campaigns(
-    player_id: str,  # ignored for authorization; kept for URL compatibility until Phase 2C
-    _user_context: AuthenticatedUserContext = Depends(require_authenticated_user_context),
+    _user_context: AuthenticatedUserContext = Depends(
+        require_authenticated_user_context
+    ),
 ) -> list[CampaignSummary]:
     owner_user_id = _user_context.internal_user_id
     with session() as db:
@@ -86,7 +105,9 @@ async def list_campaigns(
 @router.get("/character/{character_id}", response_model=CharacterInfo)
 async def get_character(
     character_id: str,
-    _user_context: AuthenticatedUserContext = Depends(require_authenticated_user_context),
+    _user_context: AuthenticatedUserContext = Depends(
+        require_authenticated_user_context
+    ),
 ) -> CharacterInfo:
     owner_user_id = _user_context.internal_user_id
     with session() as db:
@@ -96,10 +117,11 @@ async def get_character(
     return CharacterInfo(character_id=character.character_id, name=character.name)
 
 
-@router.get("/characters/{player_id}", response_model=CharacterList)
+@router.get("/characters", response_model=CharacterList)
 async def list_characters(
-    player_id: str,  # ignored for authorization; kept for URL compatibility until Phase 2C
-    _user_context: AuthenticatedUserContext = Depends(require_authenticated_user_context),
+    _user_context: AuthenticatedUserContext = Depends(
+        require_authenticated_user_context
+    ),
 ) -> CharacterList:
     owner_user_id = _user_context.internal_user_id
     with session() as db:
