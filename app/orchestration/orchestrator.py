@@ -51,7 +51,7 @@ class ChatOrchestrator:
         model = ModelPolicy.narrator_model()
 
         with session() as db:
-            self._validate_campaign_creation(db, player_id)
+            self._validate_campaign_creation(db, player_id, owner_user_id)
 
             if not (settings.AI_ENABLED or bool(settings.OPENAI_API_KEY)):
                 opening_prompt = self._stub_campaign_opening()
@@ -137,7 +137,7 @@ class ChatOrchestrator:
         model = ModelPolicy.narrator_model()
 
         with session() as db:
-            validate_chat_request(db, request)
+            validate_chat_request(db, request, owner_user_id)
             validate_campaign_turn_limit(db, player_id, campaign_id)
 
             db.create_campaign(
@@ -652,13 +652,13 @@ class ChatOrchestrator:
     def _stub_campaign_title(self) -> str:
         return "The Bell Beneath the Hall"
 
-    def _validate_campaign_creation(self, db, player_id: str) -> None:
+    def _validate_campaign_creation(self, db, player_id: str, owner_user_id: str) -> None:
         if not player_id:
             raise HTTPException(status_code=422, detail="player_id is required")
         if player_id.lower() == "anonymous":
             raise HTTPException(status_code=422, detail="player_id cannot be 'anonymous'")
-        player_campaign_count = db.count_player_campaigns(player_id)
-        if player_campaign_count >= UsageLimits.MAX_CAMPAIGNS_PER_PLAYER:
+        owner_campaign_count = db.count_owner_campaigns(owner_user_id)
+        if owner_campaign_count >= UsageLimits.MAX_CAMPAIGNS_PER_PLAYER:
             raise HTTPException(
                 status_code=429,
                 detail=(

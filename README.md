@@ -24,10 +24,13 @@
 - Campaigns now persist an internal ownership relationship through `campaigns.owner_user_id -> internal_users.user_id`.
 - Campaign ownership is derived from the trusted authenticated user context propagated by the BFF and is persisted at campaign creation time.
 - The browser never supplies campaign ownership; request bodies and query parameters cannot override it.
-- Campaigns are the ownership aggregate for this phase; turns, events, and memories continue to inherit authorization through their campaign later in Phase 2B.
-- Legacy `player_id` remains a temporary gameplay field and is not treated as the ownership identity.
-- Existing legacy campaigns may temporarily remain unowned when no safe mapping exists; they are preserved without fabricated ownership assignments.
-- Phase 2B will enforce owner-based reads and mutations, while Phase 2C will remove the legacy `player_id` identity behavior.
+- **Phase 2B (current):** FastAPI is the domain authorization boundary. Campaign ownership is enforced using the Phase 1D authenticated internal user. All user-facing campaign operations require `campaigns.owner_user_id == authenticated_user.id`.
+- Child resources (turns, events, memories, summaries) inherit authorization through campaign ownership — no redundant owner columns are added to child tables.
+- Cross-user access and nonexistent resources both return `404`. The response does not reveal whether a resource exists, who owns it, or whether it is unowned.
+- Legacy campaigns with null `owner_user_id` are excluded from all normal user-facing APIs (list, get, update, delete, chat). They remain in the database and are not automatically claimed.
+- Local developers may delete and recreate legacy campaigns to associate them with their authenticated account.
+- `player_id` has no security authority. It is a legacy application/game field. It is never compared to authenticated user IDs for access decisions and cannot be used to bypass ownership.
+- Phase 2C will remove the remaining legacy `player_id` identity mechanism.
 
 ## Service And User Context
 

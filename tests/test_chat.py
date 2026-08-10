@@ -102,19 +102,20 @@ def test_chat_requires_authorization() -> None:
     assert response.status_code == 401
 
 
-def test_campaign_routes_reject_anonymous_player_id() -> None:
+def test_campaign_routes_player_id_path_param_ignored_for_auth() -> None:
     settings.INTERNAL_ENGINE_SERVICE_TOKEN = "test-token"
     settings.AI_ENABLED = False
     settings.OPENAI_API_KEY = None
     client = TestClient(app)
     headers = _user_scoped_headers(client, "campaign-anonymous")
 
+    # Phase 2B: player_id path param is no longer used for authorization; any value is accepted
     response = client.get(
         "/api/campaigns/anonymous",
         headers=headers,
     )
 
-    assert response.status_code == 422
+    assert response.status_code == 200
 
 
 def test_create_campaign_returns_hydrated_campaign() -> None:
@@ -453,7 +454,7 @@ def test_orchestrator_includes_relevant_memory_context(monkeypatch) -> None:
                 campaign_id=first_response.campaign_id,
                 player_id="player-memory-1",
             ),
-            owner_user_id=_resolved_internal_user_id(TestClient(app), "orchestrator-memory-context-followup"),
+            owner_user_id=_resolved_internal_user_id(TestClient(app), "orchestrator-memory-context"),
         )
     )
 

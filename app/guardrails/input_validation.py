@@ -16,7 +16,7 @@ def _parse_campaign_state(state: str | None) -> dict[str, object] | None:
         return None
 
 
-def validate_chat_request(db: Repository, request: ChatRequest) -> None:
+def validate_chat_request(db: Repository, request: ChatRequest, owner_user_id: str) -> None:
     candidate = request.player_id.strip()
     if not candidate:
         raise HTTPException(status_code=422, detail="player_id is required")
@@ -36,22 +36,23 @@ def validate_chat_request(db: Repository, request: ChatRequest) -> None:
         )
 
     if request.campaign_id:
-        campaign = db.get_player_campaign(candidate, request.campaign_id)
+        campaign = db.get_campaign_for_owner(request.campaign_id, owner_user_id)
         if campaign is None:
             raise HTTPException(
                 status_code=404,
-                detail="Campaign not found for player_id and campaign_id combination.",
+                detail="Campaign not found",
             )
 
         state = _parse_campaign_state(campaign.state)
         if state and state.get("archived") is True:
             raise HTTPException(status_code=400, detail="Campaign is archived.")
     else:
-        player_campaign_count = db.count_player_campaigns(candidate)
-        if player_campaign_count >= UsageLimits.MAX_CAMPAIGNS_PER_PLAYER:
+        owner_campaign_count = db.count_owner_campaigns(owner_user_id)
+        if owner_campaign_count >= UsageLimits.MAX_CAMPAIGNS_PER_PLAYER:
             raise HTTPException(
                 status_code=429,
                 detail=(
                     f"Player has reached the maximum number of campaigns ({UsageLimits.MAX_CAMPAIGNS_PER_PLAYER})."
                 ),
             )
+

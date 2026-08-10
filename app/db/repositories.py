@@ -266,6 +266,126 @@ class Repository:
         ).fetchone()
         return int(row["total"] or 0)
 
+    def count_owner_campaigns(self, owner_user_id: str) -> int:
+        row = self.conn.execute(
+            "SELECT COUNT(*) AS total FROM campaigns WHERE owner_user_id = ?",
+            (owner_user_id,),
+        ).fetchone()
+        return int(row["total"] or 0)
+
+    def list_campaigns_for_owner(self, owner_user_id: str) -> list[dict[str, Optional[str]]]:
+        rows = self.conn.execute(
+            """
+            SELECT
+                c.campaign_id AS campaign_id,
+                c.name AS name,
+                (
+                    SELECT t.content
+                    FROM turns t
+                    WHERE t.campaign_id = c.campaign_id AND t.role = 'assistant'
+                    ORDER BY t.created_at DESC
+                    LIMIT 1
+                ) AS last_message
+            FROM campaigns c
+            WHERE c.owner_user_id = ?
+            ORDER BY c.created_at DESC
+            """,
+            (owner_user_id,),
+        ).fetchall()
+        return [
+            {
+                "campaign_id": row["campaign_id"],
+                "name": row["name"],
+                "last_message": row["last_message"],
+            }
+            for row in rows
+        ]
+
+    def get_campaign_for_owner(self, campaign_id: str, owner_user_id: str) -> Optional[CampaignDBModel]:
+        row = self.conn.execute(
+            "SELECT campaign_id, player_id, owner_user_id, name, description, state, created_at FROM campaigns WHERE campaign_id = ? AND owner_user_id = ?",
+            (campaign_id, owner_user_id),
+        ).fetchone()
+        if row is None:
+            return None
+        return self._row_to_campaign(row)
+
+    def delete_campaign_for_owner(self, campaign_id: str, owner_user_id: str) -> bool:
+        cursor = self.conn.execute(
+            "DELETE FROM campaigns WHERE campaign_id = ? AND owner_user_id = ?",
+            (campaign_id, owner_user_id),
+        )
+        return cursor.rowcount > 0
+
+    def get_campaign_with_turns_for_owner(
+        self, campaign_id: str, owner_user_id: str, limit: int = 10
+    ) -> tuple[Optional[CampaignDBModel], list[TurnDBModel], bool]:
+        campaign = self.get_campaign_for_owner(campaign_id, owner_user_id)
+        if campaign is None:
+            return None, [], False
+        rows = self.conn.execute(
+            "SELECT turn_id, player_id, campaign_id, role, content, created_at FROM turns WHERE campaign_id = ? ORDER BY created_at DESC LIMIT ?",
+            (campaign_id, limit + 1),
+        ).fetchall()
+        turns = [
+            TurnDBModel(
+                turn_id=row["turn_id"],
+                player_id=row["player_id"],
+                campaign_id=row["campaign_id"],
+                role=row["role"],
+                content=row["content"],
+                created_at=datetime.fromisoformat(row["created_at"]),
+            )
+            for row in rows[:limit]
+        ]
+        turns.reverse()
+        truncated = len(rows) > limit
+        return campaign, turns, truncated
+
+    def get_character_for_owner(self, character_id: str, owner_user_id: str) -> Optional[CharacterDBModel]:
+        row = self.conn.execute(
+            """
+            SELECT ch.character_id, ch.player_id, ch.campaign_id, ch.name, ch.description, ch.created_at
+            FROM characters ch
+            JOIN campaigns c ON ch.campaign_id = c.campaign_id
+            WHERE ch.character_id = ? AND c.owner_user_id = ?
+            """,
+            (character_id, owner_user_id),
+        ).fetchone()
+        if row is None:
+            return None
+        return CharacterDBModel(
+            character_id=row["character_id"],
+            player_id=row["player_id"],
+            campaign_id=row["campaign_id"],
+            name=row["name"],
+            description=row["description"],
+            created_at=datetime.fromisoformat(row["created_at"]),
+        )
+
+    def list_characters_for_owner(self, owner_user_id: str) -> list[CharacterDBModel]:
+        rows = self.conn.execute(
+            """
+            SELECT ch.character_id, ch.player_id, ch.campaign_id, ch.name, ch.description, ch.created_at
+            FROM characters ch
+            JOIN campaigns c ON ch.campaign_id = c.campaign_id
+            WHERE c.owner_user_id = ?
+            ORDER BY ch.created_at DESC
+            """,
+            (owner_user_id,),
+        ).fetchall()
+        return [
+            CharacterDBModel(
+                character_id=row["character_id"],
+                player_id=row["player_id"],
+                campaign_id=row["campaign_id"],
+                name=row["name"],
+                description=row["description"],
+                created_at=datetime.fromisoformat(row["created_at"]),
+            )
+            for row in rows
+        ]
+
     def count_player_requests_since(self, player_id: str, since_iso: str) -> int:
         row = self.conn.execute(
             "SELECT COUNT(*) AS total FROM model_requests WHERE player_id = ? AND created_at >= ?",

@@ -9,15 +9,6 @@ from app.schemas.character import CharacterInfo, CharacterList
 router = APIRouter(prefix="/api", tags=["campaign"])
 
 
-def _validate_player_id(player_id: str) -> str:
-    candidate = player_id.strip()
-    if not candidate:
-        raise HTTPException(status_code=422, detail="player_id is required")
-    if candidate.lower() == "anonymous":
-        raise HTTPException(status_code=422, detail="player_id cannot be 'anonymous'")
-    return candidate
-
-
 @router.post("/campaign", response_model=CampaignDetail, status_code=201)
 async def create_campaign(
     payload: CampaignCreateRequest,
@@ -29,16 +20,13 @@ async def create_campaign(
 @router.get("/campaign/{campaign_id}", response_model=CampaignDetail)
 async def get_campaign(
     campaign_id: str,
-    player_id: str,
     _user_context: AuthenticatedUserContext = Depends(require_authenticated_user_context),
 ) -> CampaignDetail:
-    player_id = _validate_player_id(player_id)
+    owner_user_id = _user_context.internal_user_id
     with session() as db:
-        campaign = db.get_player_campaign(player_id, campaign_id)
-        if campaign is None:
-            raise HTTPException(status_code=404, detail="Campaign not found")
-        _, turns, truncated = db.get_campaign_with_turns(campaign_id)
-
+        campaign, turns, truncated = db.get_campaign_with_turns_for_owner(campaign_id, owner_user_id)
+    if campaign is None:
+        raise HTTPException(status_code=404, detail="Campaign not found")
     return CampaignDetail(
         campaign_id=campaign.campaign_id,
         name=campaign.name,
@@ -61,26 +49,23 @@ async def get_campaign(
 @router.delete("/campaign/{campaign_id}", status_code=204)
 async def delete_campaign(
     campaign_id: str,
-    player_id: str,
     _user_context: AuthenticatedUserContext = Depends(require_authenticated_user_context),
 ) -> None:
-    player_id = _validate_player_id(player_id)
+    owner_user_id = _user_context.internal_user_id
     with session() as db:
-        deleted = db.delete_player_campaign(player_id=player_id, campaign_id=campaign_id)
-
+        deleted = db.delete_campaign_for_owner(campaign_id=campaign_id, owner_user_id=owner_user_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Campaign not found")
 
 
 @router.get("/campaigns/{player_id}", response_model=list[CampaignSummary])
 async def list_campaigns(
-    player_id: str,
+    player_id: str,  # ignored for authorization; kept for URL compatibility until Phase 2C
     _user_context: AuthenticatedUserContext = Depends(require_authenticated_user_context),
 ) -> list[CampaignSummary]:
-    player_id = _validate_player_id(player_id)
-
+    owner_user_id = _user_context.internal_user_id
     with session() as db:
-        campaigns = db.list_campaign_summaries_for_player(player_id)
+        campaigns = db.list_campaigns_for_owner(owner_user_id)
 
     summaries: list[CampaignSummary] = []
     for campaign in campaigns:
@@ -88,7 +73,6 @@ async def list_campaigns(
         name = campaign["name"]
         if campaign_id is None or name is None:
             continue
-
         summaries.append(
             CampaignSummary(
                 campaign_id=campaign_id,
@@ -96,36 +80,30 @@ async def list_campaigns(
                 last_message=campaign["last_message"],
             )
         )
-
     return summaries
 
 
 @router.get("/character/{character_id}", response_model=CharacterInfo)
 async def get_character(
     character_id: str,
-    player_id: str,
     _user_context: AuthenticatedUserContext = Depends(require_authenticated_user_context),
 ) -> CharacterInfo:
-    player_id = _validate_player_id(player_id)
+    owner_user_id = _user_context.internal_user_id
     with session() as db:
-        character = db.get_character(character_id)
-
-    if character is None or character.player_id != player_id:
+        character = db.get_character_for_owner(character_id, owner_user_id)
+    if character is None:
         raise HTTPException(status_code=404, detail="Character not found")
-
     return CharacterInfo(character_id=character.character_id, name=character.name)
 
 
 @router.get("/characters/{player_id}", response_model=CharacterList)
 async def list_characters(
-    player_id: str,
+    player_id: str,  # ignored for authorization; kept for URL compatibility until Phase 2C
     _user_context: AuthenticatedUserContext = Depends(require_authenticated_user_context),
 ) -> CharacterList:
-    player_id = _validate_player_id(player_id)
-
+    owner_user_id = _user_context.internal_user_id
     with session() as db:
-        characters = db.list_characters_for_player(player_id)
-
+        characters = db.list_characters_for_owner(owner_user_id)
     return CharacterList(
         characters=[
             CharacterInfo(character_id=character.character_id, name=character.name)
