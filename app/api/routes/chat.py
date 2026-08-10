@@ -12,4 +12,4 @@ async def chat_echo(
     payload: ChatRequest,
     _user_context: AuthenticatedUserContext = Depends(require_authenticated_user_context),
 ) -> ChatResponse:
-    return await orchestrator.handle_chat(payload)
+    return await orchestrator.handle_chat(payload, owner_user_id=_user_context.internal_user_id)

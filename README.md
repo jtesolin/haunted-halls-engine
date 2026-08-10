@@ -18,7 +18,16 @@
 - Email is mutable profile data and is not used as an identity key.
 - Resolution occurs during initial sign-in, updates profile fields + `last_login_at`, and returns only `user_id`.
 - Development sessions created before Phase 1C may require signing out and signing back in.
-- Campaign ownership enforcement and `player_id` removal remain future work.
+
+## Campaign Ownership
+
+- Campaigns now persist an internal ownership relationship through `campaigns.owner_user_id -> internal_users.user_id`.
+- Campaign ownership is derived from the trusted authenticated user context propagated by the BFF and is persisted at campaign creation time.
+- The browser never supplies campaign ownership; request bodies and query parameters cannot override it.
+- Campaigns are the ownership aggregate for this phase; turns, events, and memories continue to inherit authorization through their campaign later in Phase 2B.
+- Legacy `player_id` remains a temporary gameplay field and is not treated as the ownership identity.
+- Existing legacy campaigns may temporarily remain unowned when no safe mapping exists; they are preserved without fabricated ownership assignments.
+- Phase 2B will enforce owner-based reads and mutations, while Phase 2C will remove the legacy `player_id` identity behavior.
 
 ## Service And User Context
 

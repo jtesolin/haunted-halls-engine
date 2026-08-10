@@ -29,7 +29,7 @@ def _user_scoped_headers(client: TestClient, provider_subject: str = "chat-test-
             "display_name": "Test Player",
             "avatar_url": "https://example.com/avatar.png",
         },
-        headers={"Authorization": "Bearer test-token"},
+        headers={"Authorization": f"Bearer {settings.INTERNAL_ENGINE_SERVICE_TOKEN or ''}"},
     )
     assert resolve_response.status_code == 200
     user_id = resolve_response.json()["user_id"]
@@ -37,6 +37,24 @@ def _user_scoped_headers(client: TestClient, provider_subject: str = "chat-test-
         "Authorization": "Bearer test-token",
         INTERNAL_USER_ID_HEADER_NAME: user_id,
     }
+
+
+def _resolved_internal_user_id(client: TestClient, provider_subject: str) -> str:
+    resolve_response = client.post(
+        "/internal/auth/users/resolve",
+        json={
+            "identity_provider": "google",
+            "provider_issuer": CANONICAL_GOOGLE_ISSUER,
+            "provider_subject": provider_subject,
+            "email": f"{provider_subject}@example.com",
+            "email_verified": True,
+            "display_name": "Test Player",
+            "avatar_url": "https://example.com/avatar.png",
+        },
+        headers={"Authorization": f"Bearer {settings.INTERNAL_ENGINE_SERVICE_TOKEN or ''}"},
+    )
+    assert resolve_response.status_code == 200
+    return resolve_response.json()["user_id"]
 
 
 def test_chat_echoes_message() -> None:
@@ -251,7 +269,8 @@ def test_orchestrator_uses_narrator_agent_and_persists_turn(monkeypatch) -> None
 
     response = asyncio.run(
         orchestrator_module.orchestrator.handle_chat(
-            ChatRequest(message="hello", player_id="player-2")
+            ChatRequest(message="hello", player_id="player-2"),
+            owner_user_id=_resolved_internal_user_id(TestClient(app), "orchestrator-chat"),
         )
     )
 
@@ -316,7 +335,8 @@ def test_orchestrator_records_parse_failure_for_invalid_action(monkeypatch) -> N
     with pytest.raises(HTTPException) as exc_info:
         asyncio.run(
             orchestrator_module.orchestrator.handle_chat(
-                ChatRequest(message="???", player_id="player-5")
+                ChatRequest(message="???", player_id="player-5"),
+                owner_user_id=_resolved_internal_user_id(TestClient(app), "orchestrator-invalid-action"),
             )
         )
 
@@ -342,7 +362,8 @@ def test_orchestrator_returns_502_when_action_parser_provider_fails(monkeypatch)
     with pytest.raises(HTTPException) as exc_info:
         asyncio.run(
             orchestrator_module.orchestrator.handle_chat(
-                ChatRequest(message="move to roof", player_id="player-6")
+                ChatRequest(message="move to roof", player_id="player-6"),
+                owner_user_id=_resolved_internal_user_id(TestClient(app), "orchestrator-parser-fail"),
             )
         )
 
@@ -356,7 +377,8 @@ def test_ai_disabled_still_runs_parser_and_tools() -> None:
 
     response = asyncio.run(
         orchestrator_module.orchestrator.handle_chat(
-            ChatRequest(message="I quietly climb onto the roof.", player_id="player-7")
+            ChatRequest(message="I quietly climb onto the roof.", player_id="player-7"),
+            owner_user_id=_resolved_internal_user_id(TestClient(app), "orchestrator-ai-disabled"),
         )
     )
 
@@ -419,7 +441,8 @@ def test_orchestrator_includes_relevant_memory_context(monkeypatch) -> None:
 
     first_response = asyncio.run(
         orchestrator_module.orchestrator.handle_chat(
-            ChatRequest(message="I quietly climb onto the roof.", player_id="player-memory-1")
+            ChatRequest(message="I quietly climb onto the roof.", player_id="player-memory-1"),
+            owner_user_id=_resolved_internal_user_id(TestClient(app), "orchestrator-memory-context"),
         )
     )
 
@@ -429,7 +452,8 @@ def test_orchestrator_includes_relevant_memory_context(monkeypatch) -> None:
                 message="What do I notice from here?",
                 campaign_id=first_response.campaign_id,
                 player_id="player-memory-1",
-            )
+            ),
+            owner_user_id=_resolved_internal_user_id(TestClient(app), "orchestrator-memory-context-followup"),
         )
     )
 
@@ -471,7 +495,8 @@ def test_orchestrator_writes_campaign_summary_and_reflection_memory(monkeypatch)
 
     response = asyncio.run(
         orchestrator_module.orchestrator.handle_chat(
-            ChatRequest(message="I climb to the roof.", player_id="player-memory-2")
+            ChatRequest(message="I climb to the roof.", player_id="player-memory-2"),
+            owner_user_id=_resolved_internal_user_id(TestClient(app), "orchestrator-memory-summary"),
         )
     )
 
@@ -520,7 +545,8 @@ def test_orchestrator_logs_memory_agent_usage(monkeypatch) -> None:
 
     response = asyncio.run(
         orchestrator_module.orchestrator.handle_chat(
-            ChatRequest(message="I climb to the roof.", player_id="player-memory-3")
+            ChatRequest(message="I climb to the roof.", player_id="player-memory-3"),
+            owner_user_id=_resolved_internal_user_id(TestClient(app), "orchestrator-memory-usage"),
         )
     )
 
@@ -575,7 +601,8 @@ def test_orchestrator_uses_policy_models_per_agent(monkeypatch) -> None:
 
     asyncio.run(
         orchestrator_module.orchestrator.handle_chat(
-            ChatRequest(message="I climb to the roof.", player_id="player-model-policy-1")
+            ChatRequest(message="I climb to the roof.", player_id="player-model-policy-1"),
+            owner_user_id=_resolved_internal_user_id(TestClient(app), "orchestrator-policy"),
         )
     )
 

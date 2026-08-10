@@ -25,7 +25,7 @@ def _sqlite_path_from_url(url: str) -> Path:
 
 def _column_exists(conn: sqlite3.Connection, table: str, column: str) -> bool:
     rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
-    return any(row["name"] == column for row in rows)
+    return any((row[1] if isinstance(row, tuple) else row["name"]) == column for row in rows)
 
 
 def _ensure_column(conn: sqlite3.Connection, table: str, column: str, definition: str) -> None:
@@ -34,7 +34,15 @@ def _ensure_column(conn: sqlite3.Connection, table: str, column: str, definition
 
 
 def _table_columns(conn: sqlite3.Connection, table: str) -> set[str]:
-    return {row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+    rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
+    return {row[1] if isinstance(row, tuple) else row["name"] for row in rows}
+
+
+def _ensure_campaign_owner_column(conn: sqlite3.Connection) -> None:
+    if not _column_exists(conn, "campaigns", "owner_user_id"):
+        conn.execute("ALTER TABLE campaigns ADD COLUMN owner_user_id TEXT")
+
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_campaigns_owner_user_id ON campaigns(owner_user_id)")
 
 
 def _migrate_turns_table(conn: sqlite3.Connection) -> None:
@@ -136,14 +144,32 @@ def session() -> Iterator[Repository]:
 def init_db(conn: sqlite3.Connection) -> None:
     conn.executescript(
         """
+        CREATE TABLE IF NOT EXISTS internal_users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT NOT NULL UNIQUE,
+            identity_provider TEXT NOT NULL,
+            provider_issuer TEXT NOT NULL,
+            provider_subject TEXT NOT NULL,
+            email TEXT NOT NULL,
+            email_verified INTEGER NOT NULL,
+            display_name TEXT,
+            avatar_url TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            last_login_at TEXT NOT NULL,
+            UNIQUE(provider_issuer, provider_subject)
+        );
+
         CREATE TABLE IF NOT EXISTS campaigns (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             campaign_id TEXT NOT NULL UNIQUE,
             player_id TEXT NOT NULL,
+            owner_user_id TEXT,
             name TEXT NOT NULL,
             description TEXT,
             state TEXT,
-            created_at TEXT NOT NULL
+            created_at TEXT NOT NULL,
+            FOREIGN KEY(owner_user_id) REFERENCES internal_users(user_id) ON DELETE RESTRICT
         );
 
         CREATE TABLE IF NOT EXISTS characters (
@@ -219,24 +245,10 @@ def init_db(conn: sqlite3.Connection) -> None:
             FOREIGN KEY(campaign_id) REFERENCES campaigns(campaign_id) ON DELETE CASCADE
         );
 
-        CREATE TABLE IF NOT EXISTS internal_users (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id TEXT NOT NULL UNIQUE,
-            identity_provider TEXT NOT NULL,
-            provider_issuer TEXT NOT NULL,
-            provider_subject TEXT NOT NULL,
-            email TEXT NOT NULL,
-            email_verified INTEGER NOT NULL,
-            display_name TEXT,
-            avatar_url TEXT,
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL,
-            last_login_at TEXT NOT NULL,
-            UNIQUE(provider_issuer, provider_subject)
-        );
         """
     )
     _migrate_turns_table(conn)
     _migrate_game_events_table(conn)
+    _ensure_campaign_owner_column(conn)
     _ensure_column(conn, "campaigns", "player_id", "TEXT NOT NULL DEFAULT ''")
     _ensure_column(conn, "characters", "player_id", "TEXT NOT NULL DEFAULT ''")

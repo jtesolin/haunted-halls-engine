@@ -43,7 +43,7 @@ class ChatOrchestrator:
         self.memory_reflection_agent = MemoryReflectionAgent()
         self.tool_executor = ToolExecutor()
 
-    async def create_campaign(self, request: CampaignCreateRequest) -> CampaignDetail:
+    async def create_campaign(self, request: CampaignCreateRequest, owner_user_id: str) -> CampaignDetail:
         player_id = request.player_id.strip()
         campaign_id = f"campaign_{uuid4().hex}"
         assistant_turn_id = f"turn_{uuid4().hex}"
@@ -91,6 +91,7 @@ class ChatOrchestrator:
             db.create_campaign(
                 campaign_id=campaign_id,
                 player_id=player_id,
+                owner_user_id=owner_user_id,
                 name=campaign_name,
                 description="AI-created campaign",
             )
@@ -127,7 +128,7 @@ class ChatOrchestrator:
             truncated=False,
         )
 
-    async def handle_chat(self, request: ChatRequest) -> ChatResponse:
+    async def handle_chat(self, request: ChatRequest, owner_user_id: str) -> ChatResponse:
         player_id = request.player_id.strip()
         campaign_id = request.campaign_id or f"campaign_{uuid4().hex}"
         player_turn_id = f"turn_{uuid4().hex}"
@@ -142,6 +143,7 @@ class ChatOrchestrator:
             db.create_campaign(
                 campaign_id=campaign_id,
                 player_id=player_id,
+                owner_user_id=owner_user_id,
                 name=f"Campaign {campaign_id}",
                 description="Auto-created campaign",
             )

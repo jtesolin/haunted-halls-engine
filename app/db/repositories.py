@@ -196,6 +196,7 @@ class Repository:
         self,
         campaign_id: str,
         player_id: str,
+        owner_user_id: str,
         name: str,
         description: Optional[str] = None,
         state: Optional[dict[str, Any]] = None,
@@ -203,18 +204,20 @@ class Repository:
         created_at = datetime.utcnow().isoformat()
         state_json = json.dumps(state) if state is not None else None
         self.conn.execute(
-            "INSERT OR IGNORE INTO campaigns (campaign_id, player_id, name, description, state, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-            (campaign_id, player_id, name, description, state_json, created_at),
+            "INSERT OR IGNORE INTO campaigns (campaign_id, player_id, owner_user_id, name, description, state, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (campaign_id, player_id, owner_user_id, name, description, state_json, created_at),
         )
-        return CampaignDBModel(campaign_id, player_id, name, description, state_json, datetime.fromisoformat(created_at))
+        return CampaignDBModel(
+            campaign_id,
+            player_id,
+            name,
+            description,
+            state_json,
+            datetime.fromisoformat(created_at),
+            owner_user_id=owner_user_id,
+        )
 
-    def get_campaign(self, campaign_id: str) -> Optional[CampaignDBModel]:
-        row = self.conn.execute(
-            "SELECT campaign_id, player_id, name, description, state, created_at FROM campaigns WHERE campaign_id = ?",
-            (campaign_id,),
-        ).fetchone()
-        if row is None:
-            return None
+    def _row_to_campaign(self, row) -> CampaignDBModel:
         return CampaignDBModel(
             campaign_id=row["campaign_id"],
             player_id=row["player_id"],
@@ -222,7 +225,17 @@ class Repository:
             description=row["description"],
             state=row["state"],
             created_at=datetime.fromisoformat(row["created_at"]),
+            owner_user_id=row["owner_user_id"],
         )
+
+    def get_campaign(self, campaign_id: str) -> Optional[CampaignDBModel]:
+        row = self.conn.execute(
+            "SELECT campaign_id, player_id, owner_user_id, name, description, state, created_at FROM campaigns WHERE campaign_id = ?",
+            (campaign_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        return self._row_to_campaign(row)
 
     def update_campaign_state(self, campaign_id: str, state: dict[str, Any]) -> None:
         self.conn.execute(
@@ -232,19 +245,12 @@ class Repository:
 
     def get_player_campaign(self, player_id: str, campaign_id: str) -> Optional[CampaignDBModel]:
         row = self.conn.execute(
-            "SELECT campaign_id, player_id, name, description, state, created_at FROM campaigns WHERE campaign_id = ? AND player_id = ?",
+            "SELECT campaign_id, player_id, owner_user_id, name, description, state, created_at FROM campaigns WHERE campaign_id = ? AND player_id = ?",
             (campaign_id, player_id),
         ).fetchone()
         if row is None:
             return None
-        return CampaignDBModel(
-            campaign_id=row["campaign_id"],
-            player_id=row["player_id"],
-            name=row["name"],
-            description=row["description"],
-            state=row["state"],
-            created_at=datetime.fromisoformat(row["created_at"]),
-        )
+        return self._row_to_campaign(row)
 
     def delete_player_campaign(self, player_id: str, campaign_id: str) -> bool:
         cursor = self.conn.execute(

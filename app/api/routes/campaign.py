@@ -23,7 +23,7 @@ async def create_campaign(
     payload: CampaignCreateRequest,
     _user_context: AuthenticatedUserContext = Depends(require_authenticated_user_context),
 ) -> CampaignDetail:
-    return await orchestrator.create_campaign(payload)
+    return await orchestrator.create_campaign(payload, owner_user_id=_user_context.internal_user_id)
 
 
 @router.get("/campaign/{campaign_id}", response_model=CampaignDetail)

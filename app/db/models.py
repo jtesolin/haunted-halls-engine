@@ -21,6 +21,7 @@ class CampaignDBModel:
     description: Optional[str]
     state: Optional[str]
     created_at: datetime
+    owner_user_id: Optional[str] = None
 
 
 @dataclass
