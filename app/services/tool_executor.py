@@ -5,7 +5,7 @@ import json
 from typing import Any
 
 from app.core.config import settings
-from app.schemas.chat import ParsedAction, ToolExecutionResult
+from app.schemas.chat import ActionType, ParsedAction, ToolExecutionResult
 from app.tools.mcp_client import build_mcp_client
 from app.tools.registry import RegistryTransportError, ToolRegistry
 
@@ -45,7 +45,7 @@ class ToolExecutor:
         state = self._state_from_text(campaign_state)
         previous_state = copy.deepcopy(state)
 
-        action = parsed_action.action.lower().strip()
+        action = parsed_action.action
         target = parsed_action.target
 
         result = ToolExecutionResult(
@@ -57,7 +57,7 @@ class ToolExecutor:
             result.summary = "Action parse was not confident enough for tool execution."
             return state, result
 
-        if action in {"move", "go", "walk", "run", "enter", "climb"}:
+        if action in {ActionType.MOVE, ActionType.CLIMB}:
             room = target or "unknown_location"
             dispatch_error = self._dispatch_tool("move_player", state, room)
             if dispatch_error is not None:
@@ -67,14 +67,8 @@ class ToolExecutor:
                 applied_tools=["move_player"],
                 summary=f"Player moved to {room}.",
             )
-            if parsed_action.stealth:
-                dispatch_error = self._dispatch_tool("record_fact", state, f"player attempted stealth movement to {room}")
-                if dispatch_error is not None:
-                    return state, dispatch_error
-                result.applied_tools.append("record_fact")
-                result.summary += " Stealth movement was recorded."
 
-        elif action in {"take", "grab", "collect"}:
+        elif action == ActionType.TAKE:
             item = target or parsed_action.parameters.get("item") or "unknown_item"
             dispatch_error = self._dispatch_tool("add_inventory", state, str(item))
             if dispatch_error is not None:
@@ -85,7 +79,7 @@ class ToolExecutor:
                 summary=f"Added {item} to inventory.",
             )
 
-        elif action in {"drop", "remove", "discard"}:
+        elif action == ActionType.DROP:
             item = target or parsed_action.parameters.get("item") or "unknown_item"
             removed, dispatch_error = self._dispatch_tool_with_value("remove_inventory", state, str(item))
             if dispatch_error is not None:
@@ -103,19 +97,7 @@ class ToolExecutor:
                     errors=["item_not_found"],
                 )
 
-        elif action == "spawn_npc":
-            npc_id = target or parsed_action.parameters.get("npc") or "mysterious_figure"
-            room = str(parsed_action.parameters.get("room") or state["player"]["location"])
-            dispatch_error = self._dispatch_tool("spawn_npc", state, str(npc_id), room)
-            if dispatch_error is not None:
-                return state, dispatch_error
-            result = ToolExecutionResult(
-                success=True,
-                applied_tools=["spawn_npc"],
-                summary=f"Spawned {npc_id} in {room}.",
-            )
-
-        elif action == "advance_clock":
+        elif action == ActionType.WAIT:
             amount = parsed_action.parameters.get("amount", 1)
             try:
                 ticks = max(1, int(amount))
@@ -128,17 +110,6 @@ class ToolExecutor:
                 success=True,
                 applied_tools=["advance_clock"],
                 summary=f"Advanced clock by {ticks} tick(s).",
-            )
-
-        elif action == "record_fact":
-            fact = str(parsed_action.parameters.get("fact") or parsed_action.raw_text)
-            dispatch_error = self._dispatch_tool("record_fact", state, fact)
-            if dispatch_error is not None:
-                return state, dispatch_error
-            result = ToolExecutionResult(
-                success=True,
-                applied_tools=["record_fact"],
-                summary="Recorded a campaign fact.",
             )
 
         if state != previous_state:

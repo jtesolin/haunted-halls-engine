@@ -1,6 +1,8 @@
 import asyncio
 from typing import Any
 
+from pydantic import BaseModel
+
 from app.ai.model_client import ModelClient
 
 
@@ -14,6 +16,12 @@ class _FakeResponsesAPI:
         self.call_count = 0
 
     async def create(self, **kwargs: Any) -> Any:
+        self.last_kwargs = kwargs
+        self.call_count += 1
+        index = min(self.call_count - 1, len(self._responses) - 1)
+        return self._responses[index]
+
+    async def parse(self, **kwargs: Any) -> Any:
         self.last_kwargs = kwargs
         self.call_count += 1
         index = min(self.call_count - 1, len(self._responses) - 1)
@@ -58,6 +66,15 @@ class _IncompleteResponseNoText:
         self.output: list[Any] = []
         self.status = "incomplete"
         self.incomplete_details = _IncompleteDetails("max_output_tokens")
+
+
+class _ActionPayload(BaseModel):
+    action: str
+
+
+class _ParsedResponse:
+    def __init__(self, output_parsed: Any) -> None:
+        self.output_parsed = output_parsed
 
 
 def test_generate_text_uses_responses_create_and_maps_options(monkeypatch) -> None:
@@ -186,3 +203,44 @@ def test_generate_text_uses_fallback_when_client_unavailable(monkeypatch) -> Non
     )
 
     assert result == "AI narrator replies: hello"
+
+
+def test_generate_structured_uses_responses_parse(monkeypatch) -> None:
+    model_client = ModelClient()
+    fake_client = _FakeClient(_ParsedResponse(_ActionPayload(action="move")))
+    monkeypatch.setattr(model_client, "_get_client", lambda: fake_client)
+
+    result = asyncio.run(
+        model_client.generate_structured(
+            messages=[{"role": "user", "content": "hello"}],
+            response_model=_ActionPayload,
+            reasoning_effort="minimal",
+            model="gpt-test",
+            max_output_tokens=64,
+            timeout=7,
+        )
+    )
+
+    assert result == _ActionPayload(action="move")
+    assert fake_client.responses.last_kwargs is not None
+    assert fake_client.responses.last_kwargs["model"] == "gpt-test"
+    assert fake_client.responses.last_kwargs["text_format"] == _ActionPayload
+
+
+def test_generate_structured_returns_none_when_output_not_parsed(monkeypatch) -> None:
+    model_client = ModelClient()
+    fake_client = _FakeClient(_ParsedResponse(None))
+    monkeypatch.setattr(model_client, "_get_client", lambda: fake_client)
+
+    result = asyncio.run(
+        model_client.generate_structured(
+            messages=[{"role": "user", "content": "hello"}],
+            response_model=_ActionPayload,
+            reasoning_effort="minimal",
+            model="gpt-test",
+            max_output_tokens=64,
+            timeout=7,
+        )
+    )
+
+    assert result is None

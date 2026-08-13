@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from app.core.config import settings
-from app.schemas.chat import ParsedAction
+from app.schemas.chat import ActionType, ParsedAction
 from app.services.tool_executor import ToolExecutor
 from app.tools import mcp_client as mcp_client_module
 from app.tools.mcp_client import DisabledMCPClient, build_mcp_client
@@ -119,7 +119,7 @@ def test_tool_executor_can_use_mcp_registry_without_orchestrator_changes() -> No
     executor = ToolExecutor(registry=registry)
     parsed_action = ParsedAction(
         raw_text="wait",
-        action="advance_clock",
+        action=ActionType.WAIT,
         parameters={"amount": 3},
         parse_status="ok",
     )
@@ -139,7 +139,7 @@ def test_tool_executor_applies_structured_state_from_remote_mcp_result() -> None
 
     parsed_action = ParsedAction(
         raw_text="wait",
-        action="advance_clock",
+        action=ActionType.WAIT,
         parameters={"amount": 2},
         parse_status="ok",
     )

@@ -13,7 +13,7 @@ from app.db.session import session
 from app.guardrails.model_policy import ModelPolicy
 from app.main import app
 from app.orchestration import orchestrator as orchestrator_module
-from app.schemas.chat import ChatRequest
+from app.schemas.chat import ActionParserOutput, ActionType, ChatRequest
 from app.schemas.internal_auth import CANONICAL_GOOGLE_ISSUER
 
 
@@ -276,26 +276,25 @@ def test_chat_daily_request_limit_rejects_before_persisting_side_effects() -> No
 
 def test_orchestrator_uses_narrator_agent_and_persists_turn(monkeypatch) -> None:
     settings.AI_ENABLED = True
-    settings.OPENAI_API_KEY = None
+    settings.OPENAI_API_KEY = "test-key"
 
     saw_tool_context = False
+
+    async def fake_generate_structured(*, messages, model=None, **kwargs):  # noqa: ANN202, ARG001
+        assert messages[0]["role"] == "developer"
+        return ActionParserOutput(
+            action=ActionType.MOVE,
+            target="roof",
+            parameters={},
+            stealth=True,
+            confidence=0.94,
+            parse_status="ok",
+            parser_notes=None,
+        )
 
     async def fake_generate_text(*, messages, **kwargs) -> str:
         nonlocal saw_tool_context
         assert messages[0]["role"] == "developer"
-
-        if "Convert player text into strict JSON" in str(messages[0]["content"]):
-            return json.dumps(
-                {
-                    "action": "move",
-                    "target": "roof",
-                    "parameters": {},
-                    "stealth": True,
-                    "confidence": 0.94,
-                    "parse_status": "ok",
-                    "parser_notes": None,
-                }
-            )
 
         assert messages[1]["role"] == "user"
         assert "Campaign state:" in messages[1]["content"]
@@ -308,7 +307,9 @@ def test_orchestrator_uses_narrator_agent_and_persists_turn(monkeypatch) -> None
         return "A haunted reply"
 
     monkeypatch.setattr(
-        action_parser_module.model_client, "generate_text", fake_generate_text
+        action_parser_module.model_client,
+        "generate_structured",
+        fake_generate_structured,
     )
     monkeypatch.setattr(
         narrator_module.model_client, "generate_text", fake_generate_text
@@ -361,25 +362,26 @@ def test_orchestrator_uses_narrator_agent_and_persists_turn(monkeypatch) -> None
 
 def test_orchestrator_records_parse_failure_for_invalid_action(monkeypatch) -> None:
     settings.AI_ENABLED = True
-    settings.OPENAI_API_KEY = None
+    settings.OPENAI_API_KEY = "test-key"
 
-    async def fake_generate_text(*, messages, **kwargs) -> str:
-        if "Convert player text into strict JSON" in str(messages[0]["content"]):
-            return json.dumps(
-                {
-                    "action": "",
-                    "target": None,
-                    "parameters": {},
-                    "stealth": False,
-                    "confidence": 0.2,
-                    "parse_status": "invalid",
-                    "parser_notes": "Could not determine action",
-                }
-            )
+    async def fake_generate_structured(*, messages, model=None, **kwargs):  # noqa: ANN202, ARG001
+        return ActionParserOutput(
+            action=ActionType.UNKNOWN,
+            target=None,
+            parameters={},
+            stealth=False,
+            confidence=0.2,
+            parse_status="invalid",
+            parser_notes="Could not determine action",
+        )
+
+    async def fake_generate_text(*, messages, **kwargs) -> str:  # noqa: ARG001
         return "I cannot decode your intent, but the hall waits."
 
     monkeypatch.setattr(
-        action_parser_module.model_client, "generate_text", fake_generate_text
+        action_parser_module.model_client,
+        "generate_structured",
+        fake_generate_structured,
     )
     monkeypatch.setattr(
         narrator_module.model_client, "generate_text", fake_generate_text
@@ -409,15 +411,15 @@ def test_orchestrator_returns_502_when_action_parser_provider_fails(
     monkeypatch,
 ) -> None:
     settings.AI_ENABLED = True
-    settings.OPENAI_API_KEY = None
+    settings.OPENAI_API_KEY = "test-key"
 
-    async def broken_generate_text(*, messages, **kwargs):  # noqa: ANN202
-        if "Convert player text into strict JSON" in str(messages[0]["content"]):
-            raise RuntimeError("parser upstream failure")
-        return "unused"
+    async def broken_generate_structured(*, messages, **kwargs):  # noqa: ANN202, ARG001
+        raise RuntimeError("parser upstream failure")
 
     monkeypatch.setattr(
-        action_parser_module.model_client, "generate_text", broken_generate_text
+        action_parser_module.model_client,
+        "generate_structured",
+        broken_generate_structured,
     )
 
     with pytest.raises(HTTPException) as exc_info:
@@ -468,6 +470,38 @@ def test_ai_disabled_still_runs_parser_and_tools() -> None:
         ]
 
 
+def test_ai_enabled_without_api_key_uses_deterministic_parser(monkeypatch) -> None:
+    settings.AI_ENABLED = True
+    settings.OPENAI_API_KEY = None
+
+    async def fail_if_structured_called(*, messages, **kwargs):  # noqa: ANN202, ARG001
+        raise AssertionError("generate_structured should not be called without API key")
+
+    monkeypatch.setattr(
+        action_parser_module.model_client,
+        "generate_structured",
+        fail_if_structured_called,
+    )
+
+    response = asyncio.run(
+        orchestrator_module.orchestrator.handle_chat(
+            ChatRequest(message="I quietly climb onto the roof."),
+            owner_user_id=_resolved_internal_user_id(
+                TestClient(app), "orchestrator-ai-flag-no-key"
+            ),
+        )
+    )
+
+    assert response.reply == "AI narrator replies: I quietly climb onto the roof."
+
+    with session() as db:
+        campaign = db.get_campaign(response.campaign_id)
+        assert campaign is not None
+        assert campaign.state is not None
+        campaign_state = json.loads(campaign.state)
+        assert campaign_state["player"]["location"] == "roof"
+
+
 def test_orchestrator_includes_relevant_memory_context(monkeypatch) -> None:
     settings.AI_ENABLED = True
     settings.OPENAI_API_KEY = None
@@ -477,22 +511,19 @@ def test_orchestrator_includes_relevant_memory_context(monkeypatch) -> None:
 
     narrator_calls = 0
 
+    async def fake_generate_structured(*, messages, model=None, **kwargs):  # noqa: ANN202, ARG001
+        return ActionParserOutput(
+            action=ActionType.MOVE,
+            target="roof",
+            parameters={},
+            stealth=True,
+            confidence=0.94,
+            parse_status="ok",
+            parser_notes=None,
+        )
+
     async def fake_generate_text(*, messages, **kwargs) -> str:
         nonlocal narrator_calls
-        prompt = str(messages[0]["content"])
-
-        if "Convert player text into strict JSON" in prompt:
-            return json.dumps(
-                {
-                    "action": "move",
-                    "target": "roof",
-                    "parameters": {},
-                    "stealth": True,
-                    "confidence": 0.94,
-                    "parse_status": "ok",
-                    "parser_notes": None,
-                }
-            )
 
         narrator_calls += 1
         if narrator_calls == 2:
@@ -504,7 +535,9 @@ def test_orchestrator_includes_relevant_memory_context(monkeypatch) -> None:
         return "A haunted reply"
 
     monkeypatch.setattr(
-        action_parser_module.model_client, "generate_text", fake_generate_text
+        action_parser_module.model_client,
+        "generate_structured",
+        fake_generate_structured,
     )
     monkeypatch.setattr(
         narrator_module.model_client, "generate_text", fake_generate_text
@@ -542,21 +575,19 @@ def test_orchestrator_writes_campaign_summary_and_reflection_memory(
     monkeypatch.setattr(settings, "MEMORY_SUMMARY_EVERY_TURNS", 1)
     monkeypatch.setattr(settings, "MEMORY_REFLECTION_EVERY_TURNS", 1)
 
+    async def fake_generate_structured(*, messages, model=None, **kwargs):  # noqa: ANN202, ARG001
+        return ActionParserOutput(
+            action=ActionType.MOVE,
+            target="roof",
+            parameters={},
+            stealth=False,
+            confidence=0.91,
+            parse_status="ok",
+            parser_notes=None,
+        )
+
     async def fake_generate_text(*, messages, **kwargs) -> str:
         prompt = str(messages[0]["content"])
-
-        if "Convert player text into strict JSON" in prompt:
-            return json.dumps(
-                {
-                    "action": "move",
-                    "target": "roof",
-                    "parameters": {},
-                    "stealth": False,
-                    "confidence": 0.91,
-                    "parse_status": "ok",
-                    "parser_notes": None,
-                }
-            )
 
         if "Summarize the campaign" in prompt:
             return "The player climbed to the roof and the hall answered in silence."
@@ -567,7 +598,9 @@ def test_orchestrator_writes_campaign_summary_and_reflection_memory(
         return "A haunted reply"
 
     monkeypatch.setattr(
-        action_parser_module.model_client, "generate_text", fake_generate_text
+        action_parser_module.model_client,
+        "generate_structured",
+        fake_generate_structured,
     )
     monkeypatch.setattr(
         narrator_module.model_client, "generate_text", fake_generate_text
@@ -606,21 +639,19 @@ def test_orchestrator_logs_memory_agent_usage(monkeypatch) -> None:
     monkeypatch.setattr(settings, "MEMORY_SUMMARY_EVERY_TURNS", 1)
     monkeypatch.setattr(settings, "MEMORY_REFLECTION_EVERY_TURNS", 1)
 
+    async def fake_generate_structured(*, messages, model=None, **kwargs):  # noqa: ANN202, ARG001
+        return ActionParserOutput(
+            action=ActionType.MOVE,
+            target="roof",
+            parameters={},
+            stealth=False,
+            confidence=0.91,
+            parse_status="ok",
+            parser_notes=None,
+        )
+
     async def fake_generate_text(*, messages, **kwargs) -> str:
         prompt = str(messages[0]["content"])
-
-        if "Convert player text into strict JSON" in prompt:
-            return json.dumps(
-                {
-                    "action": "move",
-                    "target": "roof",
-                    "parameters": {},
-                    "stealth": False,
-                    "confidence": 0.91,
-                    "parse_status": "ok",
-                    "parser_notes": None,
-                }
-            )
 
         if "Summarize the campaign" in prompt:
             return "The player climbed to the roof and the hall answered in silence."
@@ -631,7 +662,9 @@ def test_orchestrator_logs_memory_agent_usage(monkeypatch) -> None:
         return "A haunted reply"
 
     monkeypatch.setattr(
-        action_parser_module.model_client, "generate_text", fake_generate_text
+        action_parser_module.model_client,
+        "generate_structured",
+        fake_generate_structured,
     )
     monkeypatch.setattr(
         narrator_module.model_client, "generate_text", fake_generate_text
@@ -658,28 +691,26 @@ def test_orchestrator_logs_memory_agent_usage(monkeypatch) -> None:
 
 def test_orchestrator_uses_policy_models_per_agent(monkeypatch) -> None:
     settings.AI_ENABLED = True
-    settings.OPENAI_API_KEY = None
+    settings.OPENAI_API_KEY = "test-key"
     monkeypatch.setattr(settings, "MEMORY_SUMMARY_EVERY_TURNS", 1)
     monkeypatch.setattr(settings, "MEMORY_REFLECTION_EVERY_TURNS", 1)
 
     observed_models: dict[str, str] = {}
 
+    async def fake_generate_structured(*, messages, model=None, **kwargs):  # noqa: ANN202, ARG001
+        observed_models["ActionParser"] = str(model)
+        return ActionParserOutput(
+            action=ActionType.MOVE,
+            target="roof",
+            parameters={},
+            stealth=False,
+            confidence=0.91,
+            parse_status="ok",
+            parser_notes=None,
+        )
+
     async def fake_generate_text(*, messages, model=None, **kwargs) -> str:  # noqa: ANN003
         prompt = str(messages[0]["content"])
-
-        if "Convert player text into strict JSON" in prompt:
-            observed_models["ActionParser"] = str(model)
-            return json.dumps(
-                {
-                    "action": "move",
-                    "target": "roof",
-                    "parameters": {},
-                    "stealth": False,
-                    "confidence": 0.91,
-                    "parse_status": "ok",
-                    "parser_notes": None,
-                }
-            )
 
         if "Summarize the campaign" in prompt:
             observed_models["MemorySummarizer"] = str(model)
@@ -693,7 +724,9 @@ def test_orchestrator_uses_policy_models_per_agent(monkeypatch) -> None:
         return "A haunted reply"
 
     monkeypatch.setattr(
-        action_parser_module.model_client, "generate_text", fake_generate_text
+        action_parser_module.model_client,
+        "generate_structured",
+        fake_generate_structured,
     )
     monkeypatch.setattr(
         narrator_module.model_client, "generate_text", fake_generate_text

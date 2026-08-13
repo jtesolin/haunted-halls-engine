@@ -1,3 +1,4 @@
+from enum import StrEnum
 from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -29,14 +30,53 @@ class GameTurnResult(BaseModel):
     turn_id: str
 
 
+class ActionType(StrEnum):
+    OBSERVE = "observe"
+    MOVE = "move"
+    CLIMB = "climb"
+    TAKE = "take"
+    DROP = "drop"
+    USE = "use"
+    TALK = "talk"
+    ATTACK = "attack"
+    WAIT = "wait"
+    INTERACT = "interact"
+    UNKNOWN = "unknown"
+
+
+ParseStatus = Literal["ok", "ambiguous", "invalid"]
+
+
+class ActionParserParameters(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    item: Optional[str] = None
+    amount: Optional[int] = None
+    duration: Optional[str] = None
+    with_item: Optional[str] = None
+    interaction_mode: Optional[str] = None
+
+
+class ActionParserOutput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    action: ActionType
+    target: Optional[str] = None
+    parameters: ActionParserParameters = Field(default_factory=ActionParserParameters)
+    stealth: bool = False
+    confidence: float = Field(ge=0.0, le=1.0)
+    parse_status: ParseStatus
+    parser_notes: Optional[str] = None
+
+
 class ParsedAction(BaseModel):
     raw_text: str
-    action: str
+    action: ActionType = ActionType.UNKNOWN
     target: Optional[str] = None
     parameters: dict[str, Any] = Field(default_factory=dict)
     stealth: bool = False
     confidence: float = 0.0
-    parse_status: Literal["ok", "ambiguous", "invalid"] = "invalid"
+    parse_status: ParseStatus = "invalid"
     parser_notes: Optional[str] = None
 
 

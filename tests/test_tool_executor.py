@@ -4,7 +4,7 @@ from typing import Any
 
 import pytest
 
-from app.schemas.chat import ParsedAction
+from app.schemas.chat import ActionType, ParsedAction
 from app.services.tool_executor import ToolExecutor
 from app.tools.registry import ToolRegistry
 
@@ -76,27 +76,19 @@ def _build_hybrid_executor() -> ToolExecutor:
     "parsed_action,campaign_state",
     [
         (
-            ParsedAction(raw_text="go roof", action="move", target="roof", parse_status="ok"),
+            ParsedAction(raw_text="go roof", action=ActionType.MOVE, target="roof", parse_status="ok"),
             "No campaign state yet.",
         ),
         (
-            ParsedAction(raw_text="take key", action="take", target="rusty_key", parse_status="ok"),
+            ParsedAction(raw_text="take key", action=ActionType.TAKE, target="rusty_key", parse_status="ok"),
             "No campaign state yet.",
         ),
         (
-            ParsedAction(raw_text="drop key", action="drop", target="rusty_key", parse_status="ok"),
+            ParsedAction(raw_text="drop key", action=ActionType.DROP, target="rusty_key", parse_status="ok"),
             '{"player": {"location": "entry_hall", "inventory": ["rusty_key"]}, "npcs": {}, "clock": {"tick": 0}, "facts": []}',
         ),
         (
-            ParsedAction(raw_text="spawn ghost", action="spawn_npc", target="ghost", parameters={"room": "cellar"}, parse_status="ok"),
-            "No campaign state yet.",
-        ),
-        (
-            ParsedAction(raw_text="wait", action="advance_clock", parameters={"amount": 2}, parse_status="ok"),
-            "No campaign state yet.",
-        ),
-        (
-            ParsedAction(raw_text="remember this", action="record_fact", parameters={"fact": "lantern flickers"}, parse_status="ok"),
+            ParsedAction(raw_text="wait", action=ActionType.WAIT, parameters={"amount": 2}, parse_status="ok"),
             "No campaign state yet.",
         ),
     ],
@@ -121,7 +113,7 @@ def test_tool_executor_returns_structured_dispatch_errors() -> None:
 
     parsed_action = ParsedAction(
         raw_text="wait",
-        action="advance_clock",
+        action=ActionType.WAIT,
         parameters={"amount": 1},
         parse_status="ok",
     )

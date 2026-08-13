@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import time
 from uuid import uuid4
 
@@ -37,6 +38,9 @@ from app.schemas.events import (
     ToolExecutionFailedPayload,
 )
 from app.services.tool_executor import ToolExecutor
+
+
+logger = logging.getLogger(__name__)
 
 
 class ChatOrchestrator:
@@ -141,7 +145,18 @@ class ChatOrchestrator:
             validate_chat_request(db, request, owner_user_id)
             validate_campaign_turn_limit(db, owner_user_id, campaign_id)
 
-            ai_enabled = settings.AI_ENABLED or bool(settings.OPENAI_API_KEY)
+            has_openai_key = bool((settings.OPENAI_API_KEY or "").strip())
+            ai_enabled = settings.AI_ENABLED or has_openai_key
+            parser_model_enabled = has_openai_key
+            logger.info(
+                "chat_request_received owner_user_id=%s campaign_id=%s turn_id=%s ai_enabled=%s parser_model_enabled=%s has_openai_key=%s",
+                owner_user_id,
+                campaign_id,
+                player_turn_id,
+                ai_enabled,
+                parser_model_enabled,
+                has_openai_key,
+            )
             memory_service = MemoryService(db)
             campaign_state = memory_service.build_campaign_state(
                 owner_user_id=owner_user_id, campaign_id=campaign_id
@@ -198,11 +213,35 @@ class ChatOrchestrator:
                     recent_turns=recent_turns,
                     memory_context=memory_context,
                     model=ModelPolicy.action_parser_model(),
-                    deterministic_only=not ai_enabled,
+                    deterministic_only=not parser_model_enabled,
+                )
+                logger.info(
+                    "action_parser_completed owner_user_id=%s campaign_id=%s turn_id=%s parse_status=%s action=%s confidence=%.3f deterministic_only=%s",
+                    owner_user_id,
+                    campaign_id,
+                    player_turn_id,
+                    parsed_action.parse_status,
+                    parsed_action.action,
+                    parsed_action.confidence,
+                    not parser_model_enabled,
                 )
             except ActionParseProviderError as exc:
                 parser_latency_ms = int(
                     (time.perf_counter() - parser_start_time) * 1000
+                )
+                cause = exc.__cause__
+                cause_type = type(cause).__name__ if cause is not None else "None"
+                cause_message = str(cause) if cause is not None else ""
+                logger.error(
+                    "action_parser_provider_failed owner_user_id=%s campaign_id=%s turn_id=%s model=%s latency_ms=%s cause_type=%s cause_message=%s",
+                    owner_user_id,
+                    campaign_id,
+                    player_turn_id,
+                    ModelPolicy.action_parser_model(),
+                    parser_latency_ms,
+                    cause_type,
+                    cause_message,
+                    exc_info=True,
                 )
                 db.log_model_request(
                     request_id=f"req_{uuid4().hex}",
@@ -223,7 +262,7 @@ class ChatOrchestrator:
                     status_code=502, detail="Action parser service failed."
                 ) from exc
 
-            if ai_enabled:
+            if parser_model_enabled:
                 parser_latency_ms = int(
                     (time.perf_counter() - parser_start_time) * 1000
                 )
@@ -373,6 +412,17 @@ class ChatOrchestrator:
                     )
                 except Exception as exc:
                     latency_ms = int((time.perf_counter() - start_time) * 1000)
+                    logger.error(
+                        "narrator_provider_failed owner_user_id=%s campaign_id=%s turn_id=%s model=%s latency_ms=%s error_type=%s error_message=%s",
+                        owner_user_id,
+                        campaign_id,
+                        assistant_turn_id,
+                        model,
+                        latency_ms,
+                        type(exc).__name__,
+                        str(exc),
+                        exc_info=True,
+                    )
                     db.log_model_request(
                         request_id=f"req_{uuid4().hex}",
                         owner_user_id=owner_user_id,
@@ -668,6 +718,17 @@ class ChatOrchestrator:
             return reply
         except Exception as exc:
             latency_ms = int((time.perf_counter() - start_time) * 1000)
+            logger.error(
+                "campaign_narrator_provider_failed owner_user_id=%s campaign_id=%s turn_id=%s model=%s latency_ms=%s error_type=%s error_message=%s",
+                owner_user_id,
+                campaign_id,
+                turn_id,
+                model,
+                latency_ms,
+                type(exc).__name__,
+                str(exc),
+                exc_info=True,
+            )
             db.log_model_request(
                 request_id=f"req_{uuid4().hex}",
                 owner_user_id=owner_user_id,
