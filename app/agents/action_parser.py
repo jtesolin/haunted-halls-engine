@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field
 from app.agents.base import BaseAgent
 from app.ai.model_client import model_client
 from app.ai.prompts import action_parser_prompt
+from app.game.world import DEFAULT_WORLD
 from app.guardrails.model_policy import ModelPolicy
 from app.guardrails.token_budget import TokenBudget
 from app.schemas.chat import ActionParserOutput, ActionType, ParsedAction
@@ -32,7 +33,10 @@ ParseStatus = Literal["ok", "ambiguous", "invalid"]
 
 class ParserContext(BaseModel):
     location: str | None = None
-    exits: list[str] = Field(default_factory=list)
+    current_room_id: str | None = None
+    current_room_name: str | None = None
+    current_room_description: str | None = None
+    available_exits: list[dict[str, str]] = Field(default_factory=list)
     nearby_objects: list[str] = Field(default_factory=list)
     inventory: list[str] = Field(default_factory=list)
     nearby_npcs: list[str] = Field(default_factory=list)
@@ -178,7 +182,7 @@ class ActionParserAgent(BaseAgent):
             action = ActionType.MOVE
             parse_status = "ok"
             confidence = 0.82
-            target = self._target_after_tokens(lower, ["to", "into", "toward", "towards", "the"])
+            target = self._extract_movement_target(lower)
         elif self._contains_any_phrase(lower, ["take", "grab", "pick up", "collect"]):
             action = ActionType.TAKE
             parse_status = "ok"
@@ -253,18 +257,27 @@ class ActionParserAgent(BaseAgent):
             if location is not None and npc_state.get("room") == location:
                 nearby_npcs.append(npc_id)
 
-        rooms = self._dict_value(state, "rooms")
-        current_room = self._dict_value(rooms, location) if location is not None else {}
-        exits_raw = current_room.get("exits") if isinstance(current_room, dict) else None
-        nearby_objects_raw = current_room.get("objects") if isinstance(current_room, dict) else None
+        current_room = DEFAULT_WORLD.get_room(location) if location is not None else None
+        if current_room is not None:
+            available_exits = DEFAULT_WORLD.available_exits(current_room.id)
+            current_room_id = current_room.id
+            current_room_name = current_room.name
+            current_room_description = current_room.description
+        else:
+            available_exits = []
+            current_room_id = None
+            current_room_name = None
+            current_room_description = None
 
-        exits = [room for room in exits_raw if isinstance(room, str)] if isinstance(exits_raw, list) else []
-        nearby_objects = [obj for obj in nearby_objects_raw if isinstance(obj, str)] if isinstance(nearby_objects_raw, list) else []
+        nearby_objects: list[str] = []
 
         status_flags = self._dict_value(state, "status")
         return ParserContext(
             location=location,
-            exits=exits,
+            current_room_id=current_room_id,
+            current_room_name=current_room_name,
+            current_room_description=current_room_description,
+            available_exits=available_exits,
             nearby_objects=nearby_objects,
             inventory=inventory,
             nearby_npcs=nearby_npcs,
@@ -295,6 +308,19 @@ class ActionParserAgent(BaseAgent):
                         continue
                     return candidate
         return None
+
+    def _extract_movement_target(self, text: str) -> str | None:
+        directional_tokens = ["north", "south", "east", "west", "up", "down", "in", "out"]
+        for token in directional_tokens:
+            pattern = r"\b" + re.escape(token) + r"\b"
+            if re.search(pattern, text):
+                return token
+
+        target = self._target_after_tokens(text, ["to", "into", "toward", "towards", "the"])
+        if target is not None:
+            return target
+
+        return self._target_after_tokens(text, ["go", "move", "walk", "run", "enter", "climb"])
 
     def _contains_any_phrase(self, text: str, phrases: list[str]) -> bool:
         for phrase in phrases:

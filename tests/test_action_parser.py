@@ -8,7 +8,11 @@ def test_action_parser_structured_move_with_stealth(monkeypatch) -> None:
     agent = ActionParserAgent()
 
     async def fake_generate_structured(*, messages, **kwargs):  # noqa: ANN202, ARG001
-        assert "Parser context:" in str(messages[1]["content"])
+        parser_context = str(messages[1]["content"])
+        assert "Parser context:" in parser_context
+        assert "Entry Hall" in parser_context
+        assert "available_exits" in parser_context
+        assert "grand_corridor" in parser_context
         return ActionParserOutput(
             action=ActionType.MOVE,
             target="library",

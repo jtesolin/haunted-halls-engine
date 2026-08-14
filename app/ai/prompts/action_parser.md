@@ -17,6 +17,8 @@ Use this exact action vocabulary:
 Rules:
 - Do not output administrative or privileged actions like spawn_npc, record_fact, or advance_clock.
 - If player text implies privileged world manipulation, map to interact or unknown.
+- Use the provided current room and available exits only as context for intent interpretation.
+- Do not decide whether movement is legal; the deterministic world graph handles that.
 - Normalize synonyms to canonical actions:
   - go/walk/run/enter -> move
   - pick up/grab/collect -> take

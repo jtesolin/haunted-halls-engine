@@ -5,6 +5,7 @@ import json
 from typing import Any
 
 from app.core.config import settings
+from app.game.world import DEFAULT_WORLD, World
 from app.schemas.chat import ActionType, ParsedAction, ToolExecutionResult
 from app.tools.mcp_client import build_mcp_client
 from app.tools.registry import RegistryTransportError, ToolRegistry
@@ -23,8 +24,9 @@ DEFAULT_CAMPAIGN_STATE: dict[str, Any] = {
 
 
 class ToolExecutor:
-    def __init__(self, registry: ToolRegistry | None = None) -> None:
+    def __init__(self, registry: ToolRegistry | None = None, world: World | None = None) -> None:
         self.registry = registry or self._build_registry()
+        self.world = world or DEFAULT_WORLD
 
     def _build_registry(self) -> ToolRegistry:
         mcp_client = build_mcp_client() if settings.TOOL_REGISTRY_TRANSPORT in {"mcp", "hybrid"} else None
@@ -37,7 +39,6 @@ class ToolExecutor:
         registry.register("record_fact", self.record_fact)
         registry.register_mcp("spawn_npc", "create_npc")
         registry.register_mcp("advance_clock", "advance_time")
-        registry.register_mcp("move_player", "get_room")
         registry.register_mcp("record_fact", "search_lore")
         return registry
 
@@ -58,15 +59,22 @@ class ToolExecutor:
             return state, result
 
         if action in {ActionType.MOVE, ActionType.CLIMB}:
-            room = target or "unknown_location"
-            dispatch_error = self._dispatch_tool("move_player", state, room)
+            requested_target = target or parsed_action.parameters.get("direction") or parsed_action.parameters.get("destination") or ""
+            movement_result, dispatch_error = self._dispatch_tool_with_value(
+                "move_player",
+                state,
+                str(requested_target),
+            )
             if dispatch_error is not None:
                 return state, dispatch_error
-            result = ToolExecutionResult(
-                success=True,
-                applied_tools=["move_player"],
-                summary=f"Player moved to {room}.",
-            )
+            if isinstance(movement_result, ToolExecutionResult):
+                result = movement_result
+            else:
+                result = ToolExecutionResult(
+                    success=False,
+                    summary="Movement result was not structured correctly.",
+                    errors=["invalid_movement_result"],
+                )
 
         elif action == ActionType.TAKE:
             item = target or parsed_action.parameters.get("item") or "unknown_item"
@@ -112,12 +120,74 @@ class ToolExecutor:
                 summary=f"Advanced clock by {ticks} tick(s).",
             )
 
-        if state != previous_state:
+        if state != previous_state and not result.state_delta:
             result.state_delta = self._compute_state_delta(previous_state, state)
         return state, result
 
-    def move_player(self, state: dict[str, Any], room_id: str) -> None:
-        state.setdefault("player", {}).update({"location": room_id})
+    def move_player(self, state: dict[str, Any], requested_target: str) -> ToolExecutionResult:
+        player = state.setdefault("player", {})
+        previous_location = player.get("location")
+        previous_room = self.world.get_room(previous_location) if isinstance(previous_location, str) else None
+
+        if not isinstance(previous_location, str) or previous_room is None:
+            return ToolExecutionResult(
+                success=False,
+                summary="Player location is not set to a valid room.",
+                errors=["invalid_exit", "reason:invalid_current_location"],
+                error_code="invalid_exit",
+                previous_location=previous_location if isinstance(previous_location, str) else None,
+                current_location=previous_location if isinstance(previous_location, str) else None,
+                requested_target=requested_target or None,
+                previous_room_name=previous_room.name if previous_room is not None else None,
+                current_room_name=previous_room.name if previous_room is not None else None,
+                current_room_description=previous_room.description if previous_room is not None else None,
+                available_exits=self.world.available_exits(previous_location) if isinstance(previous_location, str) else [],
+            )
+
+        destination = self.world.resolve_exit(previous_location, requested_target)
+        if destination is None:
+            available_exits = self.world.available_exits(previous_location)
+            return ToolExecutionResult(
+                success=False,
+                summary=f"No exit from {previous_room.name} leads to {requested_target or 'that destination'}.",
+                errors=[
+                    "invalid_exit",
+                    f"requested_target:{requested_target or ''}",
+                    f"current_room:{previous_room.id}",
+                ],
+                error_code="invalid_exit",
+                previous_location=previous_location,
+                current_location=previous_location,
+                requested_target=requested_target or None,
+                previous_room_name=previous_room.name,
+                current_room_name=previous_room.name,
+                current_room_description=previous_room.description,
+                available_exits=available_exits,
+            )
+
+        player["location"] = destination.id
+        available_exits = self.world.available_exits(destination.id)
+        return ToolExecutionResult(
+            success=True,
+            applied_tools=["move_player"],
+            summary=f"Moved from {previous_room.name} to {destination.name}.",
+            state_delta={
+                "player": {
+                    "location": {
+                        "from": previous_location,
+                        "to": destination.id,
+                    }
+                }
+            },
+            previous_location=previous_location,
+            current_location=destination.id,
+            requested_target=requested_target or None,
+            resolved_exit=destination.id,
+            previous_room_name=previous_room.name,
+            current_room_name=destination.name,
+            current_room_description=destination.description,
+            available_exits=available_exits,
+        )
 
     def add_inventory(self, state: dict[str, Any], item: str) -> None:
         inventory = state.setdefault("player", {}).setdefault("inventory", [])

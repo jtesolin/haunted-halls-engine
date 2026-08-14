@@ -86,3 +86,12 @@ class ToolExecutionResult(BaseModel):
     summary: str
     state_delta: dict[str, Any] = Field(default_factory=dict)
     errors: list[str] = Field(default_factory=list)
+    previous_location: str | None = None
+    current_location: str | None = None
+    requested_target: str | None = None
+    resolved_exit: str | None = None
+    error_code: str | None = None
+    previous_room_name: str | None = None
+    current_room_name: str | None = None
+    current_room_description: str | None = None
+    available_exits: list[dict[str, str]] = Field(default_factory=list)

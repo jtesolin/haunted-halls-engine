@@ -44,6 +44,15 @@ class FailingMCPClient:
         raise RuntimeError(f"cannot reach mcp tool {name}")
 
 
+class RecordingMCPClient:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, dict[str, Any]]] = []
+
+    def call_tool(self, name: str, arguments: dict[str, Any]) -> Any:
+        self.calls.append((name, arguments))
+        raise AssertionError(f"MCP should not be invoked for {name}")
+
+
 def _build_local_executor() -> ToolExecutor:
     registry = ToolRegistry(mode="local")
     executor = ToolExecutor(registry=registry)
@@ -65,7 +74,6 @@ def _build_hybrid_executor() -> ToolExecutor:
     registry.register("spawn_npc", executor.spawn_npc)
     registry.register("advance_clock", executor.advance_clock)
     registry.register("record_fact", executor.record_fact)
-    registry.register_mcp("move_player", "get_room")
     registry.register_mcp("spawn_npc", "create_npc")
     registry.register_mcp("advance_clock", "advance_time")
     registry.register_mcp("record_fact", "search_lore")
@@ -76,7 +84,7 @@ def _build_hybrid_executor() -> ToolExecutor:
     "parsed_action,campaign_state",
     [
         (
-            ParsedAction(raw_text="go roof", action=ActionType.MOVE, target="roof", parse_status="ok"),
+            ParsedAction(raw_text="go north", action=ActionType.MOVE, target="north", parse_status="ok"),
             "No campaign state yet.",
         ),
         (
@@ -125,3 +133,89 @@ def test_tool_executor_returns_structured_dispatch_errors() -> None:
     assert result.errors[0] == "tool_dispatch_failed"
     assert result.errors[1] == "tool:advance_clock"
     assert result.errors[2].startswith("reason:MCP call failed for tool: advance_time")
+
+
+def test_tool_executor_validates_directional_and_named_room_movement() -> None:
+    executor = _build_local_executor()
+
+    north_action = ParsedAction(
+        raw_text="go north",
+        action=ActionType.MOVE,
+        target="north",
+        parse_status="ok",
+    )
+    north_state, north_result = executor.execute(
+        parsed_action=north_action,
+        campaign_state='{"player": {"location": "entry_hall", "inventory": []}}',
+    )
+
+    assert north_result.success is True
+    assert north_state["player"]["location"] == "grand_corridor"
+    assert north_result.previous_location == "entry_hall"
+    assert north_result.current_location == "grand_corridor"
+    assert north_result.resolved_exit == "grand_corridor"
+    assert north_result.state_delta == {"player": {"location": {"from": "entry_hall", "to": "grand_corridor"}}}
+
+    library_action = ParsedAction(
+        raw_text="go to the library",
+        action=ActionType.MOVE,
+        target="library",
+        parse_status="ok",
+    )
+    library_state, library_result = executor.execute(
+        parsed_action=library_action,
+        campaign_state='{"player": {"location": "grand_corridor", "inventory": []}}',
+    )
+
+    assert library_result.success is True
+    assert library_state["player"]["location"] == "library"
+    assert library_result.current_room_name == "Library"
+
+
+def test_tool_executor_rejects_invalid_movement_without_state_mutation() -> None:
+    executor = _build_local_executor()
+
+    parsed_action = ParsedAction(
+        raw_text="go west",
+        action=ActionType.MOVE,
+        target="west",
+        parse_status="ok",
+    )
+    state, result = executor.execute(
+        parsed_action=parsed_action,
+        campaign_state='{"player": {"location": "entry_hall", "inventory": []}}',
+    )
+
+    assert result.success is False
+    assert result.error_code == "invalid_exit"
+    assert result.errors[0] == "invalid_exit"
+    assert state["player"]["location"] == "entry_hall"
+    assert result.state_delta == {}
+
+
+def test_tool_executor_rejects_non_adjacent_room_without_mcp_bypass() -> None:
+    client = RecordingMCPClient()
+    registry = ToolRegistry(mode="hybrid", mcp_client=client)
+    executor = ToolExecutor(registry=registry)
+    registry.register("move_player", executor.move_player)
+    registry.register("add_inventory", executor.add_inventory)
+    registry.register("remove_inventory", executor.remove_inventory)
+    registry.register("spawn_npc", executor.spawn_npc)
+    registry.register("advance_clock", executor.advance_clock)
+    registry.register("record_fact", executor.record_fact)
+
+    parsed_action = ParsedAction(
+        raw_text="go to the crypt",
+        action=ActionType.MOVE,
+        target="crypt",
+        parse_status="ok",
+    )
+    state, result = executor.execute(
+        parsed_action=parsed_action,
+        campaign_state='{"player": {"location": "entry_hall", "inventory": []}}',
+    )
+
+    assert result.success is False
+    assert result.error_code == "invalid_exit"
+    assert state["player"]["location"] == "entry_hall"
+    assert client.calls == []

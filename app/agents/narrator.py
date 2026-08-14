@@ -129,8 +129,8 @@ class NarratorAgent(BaseAgent):
                     "role": "user",
                     "content": (
                         "Tool execution result:\n"
-                        f"success={tool_result.success}, tools={tool_result.applied_tools}, "
-                        f"summary={tool_result.summary}, delta={tool_result.state_delta}, errors={tool_result.errors}"
+                        "Authoritative structured payload follows.\n"
+                        f"{tool_result.model_dump_json(exclude_none=True, indent=2)}"
                     ),
                 }
             )

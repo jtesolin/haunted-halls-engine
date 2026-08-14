@@ -372,7 +372,7 @@ The Phase 5 parser-hardening commit includes corresponding test changes for the 
 
 ## Phase 6 — Deterministic World Model and Game Rules
 
-**Status: Next**
+**Status: In progress**
 
 The infrastructure necessary to build the game now exists.
 
@@ -388,53 +388,17 @@ to:
 
 ## Phase 6A — Rooms and World Graph
 
-**Next implementation phase**
+**Status: Complete**
 
-Introduce explicit room/location entities.
+Phase 6A introduced a deterministic development world with explicit room entities, named exits, and room-id based player location.
 
-A room should have concepts such as:
+Movement now resolves against the world graph only. The Action Parser receives current-room and available-exit context for intent interpretation, while the Tool Executor validates movement deterministically and returns structured success or failure results. The Narrator receives the authoritative tool outcome rather than inferring whether movement occurred.
 
-* Stable ID.
-* Display name.
-* Description.
-* Exits.
-* Connections to other rooms.
-* Objects/items present.
-* NPCs present.
-* State/status.
-* Optional tags or metadata.
-
-Player movement should become rule-driven.
-
-Instead of:
-
-```text
-move("library")
-→ set player.location = "library"
-```
-
-the engine should behave conceptually like:
-
-```text
-current room
-    |
-    v
-lookup requested exit
-    |
-    +-- valid/reachable --> move player
-    |
-    +-- locked ----------> fail with game result
-    |
-    +-- nonexistent -----> fail with game result
-```
-
-The Action Parser decides what the player is attempting.
-
-The game engine decides whether that attempt is possible.
-
-The Narrator describes the result.
+Direct player-location mutation to arbitrary room strings is no longer part of the movement path.
 
 ## Phase 6B — Item Model
+
+**Next active subphase**
 
 Replace string-only inventory concepts with explicit item entities.
 
@@ -643,7 +607,7 @@ PostgreSQL, vector databases, deployment infrastructure, additional agents, and 
 | Internal user resolution      | Complete          |
 | Campaign ownership/authz      | Complete          |
 | SQLite local persistence      | Complete          |
-| Explicit rooms/world graph    | Next              |
+| Explicit rooms/world graph    | Complete          |
 | Item entity model             | Planned           |
 | Rich NPC model                | Planned           |
 | Rule-based world interactions | Planned           |
@@ -654,7 +618,7 @@ PostgreSQL, vector databases, deployment infrastructure, additional agents, and 
 
 # Next Step
 
-**Phase 6A — Explicit Rooms and World Graph**
+**Phase 6B — Item Model**
 
 This is the active implementation phase.
 

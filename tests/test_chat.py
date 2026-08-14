@@ -13,7 +13,12 @@ from app.db.session import session
 from app.guardrails.model_policy import ModelPolicy
 from app.main import app
 from app.orchestration import orchestrator as orchestrator_module
-from app.schemas.chat import ActionParserOutput, ActionType, ChatRequest
+from app.schemas.chat import (
+    ActionParserOutput,
+    ActionParserParameters,
+    ActionType,
+    ChatRequest,
+)
 from app.schemas.internal_auth import CANONICAL_GOOGLE_ISSUER
 
 
@@ -284,8 +289,8 @@ def test_orchestrator_uses_narrator_agent_and_persists_turn(monkeypatch) -> None
         assert messages[0]["role"] == "developer"
         return ActionParserOutput(
             action=ActionType.MOVE,
-            target="roof",
-            parameters={},
+            target="north",
+            parameters=ActionParserParameters(),
             stealth=True,
             confidence=0.94,
             parse_status="ok",
@@ -332,7 +337,7 @@ def test_orchestrator_uses_narrator_agent_and_persists_turn(monkeypatch) -> None
         assert campaign is not None
         assert campaign.state is not None
         campaign_state = json.loads(campaign.state)
-        assert campaign_state["player"]["location"] == "roof"
+        assert campaign_state["player"]["location"] == "grand_corridor"
 
         _, turns, _ = db.get_campaign_with_turns(response.campaign_id, limit=10)
         assert len(turns) >= 2
@@ -368,7 +373,7 @@ def test_orchestrator_records_parse_failure_for_invalid_action(monkeypatch) -> N
         return ActionParserOutput(
             action=ActionType.UNKNOWN,
             target=None,
-            parameters={},
+            parameters=ActionParserParameters(),
             stealth=False,
             confidence=0.2,
             parse_status="invalid",
@@ -425,7 +430,7 @@ def test_orchestrator_returns_502_when_action_parser_provider_fails(
     with pytest.raises(HTTPException) as exc_info:
         asyncio.run(
             orchestrator_module.orchestrator.handle_chat(
-                ChatRequest(message="move to roof"),
+                ChatRequest(message="move north"),
                 owner_user_id=_resolved_internal_user_id(
                     TestClient(app), "orchestrator-parser-fail"
                 ),
@@ -442,7 +447,7 @@ def test_ai_disabled_still_runs_parser_and_tools() -> None:
 
     response = asyncio.run(
         orchestrator_module.orchestrator.handle_chat(
-            ChatRequest(message="I quietly climb onto the roof."),
+            ChatRequest(message="I go north."),
             owner_user_id=_resolved_internal_user_id(
                 TestClient(app), "orchestrator-ai-disabled"
             ),
@@ -450,7 +455,7 @@ def test_ai_disabled_still_runs_parser_and_tools() -> None:
     )
 
     assert (
-        response.reply == "AI narrator replies (stub): I quietly climb onto the roof."
+        response.reply == "AI narrator replies (stub): I go north."
     )
 
     with session() as db:
@@ -458,7 +463,7 @@ def test_ai_disabled_still_runs_parser_and_tools() -> None:
         assert campaign is not None
         assert campaign.state is not None
         campaign_state = json.loads(campaign.state)
-        assert campaign_state["player"]["location"] == "roof"
+        assert campaign_state["player"]["location"] == "grand_corridor"
 
         events = db.list_campaign_events(response.campaign_id)
         assert [event.type for event in events[-5:]] == [
@@ -485,21 +490,21 @@ def test_ai_enabled_without_api_key_uses_deterministic_parser(monkeypatch) -> No
 
     response = asyncio.run(
         orchestrator_module.orchestrator.handle_chat(
-            ChatRequest(message="I quietly climb onto the roof."),
+            ChatRequest(message="I go north."),
             owner_user_id=_resolved_internal_user_id(
                 TestClient(app), "orchestrator-ai-flag-no-key"
             ),
         )
     )
 
-    assert response.reply == "AI narrator replies: I quietly climb onto the roof."
+    assert response.reply == "AI narrator replies: I go north."
 
     with session() as db:
         campaign = db.get_campaign(response.campaign_id)
         assert campaign is not None
         assert campaign.state is not None
         campaign_state = json.loads(campaign.state)
-        assert campaign_state["player"]["location"] == "roof"
+        assert campaign_state["player"]["location"] == "grand_corridor"
 
 
 def test_orchestrator_includes_relevant_memory_context(monkeypatch) -> None:
@@ -514,8 +519,8 @@ def test_orchestrator_includes_relevant_memory_context(monkeypatch) -> None:
     async def fake_generate_structured(*, messages, model=None, **kwargs):  # noqa: ANN202, ARG001
         return ActionParserOutput(
             action=ActionType.MOVE,
-            target="roof",
-            parameters={},
+            target="north",
+            parameters=ActionParserParameters(),
             stealth=True,
             confidence=0.94,
             parse_status="ok",
@@ -529,7 +534,7 @@ def test_orchestrator_includes_relevant_memory_context(monkeypatch) -> None:
         if narrator_calls == 2:
             assert any(
                 "relevant memory:" in str(message["content"]).lower()
-                and "roof" in str(message["content"]).lower()
+                and "grand corridor" in str(message["content"]).lower()
                 for message in messages
             )
         return "A haunted reply"
@@ -545,7 +550,7 @@ def test_orchestrator_includes_relevant_memory_context(monkeypatch) -> None:
 
     first_response = asyncio.run(
         orchestrator_module.orchestrator.handle_chat(
-            ChatRequest(message="I quietly climb onto the roof."),
+            ChatRequest(message="I go north."),
             owner_user_id=_resolved_internal_user_id(
                 TestClient(app), "orchestrator-memory-context"
             ),
@@ -578,8 +583,8 @@ def test_orchestrator_writes_campaign_summary_and_reflection_memory(
     async def fake_generate_structured(*, messages, model=None, **kwargs):  # noqa: ANN202, ARG001
         return ActionParserOutput(
             action=ActionType.MOVE,
-            target="roof",
-            parameters={},
+            target="north",
+            parameters=ActionParserParameters(),
             stealth=False,
             confidence=0.91,
             parse_status="ok",
@@ -590,10 +595,10 @@ def test_orchestrator_writes_campaign_summary_and_reflection_memory(
         prompt = str(messages[0]["content"])
 
         if "Summarize the campaign" in prompt:
-            return "The player climbed to the roof and the hall answered in silence."
+            return "The player moved into the grand corridor and the hall answered in silence."
 
         if "What important long-term facts should be remembered" in prompt:
-            return json.dumps(["The player is on the roof"])
+            return json.dumps(["The player is in the grand corridor"])
 
         return "A haunted reply"
 
@@ -608,7 +613,7 @@ def test_orchestrator_writes_campaign_summary_and_reflection_memory(
 
     response = asyncio.run(
         orchestrator_module.orchestrator.handle_chat(
-            ChatRequest(message="I climb to the roof."),
+            ChatRequest(message="I go north."),
             owner_user_id=_resolved_internal_user_id(
                 TestClient(app), "orchestrator-memory-summary"
             ),
@@ -620,16 +625,16 @@ def test_orchestrator_writes_campaign_summary_and_reflection_memory(
         assert summary is not None
         assert (
             summary.summary
-            == "The player climbed to the roof and the hall answered in silence."
+            == "The player moved into the grand corridor and the hall answered in silence."
         )
 
         memories = db.list_campaign_memories(response.campaign_id, limit=20)
         assert any(
-            memory.kind == "reflection" and "roof" in memory.content
+            memory.kind == "reflection" and "grand corridor" in memory.content.lower()
             for memory in memories
         )
         assert any(
-            memory.kind == "event" and "roof" in memory.content for memory in memories
+            memory.kind == "event" and "grand corridor" in memory.content.lower() for memory in memories
         )
 
 
@@ -642,8 +647,8 @@ def test_orchestrator_logs_memory_agent_usage(monkeypatch) -> None:
     async def fake_generate_structured(*, messages, model=None, **kwargs):  # noqa: ANN202, ARG001
         return ActionParserOutput(
             action=ActionType.MOVE,
-            target="roof",
-            parameters={},
+            target="north",
+            parameters=ActionParserParameters(),
             stealth=False,
             confidence=0.91,
             parse_status="ok",
@@ -654,10 +659,10 @@ def test_orchestrator_logs_memory_agent_usage(monkeypatch) -> None:
         prompt = str(messages[0]["content"])
 
         if "Summarize the campaign" in prompt:
-            return "The player climbed to the roof and the hall answered in silence."
+            return "The player moved into the grand corridor and the hall answered in silence."
 
         if "What important long-term facts should be remembered" in prompt:
-            return json.dumps(["The player is on the roof"])
+            return json.dumps(["The player is in the grand corridor"])
 
         return "A haunted reply"
 
@@ -672,7 +677,7 @@ def test_orchestrator_logs_memory_agent_usage(monkeypatch) -> None:
 
     response = asyncio.run(
         orchestrator_module.orchestrator.handle_chat(
-            ChatRequest(message="I climb to the roof."),
+            ChatRequest(message="I go north."),
             owner_user_id=_resolved_internal_user_id(
                 TestClient(app), "orchestrator-memory-usage"
             ),
@@ -701,8 +706,8 @@ def test_orchestrator_uses_policy_models_per_agent(monkeypatch) -> None:
         observed_models["ActionParser"] = str(model)
         return ActionParserOutput(
             action=ActionType.MOVE,
-            target="roof",
-            parameters={},
+            target="north",
+            parameters=ActionParserParameters(),
             stealth=False,
             confidence=0.91,
             parse_status="ok",
@@ -714,11 +719,11 @@ def test_orchestrator_uses_policy_models_per_agent(monkeypatch) -> None:
 
         if "Summarize the campaign" in prompt:
             observed_models["MemorySummarizer"] = str(model)
-            return "The player climbed to the roof and the hall answered in silence."
+            return "The player moved into the grand corridor and the hall answered in silence."
 
         if "What important long-term facts should be remembered" in prompt:
             observed_models["MemoryReflection"] = str(model)
-            return json.dumps(["The player is on the roof"])
+            return json.dumps(["The player is in the grand corridor"])
 
         observed_models["Narrator"] = str(model)
         return "A haunted reply"
@@ -734,7 +739,7 @@ def test_orchestrator_uses_policy_models_per_agent(monkeypatch) -> None:
 
     asyncio.run(
         orchestrator_module.orchestrator.handle_chat(
-            ChatRequest(message="I climb to the roof."),
+            ChatRequest(message="I go north."),
             owner_user_id=_resolved_internal_user_id(
                 TestClient(app), "orchestrator-policy"
             ),
