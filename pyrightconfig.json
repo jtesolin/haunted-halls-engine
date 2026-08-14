@@ -1,0 +1,20 @@
+{
+  "venvPath": ".",
+  "venv": ".venv",
+  "include": [
+    "app",
+    "tests"
+  ],
+  "exclude": [
+    "**/node_modules",
+    "**/__pycache__",
+    "**/.*",
+    ".venv",
+    ".tox",
+    ".pytest_cache",
+    ".ruff_cache",
+    "data"
+  ],
+  "typeCheckingMode": "basic",
+  "pythonVersion": "3.14"
+}

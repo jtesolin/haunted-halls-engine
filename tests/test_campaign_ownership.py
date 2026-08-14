@@ -30,6 +30,12 @@ def _user_scoped_headers(client: TestClient, provider_subject: str) -> dict[str,
     }
 
 
+def _sqlite_database_path() -> str:
+    database_url = settings.DATABASE_URL
+    assert database_url is not None
+    return database_url.removeprefix("sqlite:///")
+
+
 def test_campaign_creation_persists_owner_from_authenticated_user_context() -> None:
     settings.INTERNAL_ENGINE_SERVICE_TOKEN = "test-token"
     settings.AI_ENABLED = False
@@ -46,7 +52,7 @@ def test_campaign_creation_persists_owner_from_authenticated_user_context() -> N
     assert response.status_code == 201
     payload = response.json()
 
-    with sqlite3.connect(settings.DATABASE_URL.removeprefix("sqlite:///")) as conn:
+    with sqlite3.connect(_sqlite_database_path()) as conn:
         row = conn.execute(
             "SELECT owner_user_id FROM campaigns WHERE campaign_id = ?",
             (payload["campaign_id"],),
@@ -72,7 +78,7 @@ def test_campaign_creation_uses_current_schema_columns() -> None:
     assert response.status_code == 201
     payload = response.json()
 
-    with sqlite3.connect(settings.DATABASE_URL.removeprefix("sqlite:///")) as conn:
+    with sqlite3.connect(_sqlite_database_path()) as conn:
         row = conn.execute(
             "SELECT owner_user_id FROM campaigns WHERE campaign_id = ?",
             (payload["campaign_id"],),

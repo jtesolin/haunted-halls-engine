@@ -2,7 +2,7 @@ VENV=.venv
 PYTHON=$(VENV)/bin/python
 PIP=$(VENV)/bin/pip
 
-.PHONY: help venv install start dev test lint clean
+.PHONY: help venv install start dev test lint typecheck clean
 
 help:
 	@echo "Targets: venv, install, start, dev, test, lint, clean"
@@ -25,6 +25,10 @@ test:
 
 lint:
 	$(PYTHON) -m ruff check .
+	$(PYTHON) -m pyright
+
+typecheck:
+	$(PYTHON) -m pyright
 
 clean:
 	rm -rf .pytest_cache .venv

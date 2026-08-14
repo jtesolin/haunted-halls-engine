@@ -75,24 +75,33 @@ class SDKMCPClient(MCPToolClient):
             )
 
         if settings.MCP_TRANSPORT == "stdio":
+            command = settings.MCP_SERVER_COMMAND
+            if command is None:
+                raise RegistryTransportError("MCP_SERVER_COMMAND is required for stdio transport.")
             read_stream, write_stream = await self._exit_stack.enter_async_context(
                 stdio_client(
                     StdioServerParameters(
-                        command=settings.MCP_SERVER_COMMAND,
+                        command=command,
                         args=settings.MCP_SERVER_ARGS,
                         cwd=settings.MCP_SERVER_CWD,
                     )
                 )
             )
         elif settings.MCP_TRANSPORT == "sse":
+            server_url = settings.MCP_SERVER_URL
+            if server_url is None:
+                raise RegistryTransportError("MCP_SERVER_URL is required for sse transport.")
             read_stream, write_stream = await self._exit_stack.enter_async_context(
                 sse_client(
-                    settings.MCP_SERVER_URL,
+                    server_url,
                     timeout=float(timeout.total_seconds()),
                     sse_read_timeout=float(max(timeout.total_seconds(), 5.0)),
                 )
             )
         else:
+            server_url = settings.MCP_SERVER_URL
+            if server_url is None:
+                raise RegistryTransportError("MCP_SERVER_URL is required for streamable_http transport.")
             http_client = await self._exit_stack.enter_async_context(
                 httpx.AsyncClient(
                     timeout=httpx.Timeout(
@@ -103,7 +112,7 @@ class SDKMCPClient(MCPToolClient):
             )
             read_stream, write_stream, _ = await self._exit_stack.enter_async_context(
                 streamable_http_client(
-                    settings.MCP_SERVER_URL,
+                    server_url,
                     http_client=http_client,
                 )
             )

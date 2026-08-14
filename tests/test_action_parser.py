@@ -1,7 +1,7 @@
 import asyncio
 
 from app.agents.action_parser import ActionParserAgent
-from app.schemas.chat import ActionParserOutput, ActionType
+from app.schemas.chat import ActionParserOutput, ActionParserParameters, ActionType
 
 
 def test_action_parser_structured_move_with_stealth(monkeypatch) -> None:
@@ -16,7 +16,7 @@ def test_action_parser_structured_move_with_stealth(monkeypatch) -> None:
         return ActionParserOutput(
             action=ActionType.MOVE,
             target="library",
-            parameters={},
+            parameters=ActionParserParameters(),
             stealth=True,
             confidence=0.93,
             parse_status="ok",
@@ -51,7 +51,7 @@ def test_action_parser_structured_take(monkeypatch) -> None:
         return ActionParserOutput(
             action=ActionType.TAKE,
             target="brass key",
-            parameters={},
+            parameters=ActionParserParameters(),
             stealth=False,
             confidence=0.9,
             parse_status="ok",
@@ -85,7 +85,7 @@ def test_action_parser_structured_wait(monkeypatch) -> None:
         return ActionParserOutput(
             action=ActionType.WAIT,
             target=None,
-            parameters={"amount": 1},
+            parameters=ActionParserParameters(amount=1),
             stealth=False,
             confidence=0.87,
             parse_status="ok",
