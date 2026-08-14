@@ -1,5 +1,13 @@
 # Haunted Halls Engine
 
+## Project Status
+
+Canonical project status for the two-repo system lives in:
+
+- `docs/project-status.md`
+
+Keep this document updated as engine changes affect architecture, behavior, roadmap, or phase completion.
+
 ## Local Service Authentication
 
 - Generate the shared service token with `openssl rand -hex 32`.

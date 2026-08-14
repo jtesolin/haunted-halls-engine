@@ -28,6 +28,9 @@
 - Do not invent fallback behavior that hides failures or corrupts state.
 - Do not add dependencies without clear need.
 - Never commit secrets or real credentials.
+- After making repository changes, update `docs/project-status.md` when architecture, behavior, roadmap, or phase-progress status changes.
+- Do not change `Last synchronized (planning memory sync)` unless the user explicitly confirms they performed that planning-memory synchronization.
+- Treat project-status maintenance as part of normal completion for substantive repository updates.
 - Use verified commands:
   - `make venv`
   - `make install`
