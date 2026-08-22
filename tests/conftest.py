@@ -1,3 +1,4 @@
+import random
 from collections.abc import Iterator
 
 import pytest
@@ -7,6 +8,12 @@ from app.core.config import settings
 TEST_INTERNAL_ENGINE_SERVICE_TOKEN = (
     "test-internal-engine-service-token-0000000000000000000000000000000000"
 )
+
+
+@pytest.fixture(autouse=True)
+def deterministic_random() -> Iterator[None]:
+    random.seed(20260821)
+    yield
 
 
 @pytest.fixture(autouse=True)

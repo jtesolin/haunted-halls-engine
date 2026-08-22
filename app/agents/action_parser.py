@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field
 from app.agents.base import BaseAgent
 from app.ai.model_client import model_client
 from app.ai.prompts import action_parser_prompt
+from app.game.items import ensure_items_state, inventory_item_ids, room_item_ids
 from app.game.world import DEFAULT_WORLD
 from app.guardrails.model_policy import ModelPolicy
 from app.guardrails.token_budget import TokenBudget
@@ -187,12 +188,12 @@ class ActionParserAgent(BaseAgent):
             action = ActionType.TAKE
             parse_status = "ok"
             confidence = 0.8
-            target = self._target_after_tokens(lower, ["the", "a", "an"])
+            target = self._extract_object_target(lower, ["pick up", "take", "grab", "collect"])
         elif self._contains_any_phrase(lower, ["drop", "remove", "discard"]):
             action = ActionType.DROP
             parse_status = "ok"
             confidence = 0.76
-            target = self._target_after_tokens(lower, ["the", "a", "an"])
+            target = self._extract_object_target(lower, ["drop", "discard", "remove"])
         elif self._contains_any_phrase(lower, ["wait", "rest", "pass time"]):
             action = ActionType.WAIT
             parse_status = "ok"
@@ -212,6 +213,13 @@ class ActionParserAgent(BaseAgent):
             parse_status = "ok"
             confidence = 0.7
             target = self._target_after_tokens(lower, ["the", "a", "an"])
+        elif self._contains_any_phrase(
+            lower,
+            ["look", "observe", "examine", "inspect", "inventory", "carrying", "what do i see", "what's here"],
+        ):
+            action = ActionType.OBSERVE
+            parse_status = "ok"
+            confidence = 0.75
         elif self._contains_any_phrase(lower, ["spawn", "summon", "record", "record fact", "advance clock"]):
             action = ActionType.UNKNOWN
             parse_status = "ambiguous"
@@ -247,8 +255,8 @@ class ActionParserAgent(BaseAgent):
         location_raw = player.get("location")
         location = location_raw if isinstance(location_raw, str) else None
 
-        inventory_raw = player.get("inventory")
-        inventory = [item for item in inventory_raw if isinstance(item, str)] if isinstance(inventory_raw, list) else []
+        items = ensure_items_state(state)
+        inventory = inventory_item_ids(items)
 
         nearby_npcs: list[str] = []
         for npc_id, npc_state in npcs.items():
@@ -269,7 +277,7 @@ class ActionParserAgent(BaseAgent):
             current_room_name = None
             current_room_description = None
 
-        nearby_objects: list[str] = []
+        nearby_objects = room_item_ids(items, location) if isinstance(location, str) else []
 
         status_flags = self._dict_value(state, "status")
         return ParserContext(
@@ -321,6 +329,24 @@ class ActionParserAgent(BaseAgent):
             return target
 
         return self._target_after_tokens(text, ["go", "move", "walk", "run", "enter", "climb"])
+
+    def _extract_object_target(self, text: str, verbs: list[str]) -> str | None:
+        for verb in verbs:
+            marker = f"{verb} "
+            if marker not in text:
+                continue
+            suffix = text.split(marker, 1)[1]
+            suffix = re.split(r"[.!?]", suffix, maxsplit=1)[0]
+            suffix = re.split(r"\b(with|using|while|then|and)\b", suffix, maxsplit=1)[0]
+            suffix = suffix.strip()
+            for article in ("the ", "a ", "an "):
+                if suffix.startswith(article):
+                    suffix = suffix.removeprefix(article)
+                    break
+            suffix = re.sub(r"\s+", " ", suffix).strip()
+            if suffix:
+                return suffix
+        return self._target_after_tokens(text, ["the", "a", "an"])
 
     def _contains_any_phrase(self, text: str, phrases: list[str]) -> bool:
         for phrase in phrases:
