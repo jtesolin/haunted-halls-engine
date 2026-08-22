@@ -441,6 +441,54 @@ def test_orchestrator_returns_502_when_action_parser_provider_fails(
     assert exc_info.value.detail == "Action parser service failed."
 
 
+def test_orchestrator_persists_genesis_state_for_non_mutating_first_action(
+    monkeypatch,
+) -> None:
+    settings.AI_ENABLED = True
+    settings.OPENAI_API_KEY = None
+
+    async def fake_generate_structured(*, messages, model=None, **kwargs):  # noqa: ANN202, ARG001
+        return ActionParserOutput(
+            action=ActionType.OBSERVE,
+            target=None,
+            parameters=ActionParserParameters(),
+            stealth=False,
+            confidence=0.9,
+            parse_status="ok",
+            parser_notes=None,
+        )
+
+    async def fake_generate_text(*, messages, **kwargs) -> str:  # noqa: ARG001
+        return "You take stock of your surroundings."
+
+    monkeypatch.setattr(
+        action_parser_module.model_client,
+        "generate_structured",
+        fake_generate_structured,
+    )
+    monkeypatch.setattr(
+        narrator_module.model_client, "generate_text", fake_generate_text
+    )
+
+    response = asyncio.run(
+        orchestrator_module.orchestrator.handle_chat(
+            ChatRequest(message="What items am I carrying?"),
+            owner_user_id=_resolved_internal_user_id(
+                TestClient(app), "orchestrator-genesis-observe"
+            ),
+        )
+    )
+
+    with session() as db:
+        campaign = db.get_campaign(response.campaign_id)
+        assert campaign is not None
+        assert campaign.state is not None
+
+        campaign_state = json.loads(campaign.state)
+        assert "items" in campaign_state
+        assert campaign_state["player"]["inventory"]
+
+
 def test_ai_disabled_still_runs_parser_and_tools() -> None:
     settings.AI_ENABLED = False
     settings.OPENAI_API_KEY = None
@@ -513,6 +561,9 @@ def test_orchestrator_includes_relevant_memory_context(monkeypatch) -> None:
     monkeypatch.setattr(settings, "MAX_RECENT_MESSAGES", 1)
     monkeypatch.setattr(settings, "MEMORY_SUMMARY_EVERY_TURNS", 99)
     monkeypatch.setattr(settings, "MEMORY_REFLECTION_EVERY_TURNS", 99)
+    # High enough to reliably include the move-event memory regardless of
+    # embedding-rank noise introduced by the player's randomized starting items.
+    monkeypatch.setattr(settings, "MEMORY_RELEVANT_ENTRIES", 10)
 
     narrator_calls = 0
 

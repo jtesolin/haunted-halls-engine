@@ -390,32 +390,32 @@ to:
 
 **Status: Complete**
 
-Phase 6A introduced a deterministic development world with explicit room entities, named exits, and room-id based player location.
-
-Movement now resolves against the world graph only. The Action Parser receives current-room and available-exit context for intent interpretation, while the Tool Executor validates movement deterministically and returns structured success or failure results. The Narrator receives the authoritative tool outcome rather than inferring whether movement occurred.
-
-Direct player-location mutation to arbitrary room strings is no longer part of the movement path.
+Phase 6A introduced explicit room entities, named exits, and room-id based player location. Movement is now validated only through the deterministic world graph, and narration is grounded in authoritative movement outcomes.
 
 ## Phase 6B — Item Model
 
-**Next active subphase**
+**Status: Complete**
 
-Replace string-only inventory concepts with explicit item entities.
+Phase 6B replaced string-only inventory mutations with an explicit item entity model and deterministic ownership transfer rules.
 
-Items should be capable of representing:
+Implemented behavior includes:
 
-* Stable ID.
-* Name.
-* Description.
-* Location/owner.
-* Portable/non-portable state.
-* Properties/tags.
-* Quantity where appropriate.
-* Interaction metadata.
-
-Taking and dropping items should move authoritative entities between locations and inventories.
+* Explicit item entities with stable IDs, names, descriptions, portability, quantity, tags/aliases, and lightweight properties metadata.
+* Canonical development items distributed across deterministic rooms, including portable and non-portable examples.
+* Authoritative item location/ownership tracking (`room:<room_id>` or player inventory location) as the source of truth.
+* Player inventory represented as item-ID references derived from authoritative item ownership.
+* Deterministic TAKE validation (existence, unambiguous resolution, room presence, portability, already-owned rejection).
+* Deterministic DROP validation (existence, unambiguous resolution, player ownership, valid current room).
+* Structured success/failure result payloads for narration grounding, including machine-readable error codes and item transfer metadata.
+* Persistence compatibility through campaign state serialization/reload of explicit item entities and ownership.
+* Registry/MCP boundary protection for player TAKE/DROP so item validation cannot be bypassed by transport selection.
+* New campaigns start the player with 3 randomly selected items from a fixed exploration-gear pool, assigned once at first-state creation and persisted from then on.
+* OBSERVE is a deterministic, non-mutating tool action that returns current room/exit/item/inventory context for narration instead of being treated as an unmatched-tool failure.
+* TAKE/DROP resolve name/alias/tag matches scoped to the actionable context first (current room for TAKE, inventory for DROP), falling back to a global lookup only to produce a precise not-found/wrong-location error — preventing false `ambiguous_item` results from same-tag items elsewhere in the world.
 
 ## Phase 6C — NPC Model
+
+**Next active subphase**
 
 Expand NPCs into persistent entities with concepts such as:
 

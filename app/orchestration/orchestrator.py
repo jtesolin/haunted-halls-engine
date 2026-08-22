@@ -349,7 +349,7 @@ class ChatOrchestrator:
                         ),
                     )
 
-                if tool_result.state_delta:
+                if tool_result.state_delta or campaign_state == "No campaign state yet.":
                     db.update_campaign_state(campaign_id, updated_state)
                     db.add_event(
                         event_id=f"evt_{uuid4().hex}",

@@ -95,3 +95,9 @@ class ToolExecutionResult(BaseModel):
     current_room_name: str | None = None
     current_room_description: str | None = None
     available_exits: list[dict[str, str]] = Field(default_factory=list)
+    item_id: str | None = None
+    item_name: str | None = None
+    moved_from: str | None = None
+    moved_to: str | None = None
+    available_items: list[dict[str, str]] = Field(default_factory=list)
+    inventory_items: list[str] = Field(default_factory=list)
