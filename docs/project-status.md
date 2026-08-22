@@ -410,6 +410,8 @@ Implemented behavior includes:
 * Persistence compatibility through campaign state serialization/reload of explicit item entities and ownership.
 * Registry/MCP boundary protection for player TAKE/DROP so item validation cannot be bypassed by transport selection.
 * New campaigns start the player with 3 randomly selected items from a fixed exploration-gear pool, assigned once at first-state creation and persisted from then on.
+* OBSERVE is a deterministic, non-mutating tool action that returns current room/exit/item/inventory context for narration instead of being treated as an unmatched-tool failure.
+* TAKE/DROP resolve name/alias/tag matches scoped to the actionable context first (current room for TAKE, inventory for DROP), falling back to a global lookup only to produce a precise not-found/wrong-location error — preventing false `ambiguous_item` results from same-tag items elsewhere in the world.
 
 ## Phase 6C — NPC Model
 

@@ -340,6 +340,156 @@ def test_take_ambiguous_item_fails_deterministically() -> None:
     assert state["items"]["ledger"]["location"] == "room:library"
 
 
+def test_take_item_not_ambiguous_when_tag_match_is_elsewhere() -> None:
+    executor = _build_local_executor()
+
+    campaign_state = json.dumps(
+        {
+            "player": {"location": "library", "inventory": ["worn_journal"]},
+            "items": {
+                "old_book": {
+                    "id": "old_book",
+                    "name": "Old Book",
+                    "description": "A mold-speckled book.",
+                    "location": "room:library",
+                    "portable": True,
+                    "quantity": 1,
+                    "tags": ["book"],
+                    "aliases": ["old book", "moldy book"],
+                    "properties": {},
+                },
+                "worn_journal": {
+                    "id": "worn_journal",
+                    "name": "Worn Journal",
+                    "description": "A traveler's journal.",
+                    "location": "player:current",
+                    "portable": True,
+                    "quantity": 1,
+                    "tags": ["book"],
+                    "aliases": ["journal", "worn journal"],
+                    "properties": {},
+                },
+            },
+        }
+    )
+
+    state, result = executor.execute(
+        parsed_action=ParsedAction(
+            raw_text="take book",
+            action=ActionType.TAKE,
+            target="book",
+            parse_status="ok",
+        ),
+        campaign_state=campaign_state,
+    )
+
+    assert result.success is True
+    assert result.item_id == "old_book"
+    assert state["items"]["old_book"]["location"] == "player:current"
+    assert state["items"]["worn_journal"]["location"] == "player:current"
+
+
+def test_drop_item_not_ambiguous_when_tag_match_is_elsewhere() -> None:
+    executor = _build_local_executor()
+
+    campaign_state = json.dumps(
+        {
+            "player": {"location": "library", "inventory": ["worn_journal"]},
+            "items": {
+                "old_book": {
+                    "id": "old_book",
+                    "name": "Old Book",
+                    "description": "A mold-speckled book.",
+                    "location": "room:library",
+                    "portable": True,
+                    "quantity": 1,
+                    "tags": ["book"],
+                    "aliases": ["old book", "moldy book"],
+                    "properties": {},
+                },
+                "worn_journal": {
+                    "id": "worn_journal",
+                    "name": "Worn Journal",
+                    "description": "A traveler's journal.",
+                    "location": "player:current",
+                    "portable": True,
+                    "quantity": 1,
+                    "tags": ["book"],
+                    "aliases": ["journal", "worn journal"],
+                    "properties": {},
+                },
+            },
+        }
+    )
+
+    state, result = executor.execute(
+        parsed_action=ParsedAction(
+            raw_text="drop book",
+            action=ActionType.DROP,
+            target="book",
+            parse_status="ok",
+        ),
+        campaign_state=campaign_state,
+    )
+
+    assert result.success is True
+    assert result.item_id == "worn_journal"
+    assert state["items"]["worn_journal"]["location"] == "room:library"
+    assert state["items"]["old_book"]["location"] == "room:library"
+
+
+def test_observe_action_succeeds_without_mutation() -> None:
+    executor = _build_local_executor()
+
+    campaign_state = json.dumps(
+        {
+            "player": {"location": "library", "inventory": ["brass_key"]},
+            "items": {
+                "brass_key": {
+                    "id": "brass_key",
+                    "name": "Brass Key",
+                    "description": "A key",
+                    "location": "player:current",
+                    "portable": True,
+                    "quantity": 1,
+                    "tags": ["key"],
+                    "aliases": ["brass key"],
+                    "properties": {},
+                },
+                "old_book": {
+                    "id": "old_book",
+                    "name": "Old Book",
+                    "description": "A mold-speckled book.",
+                    "location": "room:library",
+                    "portable": True,
+                    "quantity": 1,
+                    "tags": ["book"],
+                    "aliases": ["old book"],
+                    "properties": {},
+                },
+            },
+        }
+    )
+
+    state, result = executor.execute(
+        parsed_action=ParsedAction(
+            raw_text="look around",
+            action=ActionType.OBSERVE,
+            parse_status="ok",
+        ),
+        campaign_state=campaign_state,
+    )
+
+    assert result.success is True
+    assert result.current_location == "library"
+    assert result.current_room_name is not None
+    assert {item["id"] for item in result.available_items} == {"old_book"}
+    assert result.inventory_items == ["brass_key"]
+    assert result.state_delta == {}
+    assert state["items"]["brass_key"]["location"] == "player:current"
+    assert state["items"]["old_book"]["location"] == "room:library"
+
+
 @pytest.mark.parametrize(
     "parsed_action,campaign_state",
     [

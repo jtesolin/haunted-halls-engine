@@ -9,6 +9,7 @@ from app.game.items import (
     available_items_for_room,
     default_items_state,
     ensure_items_state,
+    inventory_item_ids,
     random_starting_inventory_items,
     resolve_item_ids,
     room_location,
@@ -95,6 +96,9 @@ class ToolExecutor:
             item = target or parsed_action.parameters.get("item")
             result = self.drop_item(state, item)
 
+        elif action == ActionType.OBSERVE:
+            result = self.observe(state)
+
         elif action == ActionType.WAIT:
             amount = parsed_action.parameters.get("amount", 1)
             try:
@@ -113,6 +117,32 @@ class ToolExecutor:
         if state != previous_state and not result.state_delta:
             result.state_delta = self._compute_state_delta(previous_state, state)
         return state, result
+
+    def observe(self, state: dict[str, Any]) -> ToolExecutionResult:
+        player = state.setdefault("player", {})
+        current_location = player.get("location")
+        room = self.world.get_room(current_location) if isinstance(current_location, str) else None
+
+        if room is None:
+            return ToolExecutionResult(
+                success=False,
+                summary="Player location is not set to a valid room.",
+                errors=["invalid_current_location"],
+                error_code="invalid_current_location",
+            )
+
+        items = ensure_items_state(state)
+        return ToolExecutionResult(
+            success=True,
+            applied_tools=["observe"],
+            summary=f"You take stock of {room.name}.",
+            current_location=room.id,
+            current_room_name=room.name,
+            current_room_description=room.description,
+            available_exits=self.world.available_exits(room.id),
+            available_items=available_items_for_room(items, room.id),
+            inventory_items=inventory_item_ids(items),
+        )
 
     def move_player(self, state: dict[str, Any], requested_target: str) -> ToolExecutionResult:
         player = state.setdefault("player", {})
@@ -196,24 +226,25 @@ class ToolExecutor:
                 requested_target=requested_target,
             )
 
-        matches = resolve_item_ids(items, requested_target)
+        matches, ambiguous = self._resolve_item_in_scope(
+            items, requested_target, room_location(current_room)
+        )
+        if ambiguous:
+            return ToolExecutionResult(
+                success=False,
+                summary=f"'{requested_target or ''}' could match multiple items.",
+                errors=["ambiguous_item"],
+                error_code="ambiguous_item",
+                requested_target=requested_target,
+                current_location=current_room,
+                available_items=available_items_for_room(items, current_room),
+            )
         if not matches:
             return ToolExecutionResult(
                 success=False,
                 summary=f"No item matched '{requested_target or ''}'.",
                 errors=["item_not_found"],
                 error_code="item_not_found",
-                requested_target=requested_target,
-                current_location=current_room,
-                available_items=available_items_for_room(items, current_room),
-            )
-
-        if len(matches) > 1:
-            return ToolExecutionResult(
-                success=False,
-                summary=f"'{requested_target or ''}' could match multiple items.",
-                errors=["ambiguous_item"],
-                error_code="ambiguous_item",
                 requested_target=requested_target,
                 current_location=current_room,
                 available_items=available_items_for_room(items, current_room),
@@ -312,23 +343,24 @@ class ToolExecutor:
                 requested_target=requested_target,
             )
 
-        matches = resolve_item_ids(items, requested_target)
+        matches, ambiguous = self._resolve_item_in_scope(
+            items, requested_target, PLAYER_INVENTORY_LOCATION
+        )
+        if ambiguous:
+            return ToolExecutionResult(
+                success=False,
+                summary=f"'{requested_target or ''}' could match multiple items.",
+                errors=["ambiguous_item"],
+                error_code="ambiguous_item",
+                requested_target=requested_target,
+                current_location=current_room,
+            )
         if not matches:
             return ToolExecutionResult(
                 success=False,
                 summary=f"No item matched '{requested_target or ''}'.",
                 errors=["item_not_found"],
                 error_code="item_not_found",
-                requested_target=requested_target,
-                current_location=current_room,
-            )
-
-        if len(matches) > 1:
-            return ToolExecutionResult(
-                success=False,
-                summary=f"'{requested_target or ''}' could match multiple items.",
-                errors=["ambiguous_item"],
-                error_code="ambiguous_item",
                 requested_target=requested_target,
                 current_location=current_room,
             )
@@ -396,6 +428,31 @@ class ToolExecutor:
     def record_fact(self, state: dict[str, Any], fact: str) -> None:
         facts = state.setdefault("facts", [])
         facts.append(fact)
+
+    def _resolve_item_in_scope(
+        self,
+        items: dict[str, dict[str, Any]],
+        requested_target: str | None,
+        scope_location: str,
+    ) -> tuple[list[str], bool]:
+        """Resolve a name/alias/tag match against items in scope first, falling back to a
+        global lookup only to produce a precise not-found/wrong-location error, never to
+        widen ambiguity beyond what the player can actually see or reach."""
+        scoped_items = {
+            item_id: item
+            for item_id, item in items.items()
+            if item.get("location") == scope_location
+        }
+        scoped_matches = resolve_item_ids(scoped_items, requested_target)
+        if len(scoped_matches) > 1:
+            return [], True
+        if scoped_matches:
+            return scoped_matches, False
+
+        global_matches = resolve_item_ids(items, requested_target)
+        if len(global_matches) == 1:
+            return global_matches, False
+        return [], False
 
     def _state_from_text(self, campaign_state: str) -> dict[str, Any]:
         if not campaign_state or campaign_state == "No campaign state yet.":
