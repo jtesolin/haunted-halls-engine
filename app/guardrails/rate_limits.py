@@ -1,22 +1,23 @@
-from datetime import datetime
-
-from fastapi import HTTPException
-
 from app.core.config import settings
 from app.db.repositories import Repository
+from app.guardrails.limit_errors import (
+    next_utc_reset_iso,
+    usage_limit_error,
+    utc_day_start_for_accounting,
+)
 
 
 def _daily_start() -> str:
-    today = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
-    return today.isoformat()
+    return utc_day_start_for_accounting()
 
 
 def validate_daily_request_limit(db: Repository, owner_user_id: str) -> None:
     request_count = db.count_user_requests_since(owner_user_id, _daily_start())
     if request_count >= settings.MAX_DAILY_PLAYER_REQUESTS:
-        raise HTTPException(
-            status_code=429,
-            detail=f"Daily request limit exceeded ({settings.MAX_DAILY_PLAYER_REQUESTS} requests).",
+        raise usage_limit_error(
+            code="daily_request_limit",
+            detail="Daily request limit reached.",
+            retry_at=next_utc_reset_iso(),
         )
 
 
@@ -25,12 +26,10 @@ def validate_daily_token_limit(
 ) -> None:
     token_sum = db.sum_user_estimated_input_tokens_since(owner_user_id, _daily_start())
     if token_sum + estimated_input_tokens > settings.MAX_DAILY_PLAYER_TOKENS:
-        raise HTTPException(
-            status_code=429,
-            detail=(
-                f"Daily token budget exceeded. "
-                f"Used={token_sum}, requested={estimated_input_tokens}, limit={settings.MAX_DAILY_PLAYER_TOKENS}."
-            ),
+        raise usage_limit_error(
+            code="daily_token_limit",
+            detail="Daily token limit reached.",
+            retry_at=next_utc_reset_iso(),
         )
 
 
@@ -41,10 +40,7 @@ def validate_campaign_turn_limit(
         return
     turn_count = db.count_campaign_turns(campaign_id, owner_user_id)
     if turn_count >= settings.MAX_TURNS_PER_CAMPAIGN:
-        raise HTTPException(
-            status_code=429,
-            detail=(
-                f"Campaign turn limit exceeded for campaign {campaign_id}. "
-                f"Limit is {settings.MAX_TURNS_PER_CAMPAIGN} turns."
-            ),
+        raise usage_limit_error(
+            code="campaign_turn_limit",
+            detail="This campaign has reached its turn limit.",
         )

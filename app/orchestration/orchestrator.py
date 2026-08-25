@@ -13,6 +13,7 @@ from app.agents.narrator import NarratorAgent, NarratorAgentInput
 from app.core.config import settings
 from app.db.session import session
 from app.guardrails.input_validation import validate_chat_request
+from app.guardrails.limit_errors import usage_limit_error
 from app.guardrails.model_policy import ModelPolicy
 from app.guardrails.rate_limits import (
     validate_campaign_turn_limit,
@@ -764,12 +765,9 @@ class ChatOrchestrator:
     def _validate_campaign_creation(self, db, owner_user_id: str) -> None:
         owner_campaign_count = db.count_owner_campaigns(owner_user_id)
         if owner_campaign_count >= UsageLimits.MAX_CAMPAIGNS_PER_PLAYER:
-            raise HTTPException(
-                status_code=429,
-                detail=(
-                    "Player has reached the maximum number of campaigns "
-                    f"({UsageLimits.MAX_CAMPAIGNS_PER_PLAYER})."
-                ),
+            raise usage_limit_error(
+                code="max_campaigns",
+                detail="Maximum number of campaigns reached.",
             )
 
     def _stub_reply(self, message: str) -> str:
