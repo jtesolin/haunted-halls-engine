@@ -3,6 +3,7 @@ import json
 from fastapi import HTTPException
 
 from app.db.repositories import Repository
+from app.guardrails.limit_errors import usage_limit_error
 from app.guardrails.usage_limits import UsageLimits
 from app.schemas.chat import ChatRequest
 
@@ -45,9 +46,7 @@ def validate_chat_request(
     else:
         owner_campaign_count = db.count_owner_campaigns(owner_user_id)
         if owner_campaign_count >= UsageLimits.MAX_CAMPAIGNS_PER_PLAYER:
-            raise HTTPException(
-                status_code=429,
-                detail=(
-                    f"Player has reached the maximum number of campaigns ({UsageLimits.MAX_CAMPAIGNS_PER_PLAYER})."
-                ),
+            raise usage_limit_error(
+                code="max_campaigns",
+                detail="Maximum number of campaigns reached.",
             )

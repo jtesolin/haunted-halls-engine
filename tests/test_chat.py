@@ -259,6 +259,10 @@ def test_chat_daily_request_limit_rejects_before_persisting_side_effects() -> No
         )
 
         assert response.status_code == 429
+        error = response.json()["detail"]
+        assert error["code"] == "daily_request_limit"
+        assert error["retryable"] is False
+        assert error["retry_at"].endswith("T00:00:00Z")
 
         with session() as db:
             counts_after = {
@@ -277,6 +281,78 @@ def test_chat_daily_request_limit_rejects_before_persisting_side_effects() -> No
         assert counts_after == counts_before
     finally:
         settings.MAX_DAILY_PLAYER_REQUESTS = original_limit
+
+
+def test_chat_daily_token_limit_returns_structured_error() -> None:
+    settings.INTERNAL_ENGINE_SERVICE_TOKEN = "test-token"
+    settings.AI_ENABLED = False
+    settings.OPENAI_API_KEY = None
+    original_limit = settings.MAX_DAILY_PLAYER_TOKENS
+    settings.MAX_DAILY_PLAYER_TOKENS = 0
+    client = TestClient(app)
+    headers = _user_scoped_headers(client, "chat-token-limit")
+
+    try:
+        response = client.post(
+            "/api/chat",
+            json={"message": "hello"},
+            headers=headers,
+        )
+
+        assert response.status_code == 429
+        error = response.json()["detail"]
+        assert error == {
+            "detail": "Daily token limit reached.",
+            "code": "daily_token_limit",
+            "retryable": False,
+            "retry_at": error["retry_at"],
+        }
+        assert error["retry_at"].endswith("T00:00:00Z")
+    finally:
+        settings.MAX_DAILY_PLAYER_TOKENS = original_limit
+
+
+def test_chat_campaign_turn_limit_returns_structured_error(monkeypatch) -> None:
+    settings.INTERNAL_ENGINE_SERVICE_TOKEN = "test-token"
+    settings.AI_ENABLED = False
+    settings.OPENAI_API_KEY = None
+    monkeypatch.setattr(settings, "MAX_TURNS_PER_CAMPAIGN", 0)
+    client = TestClient(app)
+    headers = _user_scoped_headers(client, "chat-turn-limit")
+    campaign_response = client.post("/api/campaign", json={}, headers=headers)
+    campaign_id = campaign_response.json()["campaign_id"]
+
+    response = client.post(
+        "/api/chat",
+        json={"message": "hello", "campaign_id": campaign_id},
+        headers=headers,
+    )
+
+    assert response.status_code == 429
+    assert response.json()["detail"] == {
+        "detail": "This campaign has reached its turn limit.",
+        "code": "campaign_turn_limit",
+        "retryable": False,
+    }
+
+
+def test_create_campaign_limit_returns_structured_error(monkeypatch) -> None:
+    settings.INTERNAL_ENGINE_SERVICE_TOKEN = "test-token"
+    settings.AI_ENABLED = False
+    settings.OPENAI_API_KEY = None
+    monkeypatch.setattr(settings, "MAX_CAMPAIGNS_PER_PLAYER", 0)
+    monkeypatch.setattr("app.guardrails.usage_limits.UsageLimits.MAX_CAMPAIGNS_PER_PLAYER", 0)
+    client = TestClient(app)
+    headers = _user_scoped_headers(client, "campaign-count-limit")
+
+    response = client.post("/api/campaign", json={}, headers=headers)
+
+    assert response.status_code == 429
+    assert response.json()["detail"] == {
+        "detail": "Maximum number of campaigns reached.",
+        "code": "max_campaigns",
+        "retryable": False,
+    }
 
 
 def test_orchestrator_uses_narrator_agent_and_persists_turn(monkeypatch) -> None:
