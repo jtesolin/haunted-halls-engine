@@ -328,12 +328,11 @@ class ChatOrchestrator:
                     )
                 except InvalidCampaignStateError as exc:
                     logger.error(
-                        "campaign_state_load_failed owner_user_id=%s campaign_id=%s turn_id=%s error_type=%s error_message=%s",
+                        "campaign_state_load_failed owner_user_id=%s campaign_id=%s turn_id=%s error_type=%s",
                         owner_user_id,
                         campaign_id,
                         player_turn_id,
                         type(exc).__name__,
-                        str(exc),
                         exc_info=True,
                     )
                     raise HTTPException(
