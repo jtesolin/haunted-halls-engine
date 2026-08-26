@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import json
+import logging
 from typing import Any
 
 from app.game.items import (
@@ -33,6 +34,13 @@ DEFAULT_CAMPAIGN_STATE: dict[str, Any] = {
     },
     "facts": [],
 }
+
+
+logger = logging.getLogger(__name__)
+
+
+class InvalidCampaignStateError(ValueError):
+    """Raised when persisted campaign state is present but cannot be safely loaded."""
 
 
 class ToolExecutor:
@@ -459,12 +467,21 @@ class ToolExecutor:
             return self._build_fresh_campaign_state()
         try:
             value = json.loads(campaign_state)
-            if isinstance(value, dict):
-                ensure_items_state(value)
-                return value
-        except json.JSONDecodeError:
-            pass
-        return self._build_fresh_campaign_state()
+        except json.JSONDecodeError as exc:
+            logger.error("persisted_campaign_state_json_decode_failed")
+            raise InvalidCampaignStateError(
+                "Persisted campaign state contains invalid JSON."
+            ) from exc
+        if not isinstance(value, dict):
+            logger.error(
+                "persisted_campaign_state_invalid_type type=%s",
+                type(value).__name__,
+            )
+            raise InvalidCampaignStateError(
+                "Persisted campaign state must be a JSON object."
+            )
+        ensure_items_state(value)
+        return value
 
     def _build_fresh_campaign_state(self) -> dict[str, Any]:
         state = copy.deepcopy(DEFAULT_CAMPAIGN_STATE)

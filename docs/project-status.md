@@ -408,6 +408,7 @@ Implemented behavior includes:
 * Deterministic DROP validation (existence, unambiguous resolution, player ownership, valid current room).
 * Structured success/failure result payloads for narration grounding, including machine-readable error codes and item transfer metadata.
 * Persistence compatibility through campaign state serialization/reload of explicit item entities and ownership.
+* Persisted campaign-state corruption now fails closed during tool execution instead of silently regenerating a fresh randomized state, preventing accidental overwrite of damaged saves.
 * Registry/MCP boundary protection for player TAKE/DROP so item validation cannot be bypassed by transport selection.
 * New campaigns start the player with 3 randomly selected items from a fixed exploration-gear pool, assigned once at first-state creation and persisted from then on.
 * OBSERVE is a deterministic, non-mutating tool action that returns current room/exit/item/inventory context for narration instead of being treated as an unmatched-tool failure.

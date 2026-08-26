@@ -283,6 +283,65 @@ def test_chat_daily_request_limit_rejects_before_persisting_side_effects() -> No
         settings.MAX_DAILY_PLAYER_REQUESTS = original_limit
 
 
+def test_chat_rejects_invalid_persisted_campaign_state_without_overwriting_it() -> None:
+    settings.INTERNAL_ENGINE_SERVICE_TOKEN = "test-token"
+    settings.AI_ENABLED = False
+    settings.OPENAI_API_KEY = None
+    client = TestClient(app, raise_server_exceptions=False)
+    provider_subject = "chat-invalid-state"
+    headers = _user_scoped_headers(client, provider_subject)
+    owner_user_id = _resolved_internal_user_id(client, provider_subject)
+    campaign_id = "campaign_invalid_state"
+
+    with session() as db:
+        db.create_campaign(campaign_id, owner_user_id, "Broken State", "Regression test")
+        db.conn.execute(
+            "UPDATE campaigns SET state = ? WHERE campaign_id = ?",
+            ("{", campaign_id),
+        )
+        turns_before = int(
+            db.conn.execute(
+                "SELECT COUNT(*) FROM turns WHERE campaign_id = ?",
+                (campaign_id,),
+            ).fetchone()[0]
+        )
+        events_before = int(
+            db.conn.execute(
+                "SELECT COUNT(*) FROM game_events WHERE campaign_id = ?",
+                (campaign_id,),
+            ).fetchone()[0]
+        )
+
+    response = client.post(
+        "/api/chat",
+        json={"campaign_id": campaign_id, "message": "wait"},
+        headers=headers,
+    )
+
+    assert response.status_code == 500
+    assert response.json() == {"detail": "Campaign state is invalid."}
+
+    with session() as db:
+        campaign = db.get_campaign(campaign_id)
+        assert campaign is not None
+        assert campaign.state == "{"
+        turns_after = int(
+            db.conn.execute(
+                "SELECT COUNT(*) FROM turns WHERE campaign_id = ?",
+                (campaign_id,),
+            ).fetchone()[0]
+        )
+        events_after = int(
+            db.conn.execute(
+                "SELECT COUNT(*) FROM game_events WHERE campaign_id = ?",
+                (campaign_id,),
+            ).fetchone()[0]
+        )
+
+    assert turns_after == turns_before
+    assert events_after == events_before
+
+
 def test_chat_daily_token_limit_returns_structured_error() -> None:
     settings.INTERNAL_ENGINE_SERVICE_TOKEN = "test-token"
     settings.AI_ENABLED = False

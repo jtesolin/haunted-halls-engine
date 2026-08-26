@@ -11,7 +11,7 @@ from app.db.session import session
 from app.schemas.internal_auth import CANONICAL_GOOGLE_ISSUER
 from app.agents.action_parser import ActionParserAgent
 from app.schemas.chat import ActionType, ParsedAction
-from app.services.tool_executor import ToolExecutor
+from app.services.tool_executor import InvalidCampaignStateError, ToolExecutor
 from app.tools.registry import ToolRegistry
 
 
@@ -134,6 +134,30 @@ def test_tool_executor_returns_structured_dispatch_errors() -> None:
     assert result.errors[0] == "tool_dispatch_failed"
     assert result.errors[1] == "tool:advance_clock"
     assert result.errors[2].startswith("reason:MCP call failed for tool: advance_time")
+
+
+@pytest.mark.parametrize(
+    "campaign_state,error_message",
+    [
+        ("{", "Persisted campaign state contains invalid JSON."),
+        ('["not", "an", "object"]', "Persisted campaign state must be a JSON object."),
+    ],
+)
+def test_invalid_persisted_campaign_state_is_rejected(
+    campaign_state: str, error_message: str
+) -> None:
+    executor = _build_local_executor()
+
+    with pytest.raises(InvalidCampaignStateError, match=error_message):
+        executor.execute(
+            parsed_action=ParsedAction(
+                raw_text="wait",
+                action=ActionType.WAIT,
+                parameters={"amount": 1},
+                parse_status="ok",
+            ),
+            campaign_state=campaign_state,
+        )
 
 
 def test_take_item_success_transfers_authoritative_item() -> None:
