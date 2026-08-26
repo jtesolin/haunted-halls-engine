@@ -53,6 +53,18 @@ Keep this document updated as engine changes affect architecture, behavior, road
 - Chat authorization and quota checks complete before turns, events, memories, summaries, state changes, or model-usage records are persisted.
 - Memory retrieval and semantic search remain campaign-scoped before results enter model context.
 
+## CI
+
+GitHub Actions runs the engine validation workflow on pull requests targeting `main`, on pushes to `main`, and manually via `workflow_dispatch`.
+
+The workflow validates the repository's existing Python checks:
+
+- `python -m ruff check .`
+- `python -m pyright`
+- `python -m pytest`
+
+This mirrors the repo-defined Python 3.14 development setup and runs on the standard GitHub-hosted Linux runner.
+
 ## Local Security Verification
 
 - `.venv/bin/python -m pytest tests/test_internal_service_auth.py tests/test_authorization.py tests/test_chat.py`
