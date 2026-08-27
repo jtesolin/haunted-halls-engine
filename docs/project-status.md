@@ -77,9 +77,22 @@ Next.js is the public application boundary. Google OIDC authentication occurs th
 
 ### Phase 3 — Production Infrastructure
 
-**Status: Deferred intentionally**
+**Status: Partially complete — D2 containerization baseline implemented**
 
-Production deployment work is not currently required because development remains local.
+The D2 containerization baseline is implemented across both repositories:
+
+* Multi-stage production-oriented Docker images for the Next.js frontend/BFF and FastAPI engine.
+* Node 24.18.0 and Python 3.14 slim runtime bases with non-root container users.
+* Next.js standalone output and production startup configuration.
+* Docker Compose local multi-service execution with container-to-container BFF-to-engine networking.
+* Existing internal service authentication and trusted user-context propagation preserved in Compose.
+* FastAPI `/health` and frontend `/api/health` container health checks.
+* Docker-managed SQLite persistence through the Compose `engine-data` volume.
+* CI Docker-build checks that build both images without pushing or deploying them.
+
+The D2 baseline makes both applications reproducibly buildable and runnable as local containers. It does not constitute production deployment.
+
+The following production infrastructure remains deferred because development remains local:
 
 Deferred work includes:
 
