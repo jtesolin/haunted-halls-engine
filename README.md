@@ -63,6 +63,22 @@ The workflow validates the repository's existing Python checks:
 - `python -m pyright`
 - `python -m pytest`
 
+CI also builds the production Docker image as `Engine / Docker Build`; it does not push the image.
+
+## Local Docker Stack
+
+Run the full local stack from the sibling frontend repository:
+
+```bash
+cd ../haunted-halls
+docker compose build
+docker compose up -d
+```
+
+The engine is reachable from the frontend as `http://engine:8000` and is not published directly to the host. View logs with `docker compose logs -f engine`, stop with `docker compose down`, and rebuild after changes with `docker compose up -d --build engine`.
+
+The SQLite database is mounted at `/app/data` from the Compose-managed `engine-data` volume, so stopping, recreating, or rebuilding the engine preserves local data. To intentionally reset it, run `docker compose down -v` from `../haunted-halls`.
+
 This mirrors the repo-defined Python 3.14 development setup and runs on the standard GitHub-hosted Linux runner.
 
 ## Local Security Verification
