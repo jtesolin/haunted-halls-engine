@@ -40,6 +40,9 @@ def _create_engine() -> Engine:
             cursor = dbapi_connection.cursor()
             cursor.execute("PRAGMA foreign_keys=ON")
             cursor.close()
+        @event.listens_for(engine, "begin")
+        def _begin_sqlite_transaction(connection) -> None:
+            connection.exec_driver_sql("BEGIN")
     return engine
 
 
@@ -66,8 +69,6 @@ def get_connection() -> Connection:
 def session() -> Iterator[Repository]:
     conn = get_connection()
     transaction = conn.begin()
-    if conn.dialect.name == "sqlite":
-        conn.exec_driver_sql("BEGIN")
     try:
         yield Repository(conn)
         transaction.commit()

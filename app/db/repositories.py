@@ -33,7 +33,12 @@ class _ConnectionAdapter:
         self._connection = connection
 
     def execute(self, statement: str, parameters: tuple[object, ...] = ()):
-        parameter_names = [f"p{index}" for index in range(statement.count("?"))]
+        placeholder_count = statement.count("?")
+        if len(parameters) != placeholder_count:
+            raise ValueError(
+                f"expected {placeholder_count} parameters, received {len(parameters)}"
+            )
+        parameter_names = [f"p{index}" for index in range(placeholder_count)]
         bound_statement = statement
         bound_parameters: dict[str, object] = {}
         for name, value in zip(parameter_names, parameters):

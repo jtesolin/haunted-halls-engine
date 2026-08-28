@@ -1,10 +1,14 @@
 from __future__ import annotations
 
-from sqlalchemy import inspect, text
+from alembic import command
+from alembic.config import Config
+from sqlalchemy import Column, Integer, Table, inspect, text
 from sqlalchemy.exc import IntegrityError
 
 from app.core.config import settings
 from app.db.session import get_engine, session
+from app.db.repositories import Repository
+from app.db.schema import metadata
 from tests.db_helpers import migrate_database
 
 
@@ -76,6 +80,31 @@ def test_sqlite_foreign_keys_are_enforced() -> None:
             pass
         else:
             raise AssertionError("SQLite foreign keys are disabled")
+
+
+def test_parameter_count_must_match_placeholders() -> None:
+    with get_engine().connect() as connection:
+        repository = Repository(connection)
+        for parameters in [(), ("first", "extra")]:
+            try:
+                repository.conn.execute("SELECT ?", parameters)
+            except ValueError as error:
+                assert "expected 1 parameters" in str(error)
+            else:
+                raise AssertionError("parameter mismatch was accepted")
+
+
+def test_initial_migration_does_not_follow_live_metadata(tmp_path) -> None:
+    future_table = Table("future_table", metadata, Column("id", Integer, primary_key=True))
+    original_database_url = settings.DATABASE_URL
+    settings.DATABASE_URL = f"sqlite:///{tmp_path / 'future-schema.db'}"
+    try:
+        command.upgrade(Config("alembic.ini"), "head")
+        with get_engine().connect() as connection:
+            assert "future_table" not in inspect(connection).get_table_names()
+    finally:
+        metadata.remove(future_table)
+        settings.DATABASE_URL = original_database_url
 
 
 def test_database_url_fixture_is_isolated() -> None:
