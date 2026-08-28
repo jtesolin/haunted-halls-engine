@@ -2,10 +2,10 @@ VENV=.venv
 PYTHON=$(VENV)/bin/python
 PIP=$(VENV)/bin/pip
 
-.PHONY: help venv install install-dev start dev test lint typecheck clean
+.PHONY: help venv install install-dev start dev test lint typecheck db-upgrade db-current db-history clean
 
 help:
-	@echo "Targets: venv, install, install-dev, start, dev, test, lint, typecheck, clean"
+	@echo "Targets: venv, install, install-dev, start, dev, test, lint, typecheck, db-upgrade, db-current, db-history, clean"
 
 venv:
 	$(PYTHON) -m venv .venv
@@ -32,6 +32,15 @@ lint:
 
 typecheck:
 	$(PYTHON) -m pyright
+
+db-upgrade:
+	$(VENV)/bin/alembic upgrade head
+
+db-current:
+	$(VENV)/bin/alembic current
+
+db-history:
+	$(VENV)/bin/alembic history
 
 clean:
 	rm -rf .pytest_cache .venv

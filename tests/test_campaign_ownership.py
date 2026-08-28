@@ -1,9 +1,9 @@
-import sqlite3
-
 from fastapi.testclient import TestClient
+from sqlalchemy import text
 
 from app.api.dependencies import INTERNAL_USER_ID_HEADER_NAME
 from app.core.config import settings
+from app.db.session import get_engine
 from app.main import app
 from app.schemas.internal_auth import CANONICAL_GOOGLE_ISSUER
 
@@ -52,10 +52,10 @@ def test_campaign_creation_persists_owner_from_authenticated_user_context() -> N
     assert response.status_code == 201
     payload = response.json()
 
-    with sqlite3.connect(_sqlite_database_path()) as conn:
+    with get_engine().connect() as conn:
         row = conn.execute(
-            "SELECT owner_user_id FROM campaigns WHERE campaign_id = ?",
-            (payload["campaign_id"],),
+            text("SELECT owner_user_id FROM campaigns WHERE campaign_id = :campaign_id"),
+            {"campaign_id": payload["campaign_id"]},
         ).fetchone()
 
     assert row is not None
@@ -78,10 +78,10 @@ def test_campaign_creation_uses_current_schema_columns() -> None:
     assert response.status_code == 201
     payload = response.json()
 
-    with sqlite3.connect(_sqlite_database_path()) as conn:
+    with get_engine().connect() as conn:
         row = conn.execute(
-            "SELECT owner_user_id FROM campaigns WHERE campaign_id = ?",
-            (payload["campaign_id"],),
+            text("SELECT owner_user_id FROM campaigns WHERE campaign_id = :campaign_id"),
+            {"campaign_id": payload["campaign_id"]},
         ).fetchone()
 
     assert row is not None

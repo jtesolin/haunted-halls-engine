@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import json
-import sqlite3
 from datetime import datetime
 
+from sqlalchemy.exc import IntegrityError
 from fastapi.testclient import TestClient
 
 from app.main import app
@@ -191,7 +191,7 @@ def test_duplicate_creation_race_returns_existing_user(monkeypatch) -> None:
             if not race_triggered["value"]:
                 race_triggered["value"] = True
                 original_insert(*args, **kwargs)
-                raise sqlite3.IntegrityError("UNIQUE constraint failed")
+                raise IntegrityError("UNIQUE constraint failed", {}, ValueError("race"))
             return original_insert(*args, **kwargs)
 
         monkeypatch.setattr(db, "_insert_internal_user", race_insert)

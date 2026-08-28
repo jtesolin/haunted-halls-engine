@@ -15,6 +15,20 @@ Keep this document updated as engine changes affect architecture, behavior, road
 - AI is treated as enabled when `AI_ENABLED` is true or a non-empty `OPENAI_API_KEY` is present; otherwise the engine returns stub narration.
 - Under Compose, `DATABASE_URL` and `INTERNAL_ENGINE_SERVICE_TOKEN` are set explicitly by the Compose file and override values from this `.env`.
 
+## Database Migrations
+
+SQLAlchemy Core is the engine persistence layer and SQLite remains the default local database. Alembic owns the schema lifecycle; application startup does not create or migrate tables.
+
+For a fresh local database, run:
+
+```bash
+make db-upgrade
+```
+
+This D3A migration intentionally does not adopt the old pre-Alembic SQLite schema. Delete and recreate disposable local data before upgrading it. For the Docker Compose database, use `docker compose down -v` from `../haunted-halls` to reset the existing SQLite volume, then start the stack again. PostgreSQL support is deferred to D3B.
+
+The underlying commands are `alembic upgrade head`, `alembic current`, and `alembic history`. To use another local database, set `DATABASE_URL` before invoking them.
+
 ## Container Debugging
 
 - The sibling `haunted-halls` repository owns the Compose stack; start the debug stack there with `make debug-up`.

@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import json
-import sqlite3
 from datetime import datetime
 from datetime import timezone
-from sqlite3 import Connection
 from typing import Any, Optional
 from uuid import uuid4
+
+from sqlalchemy import text
+from sqlalchemy.engine import Connection
+from sqlalchemy.exc import IntegrityError
 
 from app.db.models import (
     CampaignDBModel,
@@ -26,9 +28,47 @@ from app.memory.retriever import (
 from app.schemas.events import GameEventPayload, GameEventType
 
 
+class _ConnectionAdapter:
+    def __init__(self, connection: Connection) -> None:
+        self._connection = connection
+
+    def execute(self, statement: str, parameters: tuple[object, ...] = ()):
+        placeholder_count = statement.count("?")
+        if len(parameters) != placeholder_count:
+            raise ValueError(
+                f"expected {placeholder_count} parameters, received {len(parameters)}"
+            )
+        parameter_names = [f"p{index}" for index in range(placeholder_count)]
+        bound_statement = statement
+        bound_parameters: dict[str, object] = {}
+        for name, value in zip(parameter_names, parameters):
+            bound_statement = bound_statement.replace("?", f":{name}", 1)
+            bound_parameters[name] = value
+        return _ResultAdapter(self._connection.execute(text(bound_statement), bound_parameters))
+
+    def begin_nested(self):
+        return self._connection.begin_nested()
+
+
+class _ResultAdapter:
+    def __init__(self, result) -> None:
+        self._result = result
+
+    @property
+    def rowcount(self) -> int:
+        return self._result.rowcount
+
+    def fetchone(self):
+        row = self._result.mappings().fetchone()
+        return row
+
+    def fetchall(self):
+        return self._result.mappings().fetchall()
+
+
 class Repository:
     def __init__(self, conn: Connection) -> None:
-        self.conn = conn
+        self.conn = _ConnectionAdapter(conn)
 
     def _now_utc_iso(self) -> str:
         return datetime.now(timezone.utc).isoformat()
@@ -178,19 +218,37 @@ class Repository:
 
         user_id = f"user_{uuid4().hex}"
         try:
-            self._insert_internal_user(
-                user_id=user_id,
-                identity_provider=identity_provider,
-                provider_issuer=provider_issuer,
-                provider_subject=provider_subject,
-                email=email,
-                email_verified=email_verified,
-                display_name=display_name,
-                avatar_url=avatar_url,
-                created_at=now_iso,
-            )
-        except sqlite3.IntegrityError:
-            pass
+            with self.conn.begin_nested():
+                self._insert_internal_user(
+                    user_id=user_id,
+                    identity_provider=identity_provider,
+                    provider_issuer=provider_issuer,
+                    provider_subject=provider_subject,
+                    email=email,
+                    email_verified=email_verified,
+                    display_name=display_name,
+                    avatar_url=avatar_url,
+                    created_at=now_iso,
+                )
+        except IntegrityError:
+            # A conflict may have rolled back the savepoint before the
+            # competing transaction becomes visible. Retry once, then resolve
+            # from the unique provider identity below.
+            try:
+                with self.conn.begin_nested():
+                    self._insert_internal_user(
+                        user_id=user_id,
+                        identity_provider=identity_provider,
+                        provider_issuer=provider_issuer,
+                        provider_subject=provider_subject,
+                        email=email,
+                        email_verified=email_verified,
+                        display_name=display_name,
+                        avatar_url=avatar_url,
+                        created_at=now_iso,
+                    )
+            except IntegrityError:
+                pass
 
         resolved = self.get_internal_user_by_identity(provider_issuer, provider_subject)
         if resolved is None:
@@ -221,10 +279,13 @@ class Repository:
     ) -> CampaignDBModel:
         created_at = datetime.utcnow().isoformat()
         state_json = json.dumps(state) if state is not None else None
-        self.conn.execute(
-            "INSERT OR IGNORE INTO campaigns (campaign_id, owner_user_id, name, description, state, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-            (campaign_id, owner_user_id, name, description, state_json, created_at),
-        )
+        try:
+            self.conn.execute(
+                "INSERT INTO campaigns (campaign_id, owner_user_id, name, description, state, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                (campaign_id, owner_user_id, name, description, state_json, created_at),
+            )
+        except IntegrityError:
+            pass
         return CampaignDBModel(
             campaign_id,
             name,

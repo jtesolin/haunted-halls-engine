@@ -2,17 +2,17 @@
 
 from __future__ import annotations
 
-import sqlite3
-
 from fastapi.testclient import TestClient
+from sqlalchemy import text
 
 from app.api.dependencies import INTERNAL_USER_ID_HEADER_NAME
 from app.core.config import settings
-from app.db.session import init_db, session
+from app.db.session import get_engine, session
 from app.main import app
 from app.memory.services import MemoryService
 from app.orchestration import orchestrator as orchestrator_module
 from app.schemas.internal_auth import CANONICAL_GOOGLE_ISSUER
+from tests.db_helpers import migrate_database
 
 
 def _resolve_user(
@@ -98,14 +98,12 @@ def test_list_campaigns_excludes_legacy_unowned(tmp_path) -> None:
     original = settings.DATABASE_URL
     settings.DATABASE_URL = f"sqlite:///{db_path}"
     try:
-        with sqlite3.connect(str(db_path)) as conn:
-            init_db(conn)
+        migrate_database()
+        with get_engine().begin() as conn:
             conn.execute(
-                "INSERT INTO campaigns (campaign_id, owner_user_id, name, description, state, created_at) "
-                "VALUES (?, NULL, ?, NULL, NULL, ?)",
-                ("campaign_legacy_list", "Legacy Campaign", "2024-01-01T00:00:00"),
+                text("INSERT INTO campaigns (campaign_id, owner_user_id, name, description, state, created_at) VALUES (:campaign_id, NULL, :name, NULL, NULL, :created_at)"),
+                {"campaign_id": "campaign_legacy_list", "name": "Legacy Campaign", "created_at": "2024-01-01T00:00:00"},
             )
-            conn.commit()
 
         client = TestClient(app)
         _, headers = _resolve_user(client, "legacy-list-user")
@@ -162,14 +160,12 @@ def test_get_campaign_unowned_returns_404(tmp_path) -> None:
     original = settings.DATABASE_URL
     settings.DATABASE_URL = f"sqlite:///{db_path}"
     try:
-        with sqlite3.connect(str(db_path)) as conn:
-            init_db(conn)
+        migrate_database()
+        with get_engine().begin() as conn:
             conn.execute(
-                "INSERT INTO campaigns (campaign_id, owner_user_id, name, description, state, created_at) "
-                "VALUES (?, NULL, ?, NULL, NULL, ?)",
-                ("campaign_legacy_get", "Legacy", "2024-01-01T00:00:00"),
+                text("INSERT INTO campaigns (campaign_id, owner_user_id, name, description, state, created_at) VALUES (:campaign_id, NULL, :name, NULL, NULL, :created_at)"),
+                {"campaign_id": "campaign_legacy_get", "name": "Legacy", "created_at": "2024-01-01T00:00:00"},
             )
-            conn.commit()
 
         client = TestClient(app)
         _, headers = _resolve_user(client, "legacy-get-user")
@@ -262,14 +258,12 @@ def test_delete_campaign_unowned_returns_404(tmp_path) -> None:
     original = settings.DATABASE_URL
     settings.DATABASE_URL = f"sqlite:///{db_path}"
     try:
-        with sqlite3.connect(str(db_path)) as conn:
-            init_db(conn)
+        migrate_database()
+        with get_engine().begin() as conn:
             conn.execute(
-                "INSERT INTO campaigns (campaign_id, owner_user_id, name, description, state, created_at) "
-                "VALUES (?, NULL, ?, NULL, NULL, ?)",
-                ("campaign_legacy_del", "Legacy", "2024-01-01T00:00:00"),
+                text("INSERT INTO campaigns (campaign_id, owner_user_id, name, description, state, created_at) VALUES (:campaign_id, NULL, :name, NULL, NULL, :created_at)"),
+                {"campaign_id": "campaign_legacy_del", "name": "Legacy", "created_at": "2024-01-01T00:00:00"},
             )
-            conn.commit()
 
         client = TestClient(app)
         _, headers = _resolve_user(client, "legacy-del-user")
@@ -278,10 +272,10 @@ def test_delete_campaign_unowned_returns_404(tmp_path) -> None:
         assert response.status_code == 404
 
         # Verify record still in DB
-        with sqlite3.connect(str(db_path)) as conn:
+        with get_engine().connect() as conn:
             row = conn.execute(
-                "SELECT campaign_id FROM campaigns WHERE campaign_id = ?",
-                ("campaign_legacy_del",),
+                text("SELECT campaign_id FROM campaigns WHERE campaign_id = :campaign_id"),
+                {"campaign_id": "campaign_legacy_del"},
             ).fetchone()
         assert row is not None
     finally:
@@ -368,9 +362,9 @@ def test_chat_unauthorized_creates_no_turn_or_event() -> None:
         events_after = db.list_campaign_events(campaign_id, limit=100)
         memories_after = db.list_campaign_memories(campaign_id, limit=100)
         requests_after = db.conn.execute(
-            "SELECT COUNT(*) FROM model_requests WHERE campaign_id = ?",
+                "SELECT COUNT(*) AS total FROM model_requests WHERE campaign_id = ?",
             (campaign_id,),
-        ).fetchone()[0]
+            ).fetchone()["total"]
 
     assert len(turns_after) == len(turns_before)
     assert len(events_after) == len(events_before)
@@ -437,14 +431,12 @@ def test_chat_unowned_campaign_returns_404(tmp_path) -> None:
     original = settings.DATABASE_URL
     settings.DATABASE_URL = f"sqlite:///{db_path}"
     try:
-        with sqlite3.connect(str(db_path)) as conn:
-            init_db(conn)
+        migrate_database()
+        with get_engine().begin() as conn:
             conn.execute(
-                "INSERT INTO campaigns (campaign_id, owner_user_id, name, description, state, created_at) "
-                "VALUES (?, NULL, ?, NULL, NULL, ?)",
-                ("campaign_legacy_chat", "Legacy", "2024-01-01T00:00:00"),
+                text("INSERT INTO campaigns (campaign_id, owner_user_id, name, description, state, created_at) VALUES (:campaign_id, NULL, :name, NULL, NULL, :created_at)"),
+                {"campaign_id": "campaign_legacy_chat", "name": "Legacy", "created_at": "2024-01-01T00:00:00"},
             )
-            conn.commit()
 
         client = TestClient(app)
         _, headers = _resolve_user(client, "legacy-chat-user")
@@ -532,14 +524,12 @@ def test_repo_get_campaign_for_owner_excludes_null_owner(tmp_path) -> None:
     original = settings.DATABASE_URL
     settings.DATABASE_URL = f"sqlite:///{db_path}"
     try:
-        with sqlite3.connect(str(db_path)) as conn:
-            init_db(conn)
+        migrate_database()
+        with get_engine().begin() as conn:
             conn.execute(
-                "INSERT INTO campaigns (campaign_id, owner_user_id, name, description, state, created_at) "
-                "VALUES (?, NULL, ?, NULL, NULL, ?)",
-                ("campaign_null_owner", "Null Owned", "2024-01-01T00:00:00"),
+                text("INSERT INTO campaigns (campaign_id, owner_user_id, name, description, state, created_at) VALUES (:campaign_id, NULL, :name, NULL, NULL, :created_at)"),
+                {"campaign_id": "campaign_null_owner", "name": "Null Owned", "created_at": "2024-01-01T00:00:00"},
             )
-            conn.commit()
 
         with session() as db:
             result = db.get_campaign_for_owner("campaign_null_owner", "user_anyuser")

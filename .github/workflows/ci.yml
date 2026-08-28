@@ -84,6 +84,29 @@ jobs:
       - name: Run pytest
         run: python -m pytest
 
+  migrations:
+    name: Engine / Migrations
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
+
+      - name: Upgrade fresh SQLite database
+        run: |
+          DATABASE_URL=sqlite:////tmp/haunted-halls-ci.db alembic upgrade head
+          DATABASE_URL=sqlite:////tmp/haunted-halls-ci.db alembic current
+
   docker-build:
     name: Engine / Docker Build
     runs-on: ubuntu-latest
