@@ -5,7 +5,7 @@ PIP=$(VENV)/bin/pip
 .PHONY: help venv install install-dev start dev test lint typecheck clean
 
 help:
-	@echo "Targets: venv, install, install-dev, start, dev, test, lint, clean"
+	@echo "Targets: venv, install, install-dev, start, dev, test, lint, typecheck, clean"
 
 venv:
 	$(PYTHON) -m venv .venv

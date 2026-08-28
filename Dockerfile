@@ -7,8 +7,8 @@ WORKDIR /build
 COPY requirements.txt ./
 RUN python -m pip install --no-cache-dir --prefix=/install -r requirements.txt
 
-# Local-only debug stage. Must stay before `runner` so plain `docker build` and CI
-# keep producing the production image by default.
+# Local-only debug stage. Must stay before `runner` so plain `docker build`
+# keeps producing the production image by default.
 FROM python:3.14-slim-bookworm AS debug
 
 ENV PYTHONDONTWRITEBYTECODE=1
