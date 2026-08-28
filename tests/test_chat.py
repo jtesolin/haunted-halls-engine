@@ -242,16 +242,24 @@ def test_chat_daily_request_limit_rejects_before_persisting_side_effects() -> No
         with session() as db:
             counts_before = {
                 "campaigns": int(
-                    db.conn.execute(text("SELECT COUNT(*) AS total FROM campaigns")).mappings().fetchone()["total"]
+                    (lambda row: row["total"] if row is not None else 0)(
+                        db.conn.execute(text("SELECT COUNT(*) AS total FROM campaigns")).mappings().fetchone()
+                    )
                 ),
                 "turns": int(
-                    db.conn.execute(text("SELECT COUNT(*) AS total FROM turns")).mappings().fetchone()["total"]
+                    (lambda row: row["total"] if row is not None else 0)(
+                        db.conn.execute(text("SELECT COUNT(*) AS total FROM turns")).mappings().fetchone()
+                    )
                 ),
                 "events": int(
-                    db.conn.execute(text("SELECT COUNT(*) AS total FROM game_events")).mappings().fetchone()["total"]
+                    (lambda row: row["total"] if row is not None else 0)(
+                        db.conn.execute(text("SELECT COUNT(*) AS total FROM game_events")).mappings().fetchone()
+                    )
                 ),
                 "requests": int(
-                    db.conn.execute(text("SELECT COUNT(*) AS total FROM model_requests")).mappings().fetchone()["total"]
+                    (lambda row: row["total"] if row is not None else 0)(
+                        db.conn.execute(text("SELECT COUNT(*) AS total FROM model_requests")).mappings().fetchone()
+                    )
                 ),
             }
 
@@ -270,16 +278,24 @@ def test_chat_daily_request_limit_rejects_before_persisting_side_effects() -> No
         with session() as db:
             counts_after = {
                 "campaigns": int(
-                    db.conn.execute(text("SELECT COUNT(*) AS total FROM campaigns")).mappings().fetchone()["total"]
+                    (lambda row: row["total"] if row is not None else 0)(
+                        db.conn.execute(text("SELECT COUNT(*) AS total FROM campaigns")).mappings().fetchone()
+                    )
                 ),
                 "turns": int(
-                    db.conn.execute(text("SELECT COUNT(*) AS total FROM turns")).mappings().fetchone()["total"]
+                    (lambda row: row["total"] if row is not None else 0)(
+                        db.conn.execute(text("SELECT COUNT(*) AS total FROM turns")).mappings().fetchone()
+                    )
                 ),
                 "events": int(
-                    db.conn.execute(text("SELECT COUNT(*) AS total FROM game_events")).mappings().fetchone()["total"]
+                    (lambda row: row["total"] if row is not None else 0)(
+                        db.conn.execute(text("SELECT COUNT(*) AS total FROM game_events")).mappings().fetchone()
+                    )
                 ),
                 "requests": int(
-                    db.conn.execute(text("SELECT COUNT(*) AS total FROM model_requests")).mappings().fetchone()["total"]
+                    (lambda row: row["total"] if row is not None else 0)(
+                        db.conn.execute(text("SELECT COUNT(*) AS total FROM model_requests")).mappings().fetchone()
+                    )
                 ),
             }
 

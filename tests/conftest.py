@@ -1,4 +1,3 @@
-import os
 import random
 from collections.abc import Iterator
 

@@ -361,10 +361,12 @@ def test_chat_unauthorized_creates_no_turn_or_event() -> None:
         _, turns_after, _ = db.get_campaign_with_turns(campaign_id, limit=100)
         events_after = db.list_campaign_events(campaign_id, limit=100)
         memories_after = db.list_campaign_memories(campaign_id, limit=100)
-        requests_after = db.conn.execute(
+        requests_row = db.conn.execute(
             text("SELECT COUNT(*) AS total FROM model_requests WHERE campaign_id = :campaign_id"),
             {"campaign_id": campaign_id},
-        ).mappings().fetchone()["total"]
+        ).mappings().fetchone()
+        assert requests_row is not None
+        requests_after = requests_row["total"]
 
     assert len(turns_after) == len(turns_before)
     assert len(events_after) == len(events_before)
