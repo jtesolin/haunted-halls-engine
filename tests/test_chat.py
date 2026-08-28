@@ -241,14 +241,14 @@ def test_chat_daily_request_limit_rejects_before_persisting_side_effects() -> No
         with session() as db:
             counts_before = {
                 "campaigns": int(
-                    db.conn.execute("SELECT COUNT(*) FROM campaigns").fetchone()[0]
+                    db.conn.execute("SELECT COUNT(*) AS total FROM campaigns").fetchone()["total"]
                 ),
-                "turns": int(db.conn.execute("SELECT COUNT(*) FROM turns").fetchone()[0]),
+                "turns": int(db.conn.execute("SELECT COUNT(*) AS total FROM turns").fetchone()["total"]),
                 "events": int(
-                    db.conn.execute("SELECT COUNT(*) FROM game_events").fetchone()[0]
+                    db.conn.execute("SELECT COUNT(*) AS total FROM game_events").fetchone()["total"]
                 ),
                 "requests": int(
-                    db.conn.execute("SELECT COUNT(*) FROM model_requests").fetchone()[0]
+                    db.conn.execute("SELECT COUNT(*) AS total FROM model_requests").fetchone()["total"]
                 ),
             }
 
@@ -267,14 +267,14 @@ def test_chat_daily_request_limit_rejects_before_persisting_side_effects() -> No
         with session() as db:
             counts_after = {
                 "campaigns": int(
-                    db.conn.execute("SELECT COUNT(*) FROM campaigns").fetchone()[0]
+                    db.conn.execute("SELECT COUNT(*) AS total FROM campaigns").fetchone()["total"]
                 ),
-                "turns": int(db.conn.execute("SELECT COUNT(*) FROM turns").fetchone()[0]),
+                "turns": int(db.conn.execute("SELECT COUNT(*) AS total FROM turns").fetchone()["total"]),
                 "events": int(
-                    db.conn.execute("SELECT COUNT(*) FROM game_events").fetchone()[0]
+                    db.conn.execute("SELECT COUNT(*) AS total FROM game_events").fetchone()["total"]
                 ),
                 "requests": int(
-                    db.conn.execute("SELECT COUNT(*) FROM model_requests").fetchone()[0]
+                    db.conn.execute("SELECT COUNT(*) AS total FROM model_requests").fetchone()["total"]
                 ),
             }
 

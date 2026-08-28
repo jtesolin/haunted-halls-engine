@@ -20,6 +20,8 @@ COPY --from=builder /install /usr/local
 COPY requirements.txt requirements-dev.txt ./
 RUN python -m pip install --no-cache-dir -r requirements-dev.txt
 COPY app ./app
+COPY alembic.ini ./
+COPY alembic ./alembic
 
 RUN useradd --create-home --uid 10001 appuser \
     && mkdir -p /app/data \
@@ -38,6 +40,8 @@ ENV PYTHONPATH=/app
 WORKDIR /app
 COPY --from=builder /install /usr/local
 COPY app ./app
+COPY alembic.ini ./
+COPY alembic ./alembic
 
 RUN useradd --create-home --uid 10001 appuser \
     && mkdir -p /app/data \

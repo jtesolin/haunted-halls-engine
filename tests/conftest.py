@@ -2,6 +2,8 @@ import random
 from collections.abc import Iterator
 
 import pytest
+from alembic import command
+from alembic.config import Config
 
 from app.core.config import settings
 
@@ -31,6 +33,8 @@ def isolated_database(tmp_path) -> Iterator[None]:
     original_database_url = settings.DATABASE_URL
     settings.DATABASE_URL = f"sqlite:///{tmp_path / 'test_engine.db'}"
     try:
+        alembic_config = Config("alembic.ini")
+        command.upgrade(alembic_config, "head")
         yield
     finally:
         settings.DATABASE_URL = original_database_url

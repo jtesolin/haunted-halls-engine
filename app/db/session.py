@@ -1,9 +1,11 @@
 from __future__ import annotations
 
-import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator
+
+from sqlalchemy import create_engine, event
+from sqlalchemy.engine import Connection, Engine
 
 from app.core.config import settings
 from app.db.repositories import Repository
@@ -17,136 +19,60 @@ def _database_url() -> str:
     return f"sqlite:///{DEFAULT_SQLITE_PATH.resolve()}"
 
 
-def _sqlite_path_from_url(url: str) -> Path:
-    if url.startswith("sqlite:///"):
-        return Path(url.removeprefix("sqlite:///"))
-    raise ValueError("Only sqlite:/// URLs are supported by the local session implementation.")
+def _ensure_sqlite_directory(url: str) -> None:
+    if not url.startswith("sqlite:///") or url in {"sqlite://", "sqlite:///:memory:"}:
+        return
+    database_path = Path(url.split("sqlite:///", 1)[1])
+    database_path.parent.mkdir(parents=True, exist_ok=True)
 
 
-def get_connection() -> sqlite3.Connection:
+def _create_engine() -> Engine:
     url = _database_url()
-    db_path = _sqlite_path_from_url(url)
-    db_path.parent.mkdir(parents=True, exist_ok=True)
+    _ensure_sqlite_directory(url)
+    engine = create_engine(
+        url,
+        connect_args={"check_same_thread": False} if url.startswith("sqlite") else {},
+    )
 
-    conn = sqlite3.connect(str(db_path), check_same_thread=False)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON;")
-    return conn
+    if url.startswith("sqlite"):
+        @event.listens_for(engine, "connect")
+        def _enable_sqlite_foreign_keys(dbapi_connection, _connection_record) -> None:
+            cursor = dbapi_connection.cursor()
+            cursor.execute("PRAGMA foreign_keys=ON")
+            cursor.close()
+    return engine
+
+
+_engine_url: str | None = None
+_engine: Engine | None = None
+
+
+def get_engine() -> Engine:
+    global _engine, _engine_url
+    url = _database_url()
+    if _engine is None or _engine_url != url:
+        if _engine is not None:
+            _engine.dispose()
+        _engine = _create_engine()
+        _engine_url = url
+    return _engine
+
+
+def get_connection() -> Connection:
+    return get_engine().connect()
 
 
 @contextmanager
 def session() -> Iterator[Repository]:
     conn = get_connection()
+    transaction = conn.begin()
+    if conn.dialect.name == "sqlite":
+        conn.exec_driver_sql("BEGIN")
     try:
-        init_db(conn)
         yield Repository(conn)
-        conn.commit()
+        transaction.commit()
     except Exception:
-        conn.rollback()
+        transaction.rollback()
         raise
     finally:
         conn.close()
-
-
-def init_db(conn: sqlite3.Connection) -> None:
-    conn.executescript(
-        """
-        CREATE TABLE IF NOT EXISTS internal_users (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id TEXT NOT NULL UNIQUE,
-            identity_provider TEXT NOT NULL,
-            provider_issuer TEXT NOT NULL,
-            provider_subject TEXT NOT NULL,
-            email TEXT NOT NULL,
-            email_verified INTEGER NOT NULL,
-            display_name TEXT,
-            avatar_url TEXT,
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL,
-            last_login_at TEXT NOT NULL,
-            UNIQUE(provider_issuer, provider_subject)
-        );
-
-        CREATE TABLE IF NOT EXISTS campaigns (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            campaign_id TEXT NOT NULL UNIQUE,
-            owner_user_id TEXT,
-            name TEXT NOT NULL,
-            description TEXT,
-            state TEXT,
-            created_at TEXT NOT NULL,
-            FOREIGN KEY(owner_user_id) REFERENCES internal_users(user_id) ON DELETE RESTRICT
-        );
-
-        CREATE TABLE IF NOT EXISTS characters (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            character_id TEXT NOT NULL UNIQUE,
-            campaign_id TEXT NOT NULL,
-            name TEXT NOT NULL,
-            description TEXT,
-            created_at TEXT NOT NULL,
-            FOREIGN KEY(campaign_id) REFERENCES campaigns(campaign_id) ON DELETE CASCADE
-        );
-
-        CREATE TABLE IF NOT EXISTS turns (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            turn_id TEXT NOT NULL UNIQUE,
-            campaign_id TEXT NOT NULL,
-            role TEXT NOT NULL,
-            content TEXT NOT NULL,
-            created_at TEXT NOT NULL,
-            FOREIGN KEY(campaign_id) REFERENCES campaigns(campaign_id) ON DELETE CASCADE
-        );
-
-        CREATE TABLE IF NOT EXISTS model_requests (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            request_id TEXT NOT NULL UNIQUE,
-            owner_user_id TEXT,
-            campaign_id TEXT NOT NULL,
-            turn_id TEXT NOT NULL,
-            agent_name TEXT NOT NULL,
-            model TEXT NOT NULL,
-            estimated_input_tokens INTEGER NOT NULL,
-            actual_input_tokens INTEGER NOT NULL,
-            actual_output_tokens INTEGER NOT NULL,
-            latency_ms INTEGER NOT NULL,
-            success INTEGER NOT NULL,
-            failure_reason TEXT,
-            cost_estimate REAL,
-            created_at TEXT NOT NULL,
-            FOREIGN KEY(owner_user_id) REFERENCES internal_users(user_id) ON DELETE RESTRICT
-        );
-
-        CREATE TABLE IF NOT EXISTS game_events (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            event_id TEXT NOT NULL UNIQUE,
-            campaign_id TEXT NOT NULL,
-            turn_id TEXT,
-            type TEXT NOT NULL,
-            payload_json TEXT,
-            created_at TEXT NOT NULL,
-            FOREIGN KEY(campaign_id) REFERENCES campaigns(campaign_id) ON DELETE CASCADE
-        );
-
-        CREATE TABLE IF NOT EXISTS summaries (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            campaign_id TEXT NOT NULL,
-            summary TEXT NOT NULL,
-            created_at TEXT NOT NULL,
-            FOREIGN KEY(campaign_id) REFERENCES campaigns(campaign_id) ON DELETE CASCADE
-        );
-
-        CREATE TABLE IF NOT EXISTS memories (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            memory_id TEXT NOT NULL UNIQUE,
-            campaign_id TEXT NOT NULL,
-            kind TEXT NOT NULL,
-            content TEXT NOT NULL,
-            embedding_json TEXT NOT NULL,
-            importance REAL NOT NULL,
-            source_event_id TEXT,
-            created_at TEXT NOT NULL,
-            FOREIGN KEY(campaign_id) REFERENCES campaigns(campaign_id) ON DELETE CASCADE
-        );
-        """
-    )

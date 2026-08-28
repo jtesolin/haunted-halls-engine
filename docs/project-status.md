@@ -60,7 +60,7 @@ Next.js is the public application boundary. Google OIDC authentication occurs th
 * FastAPI engine established.
 * Campaign and chat APIs implemented.
 * Persistent campaigns and conversation turns implemented.
-* SQLite local-development persistence implemented.
+* SQLite local-development persistence implemented through SQLAlchemy Core.
 * Campaign creation, retrieval, and deletion supported.
 * Web UI supports campaign selection and persistent conversations.
 
@@ -93,6 +93,12 @@ The D2 containerization baseline is implemented across both repositories:
 * CI Docker-build checks that build both images without pushing or deploying them.
 
 The D2 baseline makes both applications reproducibly buildable and runnable as local containers. It does not constitute production deployment.
+
+### D3A — Database Abstraction + Alembic Migrations
+
+**Status: Complete — SQLite foundation**
+
+The engine now uses synchronous SQLAlchemy Core for database connections and repository transactions. Alembic is the authoritative schema lifecycle mechanism, with a fresh initial migration covering all current persistence tables. Runtime startup no longer creates tables. SQLite remains the default local database; PostgreSQL and Cloud SQL are intentionally deferred to D3B.
 
 The following production infrastructure remains deferred because development remains local:
 
