@@ -82,16 +82,15 @@ def test_sqlite_foreign_keys_are_enforced() -> None:
             raise AssertionError("SQLite foreign keys are disabled")
 
 
-def test_parameter_count_must_match_placeholders() -> None:
+def test_repository_uses_native_sqlalchemy_core() -> None:
     with get_engine().connect() as connection:
         repository = Repository(connection)
-        for parameters in [(), ("first", "extra")]:
-            try:
-                repository.conn.execute("SELECT ?", parameters)
-            except ValueError as error:
-                assert "expected 1 parameters" in str(error)
-            else:
-                raise AssertionError("parameter mismatch was accepted")
+        row = repository.conn.execute(
+            text("SELECT :value AS answer"),
+            {"value": 42},
+        ).mappings().fetchone()
+        assert row is not None
+        assert row["answer"] == 42
 
 
 def test_initial_migration_does_not_follow_live_metadata(tmp_path) -> None:

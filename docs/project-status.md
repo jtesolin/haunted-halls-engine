@@ -94,11 +94,11 @@ The D2 containerization baseline is implemented across both repositories:
 
 The D2 baseline makes both applications reproducibly buildable and runnable as local containers. It does not constitute production deployment.
 
-### D3A — Database Abstraction + Alembic Migrations
+### D3B — PostgreSQL Compatibility
 
-**Status: Complete — SQLite foundation**
+**Status: Complete — PostgreSQL compatibility validated**
 
-The engine now uses synchronous SQLAlchemy Core for database connections and repository transactions. Alembic is the authoritative schema lifecycle mechanism, with a fresh initial migration covering all current persistence tables. Runtime startup no longer creates tables. SQLite remains the default local database; PostgreSQL and Cloud SQL are intentionally deferred to D3B.
+The engine persistence layer now uses native SQLAlchemy Core statements instead of the legacy SQLite placeholder adapter, and the repository remains dialect-neutral across SQLite and PostgreSQL. Alembic upgrades are validated against both a fresh SQLite database and a fresh PostgreSQL database. SQLite remains the default lightweight local database, while PostgreSQL is supported for engine persistence and CI validation. Cloud SQL deployment remains deferred.
 
 The following production infrastructure remains deferred because development remains local:
 

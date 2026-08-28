@@ -28,21 +28,25 @@ def _ensure_sqlite_directory(url: str) -> None:
 
 def _create_engine() -> Engine:
     url = _database_url()
-    _ensure_sqlite_directory(url)
-    engine = create_engine(
-        url,
-        connect_args={"check_same_thread": False} if url.startswith("sqlite") else {},
-    )
+    engine_kwargs: dict[str, object] = {}
+    if url.startswith("sqlite"):
+        _ensure_sqlite_directory(url)
+        engine_kwargs["connect_args"] = {"check_same_thread": False}
+
+    engine = create_engine(url, **engine_kwargs)
 
     if url.startswith("sqlite"):
+
         @event.listens_for(engine, "connect")
         def _enable_sqlite_foreign_keys(dbapi_connection, _connection_record) -> None:
             cursor = dbapi_connection.cursor()
             cursor.execute("PRAGMA foreign_keys=ON")
             cursor.close()
+
         @event.listens_for(engine, "begin")
         def _begin_sqlite_transaction(connection) -> None:
             connection.exec_driver_sql("BEGIN")
+
     return engine
 
 
