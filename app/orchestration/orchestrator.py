@@ -48,10 +48,16 @@ logger = logging.getLogger(__name__)
 
 
 class ChatOrchestrator:
-    def _check_model_call_budget(self, db, owner_user_id: str, estimated_input_tokens: int) -> None:
-        validate_daily_token_limit(db, owner_user_id, estimated_input_tokens)
+    def _check_model_call_budget(
+        self,
+        db,
+        owner_user_id: str,
+        estimated_input_tokens: int,
+        max_output_tokens: int,
+    ) -> None:
+        validate_daily_token_limit(db, owner_user_id, estimated_input_tokens, max_output_tokens)
         validate_project_request_limit(db)
-        validate_project_token_limit(db, estimated_input_tokens)
+        validate_project_token_limit(db, estimated_input_tokens, max_output_tokens)
 
     def _estimate_payload_tokens(self, payload: object) -> int:
         payload_obj = cast(Any, payload)
@@ -201,7 +207,12 @@ class ChatOrchestrator:
                 estimated_input_tokens, TokenBudget.narrator_max_output_tokens()
             )
             validate_daily_request_limit(db, owner_user_id)
-            validate_daily_token_limit(db, owner_user_id, estimated_input_tokens)
+            validate_daily_token_limit(
+                db,
+                owner_user_id,
+                estimated_input_tokens,
+                TokenBudget.narrator_max_output_tokens(),
+            )
 
             db.create_campaign(
                 campaign_id=campaign_id,
@@ -225,27 +236,42 @@ class ChatOrchestrator:
 
             parser_start_time = time.perf_counter()
             try:
-                parser_prompt = self.action_parser_agent._build_messages(
-                    message=request.message,
-                    parser_context=self.action_parser_agent._build_parser_context(campaign_state),
-                    recent_turns=recent_turns,
-                    memory_context=memory_context or [],
-                )
-                parser_estimated_input_tokens = sum(
-                    estimate_tokens(str(message.get("content", "")))
-                    for message in parser_prompt
-                    if isinstance(message, dict)
-                    and isinstance(message.get("content"), str)
-                )
-                self._check_model_call_budget(db, owner_user_id, parser_estimated_input_tokens)
-                parsed_action = await self.action_parser_agent.parse(
-                    message=request.message,
-                    campaign_state=campaign_state,
-                    recent_turns=recent_turns,
-                    memory_context=memory_context,
-                    model=ModelPolicy.action_parser_model(),
-                    deterministic_only=not parser_model_enabled,
-                )
+                if parser_model_enabled:
+                    parser_prompt = self.action_parser_agent.build_provider_request(
+                        message=request.message,
+                        campaign_state=campaign_state,
+                        recent_turns=recent_turns,
+                        memory_context=memory_context,
+                    )
+                    parser_estimated_input_tokens = sum(
+                        estimate_tokens(str(message.get("content", "")))
+                        for message in parser_prompt
+                        if isinstance(message, dict)
+                        and isinstance(message.get("content"), str)
+                    )
+                    self._check_model_call_budget(
+                        db,
+                        owner_user_id,
+                        parser_estimated_input_tokens,
+                        TokenBudget.action_parser_max_output_tokens(),
+                    )
+                    parsed_action = await self.action_parser_agent.parse(
+                        message=request.message,
+                        campaign_state=campaign_state,
+                        recent_turns=recent_turns,
+                        memory_context=memory_context,
+                        model=ModelPolicy.action_parser_model(),
+                        deterministic_only=False,
+                    )
+                else:
+                    parsed_action = await self.action_parser_agent.parse(
+                        message=request.message,
+                        campaign_state=campaign_state,
+                        recent_turns=recent_turns,
+                        memory_context=memory_context,
+                        model=ModelPolicy.action_parser_model(),
+                        deterministic_only=True,
+                    )
                 logger.info(
                     "action_parser_completed owner_user_id=%s campaign_id=%s turn_id=%s parse_status=%s action=%s confidence=%.3f deterministic_only=%s",
                     owner_user_id,
@@ -416,7 +442,12 @@ class ChatOrchestrator:
                     tool_result=tool_result,
                 )
                 narrator_estimated_input_tokens = self._estimate_payload_tokens(narrator_payload)
-                self._check_model_call_budget(db, owner_user_id, narrator_estimated_input_tokens)
+                self._check_model_call_budget(
+                    db,
+                    owner_user_id,
+                    narrator_estimated_input_tokens,
+                    TokenBudget.narrator_max_output_tokens(),
+                )
                 try:
                     narrator_output = await self.narrator_agent.generate(
                         payload=narrator_payload,
@@ -572,7 +603,12 @@ class ChatOrchestrator:
                 summary_start_time = time.perf_counter()
                 summary_estimated_tokens = self._estimate_payload_tokens(summarizer_payload)
                 if ai_enabled:
-                    self._check_model_call_budget(db, owner_user_id, summary_estimated_tokens)
+                    self._check_model_call_budget(
+                        db,
+                        owner_user_id,
+                        summary_estimated_tokens,
+                        TokenBudget.summarizer_max_output_tokens(),
+                    )
                 try:
                     summary_output = await self.memory_summarizer_agent.summarize(
                         payload=summarizer_payload,
@@ -641,7 +677,12 @@ class ChatOrchestrator:
                 reflection_start_time = time.perf_counter()
                 reflection_estimated_tokens = self._estimate_payload_tokens(reflection_payload)
                 if ai_enabled:
-                    self._check_model_call_budget(db, owner_user_id, reflection_estimated_tokens)
+                    self._check_model_call_budget(
+                        db,
+                        owner_user_id,
+                        reflection_estimated_tokens,
+                        TokenBudget.memory_reflection_max_output_tokens(),
+                    )
                 try:
                     reflection_output = await self.memory_reflection_agent.reflect(
                         payload=reflection_payload,
@@ -720,7 +761,12 @@ class ChatOrchestrator:
         validate_request_budget(
             estimated_input_tokens, TokenBudget.narrator_max_output_tokens()
         )
-        self._check_model_call_budget(db, owner_user_id, estimated_input_tokens)
+        self._check_model_call_budget(
+            db,
+            owner_user_id,
+            estimated_input_tokens,
+            TokenBudget.narrator_max_output_tokens(),
+        )
 
         start_time = time.perf_counter()
         try:

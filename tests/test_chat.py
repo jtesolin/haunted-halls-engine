@@ -417,6 +417,55 @@ def test_chat_daily_request_limit_rejects_before_persisting_side_effects() -> No
         settings.MAX_DAILY_PLAYER_REQUESTS = original_limit
 
 
+def test_model_call_budget_reserves_max_output_tokens_for_user_and_project() -> None:
+    settings.INTERNAL_ENGINE_SERVICE_TOKEN = "test-token"
+    settings.AI_ENABLED = False
+    settings.OPENAI_API_KEY = None
+    original_user_limit = settings.MAX_DAILY_PLAYER_TOKENS
+    original_project_limit = settings.MAX_DAILY_PROJECT_TOKENS
+    settings.MAX_DAILY_PLAYER_TOKENS = 100
+    settings.MAX_DAILY_PROJECT_TOKENS = 100
+
+    with session() as db:
+        db.log_model_request(
+            request_id="req_budget_user",
+            owner_user_id="budget_user",
+            campaign_id="campaign_budget_user",
+            turn_id="turn_budget_user",
+            agent_name="Narrator",
+            model="gpt-4.1-mini",
+            estimated_input_tokens=20,
+            actual_input_tokens=50,
+            actual_output_tokens=0,
+            latency_ms=10,
+            success=True,
+        )
+        db.log_model_request(
+            request_id="req_budget_project",
+            owner_user_id="budget_user",
+            campaign_id="campaign_budget_project",
+            turn_id="turn_budget_project",
+            agent_name="Narrator",
+            model="gpt-4.1-mini",
+            estimated_input_tokens=20,
+            actual_input_tokens=50,
+            actual_output_tokens=0,
+            latency_ms=10,
+            success=True,
+        )
+
+        with pytest.raises(HTTPException):
+            from app.guardrails.rate_limits import validate_daily_token_limit
+            validate_daily_token_limit(db, "budget_user", 30, max_output_tokens=41)
+
+        with pytest.raises(HTTPException):
+            from app.guardrails.rate_limits import validate_project_token_limit
+            validate_project_token_limit(db, 30, max_output_tokens=41)
+
+    settings.MAX_DAILY_PLAYER_TOKENS = original_user_limit
+    settings.MAX_DAILY_PROJECT_TOKENS = original_project_limit
+
+
 def test_chat_daily_token_limit_returns_structured_error() -> None:
     settings.INTERNAL_ENGINE_SERVICE_TOKEN = "test-token"
     settings.AI_ENABLED = False

@@ -18,8 +18,8 @@ ModelOutputT = TypeVar("ModelOutputT")
 
 @dataclass
 class ModelUsage:
-    input_tokens: int
-    output_tokens: int
+    input_tokens: int | None
+    output_tokens: int | None
 
 
 @dataclass
@@ -189,8 +189,8 @@ class ModelClient:
         if input_tokens is None and output_tokens is None:
             return None
         return ModelUsage(
-            input_tokens=int(input_tokens or 0),
-            output_tokens=int(output_tokens or 0),
+            input_tokens=int(input_tokens) if input_tokens is not None else None,
+            output_tokens=int(output_tokens) if output_tokens is not None else None,
         )
 
     def _extract_response_text(self, response: Any) -> str:

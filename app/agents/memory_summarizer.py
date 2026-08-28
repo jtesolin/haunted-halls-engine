@@ -54,11 +54,14 @@ class MemorySummarizerAgent(BaseAgent):
             summary_text = result.output if isinstance(result, ModelCallResult) else result
             summary = (summary_text or "").strip()
             if summary:
-                token_usage = (
-                    (usage.input_tokens + usage.output_tokens)
-                    if usage is not None
-                    else estimate_tokens(summary)
-                )
+                token_usage = None
+                if usage is not None:
+                    input_value = usage.input_tokens if usage.input_tokens is not None else 0
+                    output_value = usage.output_tokens if usage.output_tokens is not None else 0
+                    if usage.input_tokens is not None or usage.output_tokens is not None:
+                        token_usage = input_value + output_value
+                if token_usage is None:
+                    token_usage = estimate_tokens(summary)
                 return MemorySummarizerOutput(
                     summary_text=summary,
                     input_tokens=usage.input_tokens if usage is not None else None,

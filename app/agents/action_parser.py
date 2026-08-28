@@ -137,6 +137,12 @@ class ActionParserAgent(BaseAgent):
             raise ActionParseProviderError("Action parser model call failed.") from exc
 
         if parsed_output is not None:
+            token_usage = None
+            if usage is not None:
+                input_value = usage.input_tokens if usage.input_tokens is not None else 0
+                output_value = usage.output_tokens if usage.output_tokens is not None else 0
+                if usage.input_tokens is not None or usage.output_tokens is not None:
+                    token_usage = input_value + output_value
             return ParsedAction(
                 raw_text=message,
                 action=parsed_output.action,
@@ -148,9 +154,15 @@ class ActionParserAgent(BaseAgent):
                 parser_notes=parsed_output.parser_notes,
                 input_tokens=usage.input_tokens if usage is not None else None,
                 output_tokens=usage.output_tokens if usage is not None else None,
-                token_usage=(usage.input_tokens + usage.output_tokens) if usage is not None else None,
+                token_usage=token_usage,
             )
 
+        token_usage = None
+        if usage is not None:
+            input_value = usage.input_tokens if usage.input_tokens is not None else 0
+            output_value = usage.output_tokens if usage.output_tokens is not None else 0
+            if usage.input_tokens is not None or usage.output_tokens is not None:
+                token_usage = input_value + output_value
         return ParsedAction(
             raw_text=message,
             action=ActionType.UNKNOWN,
@@ -162,7 +174,7 @@ class ActionParserAgent(BaseAgent):
             parser_notes="Action parser did not return valid structured output.",
             input_tokens=usage.input_tokens if usage is not None else None,
             output_tokens=usage.output_tokens if usage is not None else None,
-            token_usage=(usage.input_tokens + usage.output_tokens) if usage is not None else None,
+            token_usage=token_usage,
         )
 
     def _build_messages(

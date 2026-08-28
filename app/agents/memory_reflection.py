@@ -58,11 +58,14 @@ class MemoryReflectionAgent(BaseAgent):
             raw_facts = result.output if isinstance(result, ModelCallResult) else result
             facts = self._parse_reflection_facts(raw_facts or "")
             if facts:
-                token_usage = (
-                    (usage.input_tokens + usage.output_tokens)
-                    if usage is not None
-                    else estimate_tokens(raw_facts or "")
-                )
+                token_usage = None
+                if usage is not None:
+                    input_value = usage.input_tokens if usage.input_tokens is not None else 0
+                    output_value = usage.output_tokens if usage.output_tokens is not None else 0
+                    if usage.input_tokens is not None or usage.output_tokens is not None:
+                        token_usage = input_value + output_value
+                if token_usage is None:
+                    token_usage = estimate_tokens(raw_facts or "")
                 return MemoryReflectionOutput(
                     memories_to_store=[
                         MemoryCandidate(text=fact, importance=1.0, memory_type="reflection") for fact in facts

@@ -70,7 +70,12 @@ class NarratorAgent(BaseAgent):
         if isinstance(result, ModelCallResult):
             reply = result.output or ""
             usage = result.usage
-            total_usage = (usage.input_tokens + usage.output_tokens) if usage is not None else None
+            total_usage = None
+            if usage is not None:
+                input_value = usage.input_tokens if usage.input_tokens is not None else 0
+                output_value = usage.output_tokens if usage.output_tokens is not None else 0
+                if usage.input_tokens is not None or usage.output_tokens is not None:
+                    total_usage = input_value + output_value
             return NarratorAgentOutput(
                 reply_text=reply,
                 input_tokens=usage.input_tokens if usage is not None else None,
