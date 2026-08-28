@@ -50,14 +50,20 @@ class MemorySummarizerAgent(BaseAgent):
                 timeout=15,
                 return_usage=True,
             )
+            usage = result.usage if isinstance(result, ModelCallResult) else None
             summary_text = result.output if isinstance(result, ModelCallResult) else result
             summary = (summary_text or "").strip()
             if summary:
+                token_usage = (
+                    (usage.input_tokens + usage.output_tokens)
+                    if usage is not None
+                    else estimate_tokens(summary)
+                )
                 return MemorySummarizerOutput(
                     summary_text=summary,
-                    input_tokens=None,
-                    output_tokens=None,
-                    token_usage=estimate_tokens(summary),
+                    input_tokens=usage.input_tokens if usage is not None else None,
+                    output_tokens=usage.output_tokens if usage is not None else None,
+                    token_usage=token_usage,
                 )
 
         fallback_summary = self._build_fallback_summary(payload)

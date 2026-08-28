@@ -14,7 +14,7 @@ from app.ai.prompts import action_parser_prompt
 from app.game.items import ensure_items_state, inventory_item_ids, room_item_ids
 from app.game.world import DEFAULT_WORLD
 from app.guardrails.model_policy import ModelPolicy
-from app.guardrails.token_budget import TokenBudget
+from app.guardrails.token_budget import TokenBudget, estimate_tokens
 from app.schemas.chat import ActionParserOutput, ActionType, ParsedAction
 
 
@@ -49,6 +49,42 @@ class ActionParserAgent(BaseAgent):
     def name(self) -> str:
         return "ActionParser"
 
+    def build_provider_request(
+        self,
+        *,
+        message: str,
+        campaign_state: str,
+        recent_turns: list[dict[str, str]],
+        memory_context: list[dict[str, str]] | None = None,
+    ) -> list[ChatCompletionMessageParam]:
+        parser_context = self._build_parser_context(campaign_state)
+        return self._build_messages(
+            message=message,
+            parser_context=parser_context,
+            recent_turns=recent_turns,
+            memory_context=memory_context or [],
+        )
+
+    def estimate_provider_input_tokens(
+        self,
+        *,
+        message: str,
+        campaign_state: str,
+        recent_turns: list[dict[str, str]],
+        memory_context: list[dict[str, str]] | None = None,
+    ) -> int:
+        request = self.build_provider_request(
+            message=message,
+            campaign_state=campaign_state,
+            recent_turns=recent_turns,
+            memory_context=memory_context,
+        )
+        return sum(
+            estimate_tokens(str(item.get("content", "")))
+            for item in request
+            if isinstance(item, dict) and isinstance(item.get("content"), str)
+        )
+
     async def parse(
         self,
         *,
@@ -66,12 +102,11 @@ class ActionParserAgent(BaseAgent):
             )
             return self._fallback_parse(message)
 
-        parser_context = self._build_parser_context(campaign_state)
-        messages = self._build_messages(
+        messages = self.build_provider_request(
             message=message,
-            parser_context=parser_context,
+            campaign_state=campaign_state,
             recent_turns=recent_turns,
-            memory_context=memory_context or [],
+            memory_context=memory_context,
         )
         try:
             parsed_result = await model_client.generate_structured(

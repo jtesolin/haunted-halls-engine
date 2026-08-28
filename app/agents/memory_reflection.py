@@ -54,16 +54,22 @@ class MemoryReflectionAgent(BaseAgent):
                 timeout=15,
                 return_usage=True,
             )
+            usage = result.usage if isinstance(result, ModelCallResult) else None
             raw_facts = result.output if isinstance(result, ModelCallResult) else result
             facts = self._parse_reflection_facts(raw_facts or "")
             if facts:
+                token_usage = (
+                    (usage.input_tokens + usage.output_tokens)
+                    if usage is not None
+                    else estimate_tokens(raw_facts or "")
+                )
                 return MemoryReflectionOutput(
                     memories_to_store=[
                         MemoryCandidate(text=fact, importance=1.0, memory_type="reflection") for fact in facts
                     ],
-                    input_tokens=None,
-                    output_tokens=None,
-                    token_usage=estimate_tokens(raw_facts or ""),
+                    input_tokens=usage.input_tokens if usage is not None else None,
+                    output_tokens=usage.output_tokens if usage is not None else None,
+                    token_usage=token_usage,
                 )
 
         fallback_facts = self._fallback_reflection_facts(

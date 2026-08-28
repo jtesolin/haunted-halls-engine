@@ -32,10 +32,14 @@ def validate_project_request_limit(db: Repository) -> None:
 
 
 def validate_daily_token_limit(
-    db: Repository, owner_user_id: str, estimated_input_tokens: int
+    db: Repository,
+    owner_user_id: str,
+    estimated_input_tokens: int,
+    max_output_tokens: int = 0,
 ) -> None:
     token_sum = db.sum_user_model_tokens_since(owner_user_id, _daily_start())
-    if token_sum + estimated_input_tokens > settings.MAX_DAILY_PLAYER_TOKENS:
+    pending_tokens = estimated_input_tokens + max_output_tokens
+    if token_sum + pending_tokens > settings.MAX_DAILY_PLAYER_TOKENS:
         raise usage_limit_error(
             code="daily_token_limit",
             detail="Daily token limit reached.",
@@ -44,10 +48,11 @@ def validate_daily_token_limit(
 
 
 def validate_project_token_limit(
-    db: Repository, estimated_tokens: int
+    db: Repository, estimated_tokens: int, max_output_tokens: int = 0
 ) -> None:
     token_sum = db.sum_project_model_tokens_since(_daily_start())
-    if token_sum + estimated_tokens > settings.MAX_DAILY_PROJECT_TOKENS:
+    pending_tokens = estimated_tokens + max_output_tokens
+    if token_sum + pending_tokens > settings.MAX_DAILY_PROJECT_TOKENS:
         raise usage_limit_error(
             code="daily_project_token_limit",
             detail="Daily project token limit reached.",
