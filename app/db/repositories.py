@@ -534,17 +534,27 @@ class Repository:
         role: str,
         content: str,
     ) -> TurnDBModel:
+        existing = self.conn.execute(
+            select(turns).where(turns.c.turn_id == turn_id)
+        ).mappings().first()
+        if existing is not None:
+            return TurnDBModel(
+                existing["turn_id"],
+                existing["campaign_id"],
+                existing["role"],
+                existing["content"],
+                datetime.fromisoformat(existing["created_at"]),
+            )
+
         created_at = datetime.utcnow().isoformat()
         self.conn.execute(
-            insert(turns)
-            .values(
+            insert(turns).values(
                 turn_id=turn_id,
                 campaign_id=campaign_id,
                 role=role,
                 content=content,
                 created_at=created_at,
             )
-            .prefix_with("OR IGNORE")
         )
         return TurnDBModel(
             turn_id, campaign_id, role, content, datetime.fromisoformat(created_at)
