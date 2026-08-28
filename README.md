@@ -8,6 +8,22 @@ Canonical project status for the two-repo system lives in:
 
 Keep this document updated as engine changes affect architecture, behavior, roadmap, or phase completion.
 
+## Local Runtime Configuration
+
+- Copy `.env.example` to `.env` and fill in local values; `.env` is git-ignored and excluded from the Docker image.
+- `.env` is read from the host at runtime, including by the sibling `haunted-halls` Docker Compose stack via `env_file`.
+- AI is treated as enabled when `AI_ENABLED` is true or a non-empty `OPENAI_API_KEY` is present; otherwise the engine returns stub narration.
+- Under Compose, `DATABASE_URL` and `INTERNAL_ENGINE_SERVICE_TOKEN` are set explicitly by the Compose file and override values from this `.env`.
+
+## Container Debugging
+
+- The sibling `haunted-halls` repository owns the Compose stack; start the debug stack there with `make debug-up`.
+- The Dockerfile `debug` stage installs `requirements-dev.txt` (adds `debugpy`) and starts Uvicorn under `debugpy --listen 0.0.0.0:5678`; the production `runner` stage is unchanged and remains the default build target.
+- `debugpy` does not wait for a client, so the container starts and passes its health check whether or not a debugger is attached.
+- Attach with the `Attach: Haunted Halls Engine (Docker)` configuration in `.vscode/launch.json`; the existing `Python Debugger: FastAPI (dev)` launch configuration for non-container debugging still applies.
+- Uvicorn reload is intentionally disabled in the debug container because subprocess reloading breaks breakpoint attachment; restart the engine container after Python changes.
+- For local (non-container) development with debug tooling, use `make install-dev`.
+
 ## Local Service Authentication
 
 - Generate the shared service token with `openssl rand -hex 32`.

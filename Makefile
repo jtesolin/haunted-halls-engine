@@ -2,10 +2,10 @@ VENV=.venv
 PYTHON=$(VENV)/bin/python
 PIP=$(VENV)/bin/pip
 
-.PHONY: help venv install start dev test lint typecheck clean
+.PHONY: help venv install install-dev start dev test lint typecheck clean
 
 help:
-	@echo "Targets: venv, install, start, dev, test, lint, clean"
+	@echo "Targets: venv, install, install-dev, start, dev, test, lint, typecheck, clean"
 
 venv:
 	$(PYTHON) -m venv .venv
@@ -13,6 +13,9 @@ venv:
 
 install:
 	$(PIP) install -r requirements.txt
+
+install-dev:
+	$(PIP) install -r requirements-dev.txt
 
 start:
 	$(PYTHON) -m uvicorn app.main:app --reload --port 8000

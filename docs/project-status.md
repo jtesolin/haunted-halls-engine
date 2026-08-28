@@ -88,6 +88,8 @@ The D2 containerization baseline is implemented across both repositories:
 * Existing internal service authentication and trusted user-context propagation preserved in Compose.
 * FastAPI `/health` and frontend `/api/health` container health checks.
 * Docker-managed SQLite persistence through the Compose `engine-data` volume.
+* Runtime configuration injection: Compose loads the engine's host `.env` through `env_file` (optional) so containerized runs use the developer's real AI configuration, while Compose-level `environment` values still pin `DATABASE_URL` and the shared internal service token. `.env` files remain excluded from images.
+* Local container debugging: a `docker-compose.debug.yml` override adds debug Dockerfile stages, source bind mounts, `debugpy` on 5678, and the Node inspector on 9229, with VS Code attach configurations in both repositories. Production images and CI builds keep using the production stages.
 * CI Docker-build checks that build both images without pushing or deploying them.
 
 The D2 baseline makes both applications reproducibly buildable and runnable as local containers. It does not constitute production deployment.

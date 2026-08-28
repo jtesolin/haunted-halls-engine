@@ -17,6 +17,22 @@
             ],
             "subProcess": true,
             "jinja": true
+        },
+        {
+            "name": "Attach: Haunted Halls Engine (Docker)",
+            "type": "debugpy",
+            "request": "attach",
+            "connect": {
+                "host": "localhost",
+                "port": 5678
+            },
+            "pathMappings": [
+                {
+                    "localRoot": "${workspaceFolder}/app",
+                    "remoteRoot": "/app/app"
+                }
+            ],
+            "justMyCode": true
         }
     ]
 }

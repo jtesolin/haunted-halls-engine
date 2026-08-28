@@ -93,4 +93,4 @@ jobs:
         uses: actions/checkout@v7
 
       - name: Build Docker image
-        run: docker build --tag haunted-halls-engine:ci .
+        run: docker build --target runner --tag haunted-halls-engine:ci .
