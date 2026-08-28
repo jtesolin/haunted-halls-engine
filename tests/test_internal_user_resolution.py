@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from datetime import datetime
 
+from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 from fastapi.testclient import TestClient
 
@@ -171,9 +172,9 @@ def test_no_provider_tokens_or_raw_claims_are_persisted() -> None:
 
     with session() as db:
         row = db.conn.execute(
-            "SELECT * FROM internal_users WHERE provider_subject = ?",
-            ("persist-check",),
-        ).fetchone()
+            text("SELECT * FROM internal_users WHERE provider_subject = :provider_subject"),
+            {"provider_subject": "persist-check"},
+        ).mappings().fetchone()
         assert row is not None
         serialized = json.dumps(dict(row))
         assert "id_token" not in serialized

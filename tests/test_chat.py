@@ -4,6 +4,7 @@ import json
 import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
+from sqlalchemy import text
 
 from app.agents import action_parser as action_parser_module
 from app.agents import narrator as narrator_module
@@ -241,14 +242,24 @@ def test_chat_daily_request_limit_rejects_before_persisting_side_effects() -> No
         with session() as db:
             counts_before = {
                 "campaigns": int(
-                    db.conn.execute("SELECT COUNT(*) AS total FROM campaigns").fetchone()["total"]
+                    (lambda row: row["total"] if row is not None else 0)(
+                        db.conn.execute(text("SELECT COUNT(*) AS total FROM campaigns")).mappings().fetchone()
+                    )
                 ),
-                "turns": int(db.conn.execute("SELECT COUNT(*) AS total FROM turns").fetchone()["total"]),
+                "turns": int(
+                    (lambda row: row["total"] if row is not None else 0)(
+                        db.conn.execute(text("SELECT COUNT(*) AS total FROM turns")).mappings().fetchone()
+                    )
+                ),
                 "events": int(
-                    db.conn.execute("SELECT COUNT(*) AS total FROM game_events").fetchone()["total"]
+                    (lambda row: row["total"] if row is not None else 0)(
+                        db.conn.execute(text("SELECT COUNT(*) AS total FROM game_events")).mappings().fetchone()
+                    )
                 ),
                 "requests": int(
-                    db.conn.execute("SELECT COUNT(*) AS total FROM model_requests").fetchone()["total"]
+                    (lambda row: row["total"] if row is not None else 0)(
+                        db.conn.execute(text("SELECT COUNT(*) AS total FROM model_requests")).mappings().fetchone()
+                    )
                 ),
             }
 
@@ -267,14 +278,24 @@ def test_chat_daily_request_limit_rejects_before_persisting_side_effects() -> No
         with session() as db:
             counts_after = {
                 "campaigns": int(
-                    db.conn.execute("SELECT COUNT(*) AS total FROM campaigns").fetchone()["total"]
+                    (lambda row: row["total"] if row is not None else 0)(
+                        db.conn.execute(text("SELECT COUNT(*) AS total FROM campaigns")).mappings().fetchone()
+                    )
                 ),
-                "turns": int(db.conn.execute("SELECT COUNT(*) AS total FROM turns").fetchone()["total"]),
+                "turns": int(
+                    (lambda row: row["total"] if row is not None else 0)(
+                        db.conn.execute(text("SELECT COUNT(*) AS total FROM turns")).mappings().fetchone()
+                    )
+                ),
                 "events": int(
-                    db.conn.execute("SELECT COUNT(*) AS total FROM game_events").fetchone()["total"]
+                    (lambda row: row["total"] if row is not None else 0)(
+                        db.conn.execute(text("SELECT COUNT(*) AS total FROM game_events")).mappings().fetchone()
+                    )
                 ),
                 "requests": int(
-                    db.conn.execute("SELECT COUNT(*) AS total FROM model_requests").fetchone()["total"]
+                    (lambda row: row["total"] if row is not None else 0)(
+                        db.conn.execute(text("SELECT COUNT(*) AS total FROM model_requests")).mappings().fetchone()
+                    )
                 ),
             }
 
@@ -813,9 +834,9 @@ def test_orchestrator_logs_memory_agent_usage(monkeypatch) -> None:
 
     with session() as db:
         rows = db.conn.execute(
-            "SELECT agent_name FROM model_requests WHERE campaign_id = ?",
-            (response.campaign_id,),
-        ).fetchall()
+            text("SELECT agent_name FROM model_requests WHERE campaign_id = :campaign_id"),
+            {"campaign_id": response.campaign_id},
+        ).mappings().fetchall()
         agent_names = {row["agent_name"] for row in rows}
         assert "MemorySummarizer" in agent_names
         assert "MemoryReflection" in agent_names

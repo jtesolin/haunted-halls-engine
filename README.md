@@ -17,7 +17,7 @@ Keep this document updated as engine changes affect architecture, behavior, road
 
 ## Database Migrations
 
-SQLAlchemy Core is the engine persistence layer and SQLite remains the default local database. Alembic owns the schema lifecycle; application startup does not create or migrate tables.
+SQLAlchemy Core is the engine persistence layer, SQLite remains the default lightweight local database, and PostgreSQL is now a supported engine database. Alembic owns the schema lifecycle; application startup does not create or migrate tables.
 
 For a fresh local database, run:
 
@@ -25,9 +25,9 @@ For a fresh local database, run:
 make db-upgrade
 ```
 
-This D3A migration intentionally does not adopt the old pre-Alembic SQLite schema. Delete and recreate disposable local data before upgrading it. For the Docker Compose database, use `docker compose down -v` from `../haunted-halls` to reset the existing SQLite volume, then start the stack again. PostgreSQL support is deferred to D3B.
+This engine keeps SQLite as the default for local development and tests, while PostgreSQL is supported through the SQLAlchemy `postgresql+psycopg://` driver. Delete and recreate disposable local data before upgrading it. For the Docker Compose database, use `docker compose down -v` from `../haunted-halls` to reset the existing SQLite volume, then start the stack again. A local PostgreSQL Compose service remains deferred to D3C.
 
-The underlying commands are `alembic upgrade head`, `alembic current`, and `alembic history`. To use another local database, set `DATABASE_URL` before invoking them.
+The underlying commands are `alembic upgrade head`, `alembic current`, and `alembic history`. To use another local database, set `DATABASE_URL` before invoking them. For a PostgreSQL-backed test run, set `TEST_DATABASE_URL` before invoking pytest.
 
 ## Container Debugging
 
