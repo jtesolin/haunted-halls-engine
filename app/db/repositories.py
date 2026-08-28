@@ -6,7 +6,8 @@ from datetime import timezone
 from typing import Any, Optional
 from uuid import uuid4
 
-from sqlalchemy import Connection, and_, delete, func, insert, select, update
+from sqlalchemy import and_, delete, func, insert, select, update
+from sqlalchemy.engine import Connection
 from sqlalchemy.exc import IntegrityError
 
 from app.db.models import (
