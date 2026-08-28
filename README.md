@@ -8,6 +8,13 @@ Canonical project status for the two-repo system lives in:
 
 Keep this document updated as engine changes affect architecture, behavior, roadmap, or phase completion.
 
+## Local Runtime Configuration
+
+- Copy `.env.example` to `.env` and fill in local values; `.env` is git-ignored and excluded from the Docker image.
+- `.env` is read from the host at runtime, including by the sibling `haunted-halls` Docker Compose stack via `env_file`.
+- AI is treated as enabled when `AI_ENABLED` is true or a non-empty `OPENAI_API_KEY` is present; otherwise the engine returns stub narration.
+- Under Compose, `DATABASE_URL` and `INTERNAL_ENGINE_SERVICE_TOKEN` are set explicitly by the Compose file and override values from this `.env`.
+
 ## Local Service Authentication
 
 - Generate the shared service token with `openssl rand -hex 32`.
