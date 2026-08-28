@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import time
+from typing import Any, cast
 from uuid import uuid4
 
 from fastapi import HTTPException
@@ -19,6 +20,8 @@ from app.guardrails.rate_limits import (
     validate_campaign_turn_limit,
     validate_daily_request_limit,
     validate_daily_token_limit,
+    validate_project_request_limit,
+    validate_project_token_limit,
 )
 from app.guardrails.token_budget import (
     TokenBudget,
@@ -45,6 +48,20 @@ logger = logging.getLogger(__name__)
 
 
 class ChatOrchestrator:
+    def _check_model_call_budget(self, db, owner_user_id: str, estimated_input_tokens: int) -> None:
+        validate_daily_token_limit(db, owner_user_id, estimated_input_tokens)
+        validate_project_request_limit(db)
+        validate_project_token_limit(db, estimated_input_tokens)
+
+    def _estimate_payload_tokens(self, payload: object) -> int:
+        payload_obj = cast(Any, payload)
+        payload_json = (
+            payload_obj.model_dump_json(exclude_none=True)
+            if hasattr(payload_obj, "model_dump_json")
+            else str(payload_obj)
+        )
+        return estimate_tokens(payload_json)
+
     def __init__(self) -> None:
         self.action_parser_agent = ActionParserAgent()
         self.narrator_agent = NarratorAgent()
@@ -208,6 +225,19 @@ class ChatOrchestrator:
 
             parser_start_time = time.perf_counter()
             try:
+                parser_prompt = self.action_parser_agent._build_messages(
+                    message=request.message,
+                    parser_context=self.action_parser_agent._build_parser_context(campaign_state),
+                    recent_turns=recent_turns,
+                    memory_context=memory_context or [],
+                )
+                parser_estimated_input_tokens = sum(
+                    estimate_tokens(str(message.get("content", "")))
+                    for message in parser_prompt
+                    if isinstance(message, dict)
+                    and isinstance(message.get("content"), str)
+                )
+                self._check_model_call_budget(db, owner_user_id, parser_estimated_input_tokens)
                 parsed_action = await self.action_parser_agent.parse(
                     message=request.message,
                     campaign_state=campaign_state,
@@ -267,6 +297,18 @@ class ChatOrchestrator:
                 parser_latency_ms = int(
                     (time.perf_counter() - parser_start_time) * 1000
                 )
+                parser_input_tokens = getattr(parsed_action, "input_tokens", None)
+                parser_output_tokens = getattr(parsed_action, "output_tokens", None)
+                actual_input_tokens = (
+                    int(parser_input_tokens)
+                    if parser_input_tokens is not None
+                    else parser_estimated_input_tokens
+                )
+                actual_output_tokens = (
+                    int(parser_output_tokens)
+                    if parser_output_tokens is not None
+                    else estimate_tokens(parsed_action.model_dump_json())
+                )
                 db.log_model_request(
                     request_id=f"req_{uuid4().hex}",
                     owner_user_id=owner_user_id,
@@ -274,11 +316,9 @@ class ChatOrchestrator:
                     turn_id=player_turn_id,
                     agent_name="ActionParser",
                     model=ModelPolicy.action_parser_model(),
-                    estimated_input_tokens=estimated_input_tokens,
-                    actual_input_tokens=estimated_input_tokens,
-                    actual_output_tokens=estimate_tokens(
-                        parsed_action.model_dump_json()
-                    ),
+                    estimated_input_tokens=parser_estimated_input_tokens,
+                    actual_input_tokens=actual_input_tokens,
+                    actual_output_tokens=actual_output_tokens,
                     latency_ms=parser_latency_ms,
                     success=True,
                     failure_reason=None,
@@ -365,37 +405,35 @@ class ChatOrchestrator:
 
             if not ai_enabled:
                 reply = self._stub_reply(request.message)
-                db.log_model_request(
-                    request_id=f"req_{uuid4().hex}",
-                    owner_user_id=owner_user_id,
-                    campaign_id=campaign_id,
-                    turn_id=assistant_turn_id,
-                    agent_name=agent_name,
-                    model=model,
-                    estimated_input_tokens=estimated_input_tokens,
-                    actual_input_tokens=estimated_input_tokens,
-                    actual_output_tokens=0,
-                    latency_ms=0,
-                    success=True,
-                    failure_reason=None,
-                    cost_estimate=0.0,
-                )
             else:
                 start_time = time.perf_counter()
+                narrator_payload = NarratorAgentInput(
+                    player_message=request.message,
+                    campaign_state=campaign_state,
+                    recent_turns=recent_turns,
+                    relevant_memories=memory_context,
+                    parsed_action=parsed_action,
+                    tool_result=tool_result,
+                )
+                narrator_estimated_input_tokens = self._estimate_payload_tokens(narrator_payload)
+                self._check_model_call_budget(db, owner_user_id, narrator_estimated_input_tokens)
                 try:
                     narrator_output = await self.narrator_agent.generate(
-                        payload=NarratorAgentInput(
-                            player_message=request.message,
-                            campaign_state=campaign_state,
-                            recent_turns=recent_turns,
-                            relevant_memories=memory_context,
-                            parsed_action=parsed_action,
-                            tool_result=tool_result,
-                        ),
+                        payload=narrator_payload,
                         model=model,
                     )
                     reply = narrator_output.reply_text
                     latency_ms = int((time.perf_counter() - start_time) * 1000)
+                    actual_input_tokens = (
+                        narrator_output.input_tokens
+                        if narrator_output.input_tokens is not None
+                        else narrator_estimated_input_tokens
+                    )
+                    actual_output_tokens = (
+                        narrator_output.output_tokens
+                        if narrator_output.output_tokens is not None
+                        else estimate_tokens(reply)
+                    )
                     db.log_model_request(
                         request_id=f"req_{uuid4().hex}",
                         owner_user_id=owner_user_id,
@@ -403,9 +441,9 @@ class ChatOrchestrator:
                         turn_id=assistant_turn_id,
                         agent_name=agent_name,
                         model=model,
-                        estimated_input_tokens=estimated_input_tokens,
-                        actual_input_tokens=estimated_input_tokens,
-                        actual_output_tokens=len(reply) // 1,
+                        estimated_input_tokens=narrator_estimated_input_tokens,
+                        actual_input_tokens=actual_input_tokens,
+                        actual_output_tokens=actual_output_tokens,
                         latency_ms=latency_ms,
                         success=True,
                         failure_reason=None,
@@ -431,8 +469,8 @@ class ChatOrchestrator:
                         turn_id=assistant_turn_id,
                         agent_name=agent_name,
                         model=model,
-                        estimated_input_tokens=estimated_input_tokens,
-                        actual_input_tokens=estimated_input_tokens,
+                        estimated_input_tokens=narrator_estimated_input_tokens,
+                        actual_input_tokens=narrator_estimated_input_tokens,
                         actual_output_tokens=0,
                         latency_ms=latency_ms,
                         success=False,
@@ -532,6 +570,9 @@ class ChatOrchestrator:
                     latest_reply=reply,
                 )
                 summary_start_time = time.perf_counter()
+                summary_estimated_tokens = self._estimate_payload_tokens(summarizer_payload)
+                if ai_enabled:
+                    self._check_model_call_budget(db, owner_user_id, summary_estimated_tokens)
                 try:
                     summary_output = await self.memory_summarizer_agent.summarize(
                         payload=summarizer_payload,
@@ -542,9 +583,8 @@ class ChatOrchestrator:
                         summary_latency_ms = int(
                             (time.perf_counter() - summary_start_time) * 1000
                         )
-                        estimated_tokens = estimate_tokens(
-                            summarizer_payload.model_dump_json()
-                        )
+                        actual_input_tokens = summary_output.input_tokens if summary_output.input_tokens is not None else summary_estimated_tokens
+                        actual_output_tokens = summary_output.output_tokens if summary_output.output_tokens is not None else summary_output.token_usage or estimate_tokens(summary_output.summary_text)
                         db.log_model_request(
                             request_id=f"req_{uuid4().hex}",
                             owner_user_id=owner_user_id,
@@ -552,10 +592,9 @@ class ChatOrchestrator:
                             turn_id=assistant_turn_id,
                             agent_name=self.memory_summarizer_agent.name,
                             model=summary_model,
-                            estimated_input_tokens=estimated_tokens,
-                            actual_input_tokens=estimated_tokens,
-                            actual_output_tokens=summary_output.token_usage
-                            or estimate_tokens(summary_output.summary_text),
+                            estimated_input_tokens=summary_estimated_tokens,
+                            actual_input_tokens=actual_input_tokens,
+                            actual_output_tokens=actual_output_tokens,
                             latency_ms=summary_latency_ms,
                             success=True,
                             failure_reason=None,
@@ -571,9 +610,6 @@ class ChatOrchestrator:
                         summary_latency_ms = int(
                             (time.perf_counter() - summary_start_time) * 1000
                         )
-                        estimated_tokens = estimate_tokens(
-                            summarizer_payload.model_dump_json()
-                        )
                         db.log_model_request(
                             request_id=f"req_{uuid4().hex}",
                             owner_user_id=owner_user_id,
@@ -581,8 +617,8 @@ class ChatOrchestrator:
                             turn_id=assistant_turn_id,
                             agent_name=self.memory_summarizer_agent.name,
                             model=summary_model,
-                            estimated_input_tokens=estimated_tokens,
-                            actual_input_tokens=estimated_tokens,
+                            estimated_input_tokens=summary_estimated_tokens,
+                            actual_input_tokens=summary_estimated_tokens,
                             actual_output_tokens=0,
                             latency_ms=summary_latency_ms,
                             success=False,
@@ -603,6 +639,9 @@ class ChatOrchestrator:
                     current_summary=current_summary,
                 )
                 reflection_start_time = time.perf_counter()
+                reflection_estimated_tokens = self._estimate_payload_tokens(reflection_payload)
+                if ai_enabled:
+                    self._check_model_call_budget(db, owner_user_id, reflection_estimated_tokens)
                 try:
                     reflection_output = await self.memory_reflection_agent.reflect(
                         payload=reflection_payload,
@@ -613,9 +652,8 @@ class ChatOrchestrator:
                         reflection_latency_ms = int(
                             (time.perf_counter() - reflection_start_time) * 1000
                         )
-                        estimated_tokens = estimate_tokens(
-                            reflection_payload.model_dump_json()
-                        )
+                        actual_input_tokens = reflection_output.input_tokens if reflection_output.input_tokens is not None else reflection_estimated_tokens
+                        actual_output_tokens = reflection_output.output_tokens if reflection_output.output_tokens is not None else reflection_output.token_usage or estimate_tokens("\n".join(item.text for item in reflection_output.memories_to_store))
                         db.log_model_request(
                             request_id=f"req_{uuid4().hex}",
                             owner_user_id=owner_user_id,
@@ -623,15 +661,9 @@ class ChatOrchestrator:
                             turn_id=assistant_turn_id,
                             agent_name=self.memory_reflection_agent.name,
                             model=reflection_model,
-                            estimated_input_tokens=estimated_tokens,
-                            actual_input_tokens=estimated_tokens,
-                            actual_output_tokens=reflection_output.token_usage
-                            or estimate_tokens(
-                                "\n".join(
-                                    item.text
-                                    for item in reflection_output.memories_to_store
-                                )
-                            ),
+                            estimated_input_tokens=reflection_estimated_tokens,
+                            actual_input_tokens=actual_input_tokens,
+                            actual_output_tokens=actual_output_tokens,
                             latency_ms=reflection_latency_ms,
                             success=True,
                             failure_reason=None,
@@ -648,9 +680,6 @@ class ChatOrchestrator:
                         reflection_latency_ms = int(
                             (time.perf_counter() - reflection_start_time) * 1000
                         )
-                        estimated_tokens = estimate_tokens(
-                            reflection_payload.model_dump_json()
-                        )
                         db.log_model_request(
                             request_id=f"req_{uuid4().hex}",
                             owner_user_id=owner_user_id,
@@ -658,8 +687,8 @@ class ChatOrchestrator:
                             turn_id=assistant_turn_id,
                             agent_name=self.memory_reflection_agent.name,
                             model=reflection_model,
-                            estimated_input_tokens=estimated_tokens,
-                            actual_input_tokens=estimated_tokens,
+                            estimated_input_tokens=reflection_estimated_tokens,
+                            actual_input_tokens=reflection_estimated_tokens,
                             actual_output_tokens=0,
                             latency_ms=reflection_latency_ms,
                             success=False,
@@ -682,25 +711,31 @@ class ChatOrchestrator:
         recent_turns: list[dict[str, str]],
         message: str,
     ) -> str:
-        estimated_input_tokens = estimate_tokens(message)
+        narrator_payload = NarratorAgentInput(
+            player_message=message,
+            campaign_state=campaign_state,
+            recent_turns=recent_turns,
+        )
+        estimated_input_tokens = self._estimate_payload_tokens(narrator_payload)
         validate_request_budget(
             estimated_input_tokens, TokenBudget.narrator_max_output_tokens()
         )
-        validate_daily_request_limit(db, owner_user_id)
-        validate_daily_token_limit(db, owner_user_id, estimated_input_tokens)
+        self._check_model_call_budget(db, owner_user_id, estimated_input_tokens)
 
         start_time = time.perf_counter()
         try:
             narrator_output = await self.narrator_agent.generate(
-                payload=NarratorAgentInput(
-                    player_message=message,
-                    campaign_state=campaign_state,
-                    recent_turns=recent_turns,
-                ),
+                payload=narrator_payload,
                 model=model,
             )
             reply = narrator_output.reply_text
             latency_ms = int((time.perf_counter() - start_time) * 1000)
+            actual_input_tokens = (
+                narrator_output.input_tokens if narrator_output.input_tokens is not None else estimated_input_tokens
+            )
+            actual_output_tokens = (
+                narrator_output.output_tokens if narrator_output.output_tokens is not None else estimate_tokens(reply)
+            )
             db.log_model_request(
                 request_id=f"req_{uuid4().hex}",
                 owner_user_id=owner_user_id,
@@ -709,8 +744,8 @@ class ChatOrchestrator:
                 agent_name=agent_name,
                 model=model,
                 estimated_input_tokens=estimated_input_tokens,
-                actual_input_tokens=estimated_input_tokens,
-                actual_output_tokens=len(reply),
+                actual_input_tokens=actual_input_tokens,
+                actual_output_tokens=actual_output_tokens,
                 latency_ms=latency_ms,
                 success=True,
                 failure_reason=None,

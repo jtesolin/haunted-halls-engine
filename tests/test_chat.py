@@ -229,6 +229,119 @@ def test_delete_campaign_requires_authorization() -> None:
     assert response.status_code == 401
 
 
+def test_chat_request_count_tracks_user_turns_only(monkeypatch) -> None:
+    settings.INTERNAL_ENGINE_SERVICE_TOKEN = "test-token"
+    settings.AI_ENABLED = True
+    settings.OPENAI_API_KEY = "test-key"
+    client = TestClient(app)
+    headers = _user_scoped_headers(client, "chat-request-count")
+    user_id = _resolved_internal_user_id(client, "chat-request-count")
+
+    async def fake_generate_structured(*, messages, **kwargs):
+        return ActionParserOutput(
+            action=ActionType.MOVE,
+            target="north",
+            parameters=ActionParserParameters(),
+            stealth=False,
+            confidence=0.9,
+            parse_status="ok",
+            parser_notes=None,
+        )
+
+    async def fake_generate_text(*, messages, **kwargs):
+        return "A haunted reply"
+
+    monkeypatch.setattr(
+        action_parser_module.model_client,
+        "generate_structured",
+        fake_generate_structured,
+    )
+    monkeypatch.setattr(
+        narrator_module.model_client,
+        "generate_text",
+        fake_generate_text,
+    )
+
+    response = client.post(
+        "/api/chat",
+        json={"message": "hello"},
+        headers=headers,
+    )
+
+    assert response.status_code == 200
+    with session() as db:
+        request_count = db.count_user_requests_since(user_id, "2000-01-01T00:00:00")
+        turn_row = db.conn.execute(
+            text(
+                "SELECT COUNT(*) AS total FROM turns JOIN campaigns ON turns.campaign_id = campaigns.campaign_id "
+                "WHERE campaigns.owner_user_id = :user_id AND turns.role = 'user'"
+            ),
+            {"user_id": user_id},
+        ).mappings().fetchone()
+
+    assert request_count == 1
+    assert turn_row is not None
+    assert int(turn_row["total"]) == 1
+
+
+def test_usage_aggregation_uses_provider_tokens_and_estimates_missing_usage() -> None:
+    settings.AI_ENABLED = False
+    settings.OPENAI_API_KEY = None
+    user_id = "user_usage_aggregate"
+    with session() as db:
+        db.log_model_request(
+            request_id="req_usage_1",
+            owner_user_id=user_id,
+            campaign_id="campaign_usage_1",
+            turn_id="turn_usage_1",
+            agent_name="Narrator",
+            model="gpt-4.1-mini",
+            estimated_input_tokens=250,
+            actual_input_tokens=180,
+            actual_output_tokens=72,
+            latency_ms=123,
+            success=True,
+        )
+        db.log_model_request(
+            request_id="req_usage_2",
+            owner_user_id=user_id,
+            campaign_id="campaign_usage_1",
+            turn_id="turn_usage_2",
+            agent_name="ActionParser",
+            model="gpt-4.1-mini",
+            estimated_input_tokens=200,
+            actual_input_tokens=0,
+            actual_output_tokens=0,
+            latency_ms=210,
+            success=True,
+        )
+
+        assert db.sum_user_model_tokens_since(user_id, "2000-01-01T00:00:00") == 452
+
+
+def test_ai_disabled_stub_does_not_create_model_requests() -> None:
+    settings.INTERNAL_ENGINE_SERVICE_TOKEN = "test-token"
+    settings.AI_ENABLED = False
+    settings.OPENAI_API_KEY = None
+    client = TestClient(app)
+    headers = _user_scoped_headers(client, "chat-ai-disabled-no-requests")
+
+    response = client.post(
+        "/api/chat",
+        json={"message": "hello"},
+        headers=headers,
+    )
+
+    assert response.status_code == 200
+    with session() as db:
+        total_row = db.conn.execute(
+            text("SELECT COUNT(*) AS total FROM model_requests")
+        ).mappings().fetchone()
+
+    assert total_row is not None
+    assert int(total_row["total"]) == 0
+
+
 def test_chat_daily_request_limit_rejects_before_persisting_side_effects() -> None:
     settings.INTERNAL_ENGINE_SERVICE_TOKEN = "test-token"
     settings.AI_ENABLED = False

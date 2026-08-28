@@ -74,6 +74,8 @@ Next.js is the public application boundary. Google OIDC authentication occurs th
 * Model policies and token budgets implemented.
 * Input validation, rate limiting, usage limits, and model guardrails implemented.
 * Model request/usage information persisted.
+* Daily usage accounting now counts authenticated user turns at the top level while preserving model-call telemetry for internal agent requests and provider usage when available.
+* Guardrail checks now evaluate before each provider call and reject over-limit requests cleanly without mutating chat state when the daily budget is exhausted.
 
 ### Phase 3 — Production Infrastructure
 

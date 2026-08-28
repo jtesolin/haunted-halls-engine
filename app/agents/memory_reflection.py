@@ -7,7 +7,7 @@ from openai.types.chat import ChatCompletionMessageParam
 from pydantic import BaseModel, Field
 
 from app.agents.base import BaseAgent
-from app.ai.model_client import model_client
+from app.ai.model_client import ModelCallResult, model_client
 from app.guardrails.model_policy import ModelPolicy
 from app.guardrails.token_budget import TokenBudget, estimate_tokens
 
@@ -27,6 +27,8 @@ class MemoryReflectionInput(BaseModel):
 
 class MemoryReflectionOutput(BaseModel):
     memories_to_store: list[MemoryCandidate] = Field(default_factory=list)
+    input_tokens: int | None = None
+    output_tokens: int | None = None
     token_usage: int | None = None
 
 
@@ -44,20 +46,24 @@ class MemoryReflectionAgent(BaseAgent):
     ) -> MemoryReflectionOutput:
         if ai_enabled:
             messages = self._build_messages(payload)
-            raw_facts = await model_client.generate_text(
+            result = await model_client.generate_text(
                 messages=messages,
                 model=model or ModelPolicy.memory_reflection_model(),
                 max_output_tokens=TokenBudget.memory_reflection_max_output_tokens(),
                 reasoning_effort="minimal",
                 timeout=15,
+                return_usage=True,
             )
-            facts = self._parse_reflection_facts(raw_facts)
+            raw_facts = result.output if isinstance(result, ModelCallResult) else result
+            facts = self._parse_reflection_facts(raw_facts or "")
             if facts:
                 return MemoryReflectionOutput(
                     memories_to_store=[
                         MemoryCandidate(text=fact, importance=1.0, memory_type="reflection") for fact in facts
                     ],
-                    token_usage=estimate_tokens(raw_facts),
+                    input_tokens=None,
+                    output_tokens=None,
+                    token_usage=estimate_tokens(raw_facts or ""),
                 )
 
         fallback_facts = self._fallback_reflection_facts(
@@ -68,6 +74,8 @@ class MemoryReflectionAgent(BaseAgent):
             memories_to_store=[
                 MemoryCandidate(text=fact, importance=1.0, memory_type="reflection") for fact in fallback_facts
             ],
+            input_tokens=None,
+            output_tokens=None,
             token_usage=estimate_tokens("\n".join(fallback_facts)),
         )
 

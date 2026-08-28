@@ -9,7 +9,7 @@ from openai.types.chat import ChatCompletionMessageParam
 from pydantic import BaseModel, Field
 
 from app.agents.base import BaseAgent
-from app.ai.model_client import model_client
+from app.ai.model_client import ModelCallResult, model_client
 from app.ai.prompts import action_parser_prompt
 from app.game.items import ensure_items_state, inventory_item_ids, room_item_ids
 from app.game.world import DEFAULT_WORLD
@@ -74,14 +74,21 @@ class ActionParserAgent(BaseAgent):
             memory_context=memory_context or [],
         )
         try:
-            parsed_output = await model_client.generate_structured(
+            parsed_result = await model_client.generate_structured(
                 messages=messages,
                 response_model=ActionParserOutput,
                 model=model or ModelPolicy.action_parser_model(),
                 max_output_tokens=TokenBudget.action_parser_max_output_tokens(),
                 reasoning_effort="minimal",
                 timeout=15,
+                return_usage=True,
             )
+            if isinstance(parsed_result, ModelCallResult):
+                parsed_output = parsed_result.output
+                usage = parsed_result.usage
+            else:
+                parsed_output = parsed_result
+                usage = None
         except Exception as exc:
             logger.error(
                 "action_parser_structured_call_failed model=%s message_length=%s memory_items=%s error_type=%s error_message=%s",
@@ -104,6 +111,9 @@ class ActionParserAgent(BaseAgent):
                 confidence=parsed_output.confidence,
                 parse_status=parsed_output.parse_status,
                 parser_notes=parsed_output.parser_notes,
+                input_tokens=usage.input_tokens if usage is not None else None,
+                output_tokens=usage.output_tokens if usage is not None else None,
+                token_usage=(usage.input_tokens + usage.output_tokens) if usage is not None else None,
             )
 
         return ParsedAction(
@@ -115,6 +125,9 @@ class ActionParserAgent(BaseAgent):
             confidence=0.0,
             parse_status="invalid",
             parser_notes="Action parser did not return valid structured output.",
+            input_tokens=usage.input_tokens if usage is not None else None,
+            output_tokens=usage.output_tokens if usage is not None else None,
+            token_usage=(usage.input_tokens + usage.output_tokens) if usage is not None else None,
         )
 
     def _build_messages(

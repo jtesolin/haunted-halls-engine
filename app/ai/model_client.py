@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import Any, TypeVar, cast
+from dataclasses import dataclass
+from typing import Any, Generic, TypeVar, cast
 
 from openai import AsyncOpenAI
 from openai.types.chat import ChatCompletionMessageParam
@@ -12,6 +13,19 @@ from app.core.config import settings
 
 
 StructuredResponseT = TypeVar("StructuredResponseT", bound=BaseModel)
+ModelOutputT = TypeVar("ModelOutputT")
+
+
+@dataclass
+class ModelUsage:
+    input_tokens: int
+    output_tokens: int
+
+
+@dataclass
+class ModelCallResult(Generic[ModelOutputT]):
+    output: ModelOutputT | None
+    usage: ModelUsage | None = None
 
 
 class ModelClient:
@@ -33,11 +47,13 @@ class ModelClient:
         max_output_tokens: int,
         timeout: int,
         retry_reasoning_effort: ReasoningEffort = "minimal",
-    ) -> str:
+        return_usage: bool = False,
+    ) -> str | ModelCallResult[str]:
         client = self._get_client()
 
         if client is None:
-            return self._fake_ai_narration(messages)
+            content = self._fake_ai_narration(messages)
+            return ModelCallResult(output=content, usage=None) if return_usage else content
         assert client is not None
 
         request_model = model
@@ -56,9 +72,11 @@ class ModelClient:
             **request_kwargs,
         )
         content = self._extract_response_text(response)
+        usage = self._extract_usage(response)
 
         if content:
-            return content
+            result = ModelCallResult(output=content, usage=usage)
+            return result if return_usage else content
 
         if self._is_incomplete_max_tokens(response):
             retry_kwargs = dict(request_kwargs)
@@ -68,8 +86,11 @@ class ModelClient:
                 **retry_kwargs,
             )
             content = self._extract_response_text(response)
+            usage = self._extract_usage(response)
 
-        return content or self._fake_ai_narration(messages)
+        content = content or self._fake_ai_narration(messages)
+        result = ModelCallResult(output=content, usage=usage)
+        return result if return_usage else content
 
     async def generate_structured(
         self,
@@ -80,7 +101,8 @@ class ModelClient:
         model: str,
         max_output_tokens: int,
         timeout: int,
-    ) -> StructuredResponseT | None:
+        return_usage: bool = False,
+    ) -> StructuredResponseT | ModelCallResult[StructuredResponseT] | None:
         client = self._get_client()
         if client is None:
             raise RuntimeError("Structured model output requires an OpenAI client.")
@@ -97,10 +119,14 @@ class ModelClient:
 
         parsed = getattr(response, "output_parsed", None)
         if parsed is None:
-            return None
+            result = ModelCallResult(output=None, usage=self._extract_usage(response))
+            return result if return_usage else None
         if isinstance(parsed, response_model):
-            return parsed
-        return response_model.model_validate(parsed)
+            payload = parsed
+        else:
+            payload = response_model.model_validate(parsed)
+        result = ModelCallResult(output=payload, usage=self._extract_usage(response))
+        return result if return_usage else payload
 
     def _is_incomplete_max_tokens(self, response: Any) -> bool:
         status = getattr(response, "status", None)
@@ -153,6 +179,19 @@ class ModelClient:
             )
 
         return converted
+
+    def _extract_usage(self, response: Any) -> ModelUsage | None:
+        usage = getattr(response, "usage", None)
+        if usage is None:
+            return None
+        input_tokens = getattr(usage, "input_tokens", None)
+        output_tokens = getattr(usage, "output_tokens", None)
+        if input_tokens is None and output_tokens is None:
+            return None
+        return ModelUsage(
+            input_tokens=int(input_tokens or 0),
+            output_tokens=int(output_tokens or 0),
+        )
 
     def _extract_response_text(self, response: Any) -> str:
         output_text = getattr(response, "output_text", None)

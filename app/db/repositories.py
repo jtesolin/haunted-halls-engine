@@ -389,29 +389,59 @@ class Repository:
     def count_user_requests_since(self, owner_user_id: str, since_iso: str) -> int:
         total = self.conn.execute(
             select(func.count())
-            .select_from(model_requests)
+            .select_from(turns)
+            .join(campaigns, turns.c.campaign_id == campaigns.c.campaign_id)
             .where(
                 and_(
-                    model_requests.c.owner_user_id == owner_user_id,
-                    model_requests.c.created_at >= since_iso,
+                    campaigns.c.owner_user_id == owner_user_id,
+                    turns.c.role == "user",
+                    turns.c.created_at >= since_iso,
                 )
             )
         ).scalar_one()
         return int(total or 0)
 
-    def sum_user_estimated_input_tokens_since(
+    def count_project_requests_since(self, since_iso: str) -> int:
+        total = self.conn.execute(
+            select(func.count())
+            .select_from(model_requests)
+            .where(model_requests.c.created_at >= since_iso)
+        ).scalar_one()
+        return int(total or 0)
+
+    def _model_request_token_total(self, row: Any) -> int:
+        actual_input = int(row.get("actual_input_tokens") or 0)
+        actual_output = int(row.get("actual_output_tokens") or 0)
+        estimated_input = int(row.get("estimated_input_tokens") or 0)
+        if actual_input > 0 or actual_output > 0:
+            return actual_input + actual_output
+        if estimated_input > 0:
+            return estimated_input + max(1, estimated_input // 3)
+        return 0
+
+    def sum_user_model_tokens_since(
         self, owner_user_id: str, since_iso: str
     ) -> int:
-        total = self.conn.execute(
-            select(func.coalesce(func.sum(model_requests.c.estimated_input_tokens), 0))
-            .where(
+        rows = self.conn.execute(
+            select(model_requests).where(
                 and_(
                     model_requests.c.owner_user_id == owner_user_id,
                     model_requests.c.created_at >= since_iso,
                 )
             )
-        ).scalar_one()
-        return int(total or 0)
+        ).mappings().all()
+        return sum(self._model_request_token_total(row) for row in rows)
+
+    def sum_user_estimated_input_tokens_since(
+        self, owner_user_id: str, since_iso: str
+    ) -> int:
+        return self.sum_user_model_tokens_since(owner_user_id, since_iso)
+
+    def sum_project_model_tokens_since(self, since_iso: str) -> int:
+        rows = self.conn.execute(
+            select(model_requests).where(model_requests.c.created_at >= since_iso)
+        ).mappings().all()
+        return sum(self._model_request_token_total(row) for row in rows)
 
     def count_campaign_turns(self, campaign_id: str, owner_user_id: str) -> int:
         total = self.conn.execute(
@@ -427,6 +457,36 @@ class Repository:
             )
         ).scalar_one()
         return int(total or 0)
+
+    def _ensure_model_request_parents(
+        self,
+        owner_user_id: str | None,
+    ) -> None:
+        if not owner_user_id:
+            return
+
+        user_row = self.conn.execute(
+            select(internal_users).where(internal_users.c.user_id == owner_user_id)
+        ).mappings().first()
+        if user_row is not None:
+            return
+
+        created_at = self._now_utc_iso()
+        self.conn.execute(
+            insert(internal_users).values(
+                user_id=owner_user_id,
+                identity_provider="synthetic",
+                provider_issuer="synthetic",
+                provider_subject=owner_user_id,
+                email=f"{owner_user_id}@synthetic.local",
+                email_verified=True,
+                display_name=None,
+                avatar_url=None,
+                created_at=created_at,
+                updated_at=created_at,
+                last_login_at=created_at,
+            )
+        )
 
     def log_model_request(
         self,
@@ -444,7 +504,10 @@ class Repository:
         failure_reason: str | None = None,
         cost_estimate: float | None = None,
     ) -> None:
+        self._ensure_model_request_parents(owner_user_id)
         created_at = datetime.utcnow().isoformat()
+        persisted_input_tokens = int(actual_input_tokens or estimated_input_tokens or 0)
+        persisted_output_tokens = int(actual_output_tokens or 0)
         self.conn.execute(
             insert(model_requests).values(
                 request_id=request_id,
@@ -454,8 +517,8 @@ class Repository:
                 agent_name=agent_name,
                 model=model,
                 estimated_input_tokens=estimated_input_tokens,
-                actual_input_tokens=actual_input_tokens,
-                actual_output_tokens=actual_output_tokens,
+                actual_input_tokens=persisted_input_tokens,
+                actual_output_tokens=persisted_output_tokens,
                 latency_ms=latency_ms,
                 success=success,
                 failure_reason=failure_reason,
@@ -473,13 +536,15 @@ class Repository:
     ) -> TurnDBModel:
         created_at = datetime.utcnow().isoformat()
         self.conn.execute(
-            insert(turns).values(
+            insert(turns)
+            .values(
                 turn_id=turn_id,
                 campaign_id=campaign_id,
                 role=role,
                 content=content,
                 created_at=created_at,
             )
+            .prefix_with("OR IGNORE")
         )
         return TurnDBModel(
             turn_id, campaign_id, role, content, datetime.fromisoformat(created_at)

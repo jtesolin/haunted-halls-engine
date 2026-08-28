@@ -7,7 +7,7 @@ from openai.types.chat import ChatCompletionMessageParam
 from pydantic import BaseModel, Field
 
 from app.agents.base import BaseAgent
-from app.ai.model_client import model_client
+from app.ai.model_client import ModelCallResult, model_client
 from app.guardrails.model_policy import ModelPolicy
 from app.guardrails.token_budget import TokenBudget, estimate_tokens
 
@@ -23,6 +23,8 @@ class MemorySummarizerOutput(BaseModel):
     summary_text: str
     important_facts: list[str] = Field(default_factory=list)
     open_threads: list[str] = Field(default_factory=list)
+    input_tokens: int | None = None
+    output_tokens: int | None = None
     token_usage: int | None = None
 
 
@@ -40,23 +42,29 @@ class MemorySummarizerAgent(BaseAgent):
     ) -> MemorySummarizerOutput:
         if ai_enabled:
             messages = self._build_messages(payload)
-            summary_text = await model_client.generate_text(
+            result = await model_client.generate_text(
                 messages=messages,
                 model=model or ModelPolicy.summarizer_model(),
                 max_output_tokens=TokenBudget.summarizer_max_output_tokens(),
                 reasoning_effort="minimal",
                 timeout=15,
+                return_usage=True,
             )
-            summary = summary_text.strip()
+            summary_text = result.output if isinstance(result, ModelCallResult) else result
+            summary = (summary_text or "").strip()
             if summary:
                 return MemorySummarizerOutput(
                     summary_text=summary,
+                    input_tokens=None,
+                    output_tokens=None,
                     token_usage=estimate_tokens(summary),
                 )
 
         fallback_summary = self._build_fallback_summary(payload)
         return MemorySummarizerOutput(
             summary_text=fallback_summary,
+            input_tokens=None,
+            output_tokens=None,
             token_usage=estimate_tokens(fallback_summary),
         )
 
