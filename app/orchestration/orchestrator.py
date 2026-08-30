@@ -59,6 +59,7 @@ class ChatOrchestrator:
     ) -> None:
         if not provider_model_enabled:
             return
+        validate_request_budget(estimated_input_tokens, max_output_tokens)
         validate_daily_token_limit(db, owner_user_id, estimated_input_tokens, max_output_tokens)
         validate_project_request_limit(db)
         validate_project_token_limit(db, estimated_input_tokens, max_output_tokens)
@@ -230,16 +231,7 @@ class ChatOrchestrator:
                 recent_turns=recent_turns,
             )
 
-            validate_request_budget(
-                estimate_tokens(request.message), TokenBudget.narrator_max_output_tokens()
-            )
             validate_daily_request_limit(db, owner_user_id)
-            validate_daily_token_limit(
-                db,
-                owner_user_id,
-                estimate_tokens(request.message),
-                TokenBudget.narrator_max_output_tokens(),
-            )
 
             db.create_campaign(
                 campaign_id=campaign_id,
@@ -629,8 +621,9 @@ class ChatOrchestrator:
                         payload=summarizer_payload,
                         model=summary_model,
                         ai_enabled=ai_enabled,
+                        provider_model_enabled=provider_model_enabled,
                     )
-                    if ai_enabled:
+                    if provider_model_enabled:
                         summary_latency_ms = int(
                             (time.perf_counter() - summary_start_time) * 1000
                         )
@@ -657,7 +650,7 @@ class ChatOrchestrator:
                         summary_text=summary_output.summary_text,
                     )
                 except Exception as exc:
-                    if ai_enabled:
+                    if provider_model_enabled:
                         summary_latency_ms = int(
                             (time.perf_counter() - summary_start_time) * 1000
                         )
@@ -703,8 +696,9 @@ class ChatOrchestrator:
                         payload=reflection_payload,
                         model=reflection_model,
                         ai_enabled=ai_enabled,
+                        provider_model_enabled=provider_model_enabled,
                     )
-                    if ai_enabled:
+                    if provider_model_enabled:
                         reflection_latency_ms = int(
                             (time.perf_counter() - reflection_start_time) * 1000
                         )
@@ -732,7 +726,7 @@ class ChatOrchestrator:
                         memory_candidates=reflection_output.memories_to_store,
                     )
                 except Exception as exc:
-                    if ai_enabled:
+                    if provider_model_enabled:
                         reflection_latency_ms = int(
                             (time.perf_counter() - reflection_start_time) * 1000
                         )
@@ -772,9 +766,6 @@ class ChatOrchestrator:
             recent_turns=recent_turns,
         )
         estimated_input_tokens = self._estimate_payload_tokens(narrator_payload)
-        validate_request_budget(
-            estimated_input_tokens, TokenBudget.narrator_max_output_tokens()
-        )
         self._check_model_call_budget(
             db,
             owner_user_id,

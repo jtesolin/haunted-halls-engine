@@ -409,37 +409,6 @@ class Repository:
         ).scalar_one()
         return int(total or 0)
 
-    def _model_request_token_total(self, row: Any) -> int:
-        """Calculate effective token total using provider actuals where available, with fallback to estimates."""
-        actual_total = row.get("actual_total_tokens")
-        if actual_total is not None and actual_total > 0:
-            return int(actual_total)
-
-        actual_input = row.get("actual_input_tokens")
-        actual_output = row.get("actual_output_tokens")
-        estimated_input = row.get("estimated_input_tokens") or 0
-
-        provider_gave_usage = (
-            actual_input is not None and actual_input > 0
-        ) or (actual_output is not None and actual_output > 0)
-
-        if provider_gave_usage:
-            effective_input = (
-                int(actual_input)
-                if actual_input is not None and actual_input > 0
-                else int(estimated_input)
-            )
-            effective_output = (
-                int(actual_output)
-                if actual_output is not None and actual_output > 0
-                else 0
-            )
-        else:
-            effective_input = int(estimated_input)
-            effective_output = 0
-
-        return effective_input + effective_output
-
     def _model_request_total_sql(self):
         actual_total = model_requests.c.actual_total_tokens
         actual_input = model_requests.c.actual_input_tokens
@@ -447,15 +416,15 @@ class Repository:
         estimated_input = model_requests.c.estimated_input_tokens
 
         effective_input = case(
-            (actual_input.is_not(None) & (actual_input > 0), actual_input),
+            (actual_input.is_not(None), actual_input),
             else_=estimated_input,
         )
         effective_output = case(
-            (actual_output.is_not(None) & (actual_output > 0), actual_output),
+            (actual_output.is_not(None), actual_output),
             else_=0,
         )
         return case(
-            (actual_total.is_not(None) & (actual_total > 0), actual_total),
+            (actual_total.is_not(None), actual_total),
             else_=(effective_input + effective_output),
         )
 

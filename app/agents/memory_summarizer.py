@@ -42,8 +42,9 @@ class MemorySummarizerAgent(BaseAgent):
         payload: MemorySummarizerInput,
         model: str | None = None,
         ai_enabled: bool,
+        provider_model_enabled: bool = False,
     ) -> MemorySummarizerOutput:
-        if ai_enabled:
+        if provider_model_enabled:
             messages = self._build_messages(payload)
             result = await model_client.generate_text(
                 messages=messages,

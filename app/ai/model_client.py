@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Generic, TypeVar, cast
+from typing import Any, Generic, Literal, TypeVar, cast, overload
 
 from openai import AsyncOpenAI
 from openai.types.chat import ChatCompletionMessageParam
@@ -41,6 +41,32 @@ class ModelClient:
         if self._client is None and api_key:
             self._client = AsyncOpenAI(api_key=api_key)
         return self._client
+
+    @overload
+    async def generate_text(
+        self,
+        *,
+        messages: list[ChatCompletionMessageParam],
+        reasoning_effort: ReasoningEffort,
+        model: str,
+        max_output_tokens: int,
+        timeout: int,
+        retry_reasoning_effort: ReasoningEffort = "minimal",
+        return_usage: Literal[False] = False,
+    ) -> str: ...
+
+    @overload
+    async def generate_text(
+        self,
+        *,
+        messages: list[ChatCompletionMessageParam],
+        reasoning_effort: ReasoningEffort,
+        model: str,
+        max_output_tokens: int,
+        timeout: int,
+        retry_reasoning_effort: ReasoningEffort = "minimal",
+        return_usage: Literal[True],
+    ) -> ModelCallResult[str]: ...
 
     async def generate_text(
         self,
@@ -95,6 +121,32 @@ class ModelClient:
         content = content or self._fake_ai_narration(messages)
         result = ModelCallResult(output=content, usage=usage)
         return result if return_usage else content
+
+    @overload
+    async def generate_structured(
+        self,
+        *,
+        messages: list[ChatCompletionMessageParam],
+        response_model: type[StructuredResponseT],
+        reasoning_effort: ReasoningEffort,
+        model: str,
+        max_output_tokens: int,
+        timeout: int,
+        return_usage: Literal[False] = False,
+    ) -> StructuredResponseT | None: ...
+
+    @overload
+    async def generate_structured(
+        self,
+        *,
+        messages: list[ChatCompletionMessageParam],
+        response_model: type[StructuredResponseT],
+        reasoning_effort: ReasoningEffort,
+        model: str,
+        max_output_tokens: int,
+        timeout: int,
+        return_usage: Literal[True],
+    ) -> ModelCallResult[StructuredResponseT]: ...
 
     async def generate_structured(
         self,

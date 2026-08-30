@@ -210,8 +210,108 @@ def test_model_request_token_aggregation_matches_effective_totals() -> None:
             success=True,
         )
 
-        assert db.sum_user_model_tokens_since(user.id, "2000-01-01T00:00:00") == 112 + 200 + 180
-        assert db.sum_project_model_tokens_since("2000-01-01T00:00:00") == 112 + 200 + 180
+        assert db.sum_user_model_tokens_since(user.id, "2000-01-01T00:00:00") == 112 + 200 + 0
+        assert db.sum_project_model_tokens_since("2000-01-01T00:00:00") == 112 + 200 + 0
+
+
+def test_model_request_token_aggregation_distinguishes_null_and_zero() -> None:
+    migrate_database()
+    with session() as db:
+        user = db.resolve_internal_user(
+            identity_provider="google",
+            provider_issuer="https://accounts.google.com",
+            provider_subject="token-null-zero-user",
+            email="token-null-zero@example.com",
+            email_verified=True,
+            display_name=None,
+            avatar_url=None,
+        )
+        db.log_model_request(
+            request_id="req_total_zero",
+            owner_user_id=user.id,
+            campaign_id="campaign_total_zero",
+            turn_id="turn_total_zero",
+            agent_name="Narrator",
+            model="gpt-4.1-mini",
+            estimated_input_tokens=120,
+            actual_input_tokens=None,
+            actual_output_tokens=None,
+            actual_total_tokens=0,
+            latency_ms=10,
+            success=True,
+        )
+        db.log_model_request(
+            request_id="req_input_zero",
+            owner_user_id=user.id,
+            campaign_id="campaign_total_zero",
+            turn_id="turn_input_zero",
+            agent_name="Narrator",
+            model="gpt-4.1-mini",
+            estimated_input_tokens=80,
+            actual_input_tokens=0,
+            actual_output_tokens=0,
+            latency_ms=11,
+            success=True,
+        )
+        db.log_model_request(
+            request_id="req_output_zero",
+            owner_user_id=user.id,
+            campaign_id="campaign_total_zero",
+            turn_id="turn_output_zero",
+            agent_name="Narrator",
+            model="gpt-4.1-mini",
+            estimated_input_tokens=70,
+            actual_input_tokens=25,
+            actual_output_tokens=0,
+            latency_ms=12,
+            success=True,
+        )
+        db.log_model_request(
+            request_id="req_missing_input",
+            owner_user_id=user.id,
+            campaign_id="campaign_total_zero",
+            turn_id="turn_missing_input",
+            agent_name="Narrator",
+            model="gpt-4.1-mini",
+            estimated_input_tokens=60,
+            actual_input_tokens=None,
+            actual_output_tokens=9,
+            latency_ms=13,
+            success=True,
+        )
+        db.log_model_request(
+            request_id="req_missing_output",
+            owner_user_id=user.id,
+            campaign_id="campaign_total_zero",
+            turn_id="turn_missing_output",
+            agent_name="Narrator",
+            model="gpt-4.1-mini",
+            estimated_input_tokens=50,
+            actual_input_tokens=12,
+            actual_output_tokens=None,
+            latency_ms=14,
+            success=True,
+        )
+        db.log_model_request(
+            request_id="req_all_missing",
+            owner_user_id=user.id,
+            campaign_id="campaign_total_zero",
+            turn_id="turn_all_missing",
+            agent_name="Narrator",
+            model="gpt-4.1-mini",
+            estimated_input_tokens=40,
+            actual_input_tokens=None,
+            actual_output_tokens=None,
+            latency_ms=15,
+            success=True,
+        )
+
+        assert db.sum_user_model_tokens_since(user.id, "2000-01-01T00:00:00") == 0 + 0 + 25 + 69 + 12 + 40
+        assert db.sum_project_model_tokens_since("2000-01-01T00:00:00") == 0 + 0 + 25 + 69 + 12 + 40
+
+
+def test_model_request_token_total_helper_removed() -> None:
+    assert not hasattr(Repository, "_model_request_token_total")
 
 
 def test_database_url_fixture_is_isolated() -> None:

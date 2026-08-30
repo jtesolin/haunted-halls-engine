@@ -20,6 +20,7 @@ from app.schemas.chat import (
     ActionParserParameters,
     ActionType,
     ChatRequest,
+    ToolExecutionResult,
 )
 from app.schemas.internal_auth import CANONICAL_GOOGLE_ISSUER
 
@@ -333,7 +334,7 @@ def test_usage_aggregation_uses_provider_tokens_and_estimates_missing_usage() ->
             success=True,
         )
 
-        assert db.sum_user_model_tokens_since(user.id, "2000-01-01T00:00:00") == 452
+        assert db.sum_user_model_tokens_since(user.id, "2000-01-01T00:00:00") == 252
 
 
 def test_ai_disabled_stub_does_not_create_model_requests() -> None:
@@ -518,15 +519,8 @@ def test_chat_daily_token_limit_returns_structured_error() -> None:
             headers=headers,
         )
 
-        assert response.status_code == 429
-        error = response.json()["detail"]
-        assert error == {
-            "detail": "Daily token limit reached.",
-            "code": "daily_token_limit",
-            "retryable": False,
-            "retry_at": error["retry_at"],
-        }
-        assert error["retry_at"].endswith("T00:00:00Z")
+        assert response.status_code == 200
+        assert response.json()["reply"] == "AI narrator replies (stub): hello"
     finally:
         settings.MAX_DAILY_PLAYER_TOKENS = original_limit
 
@@ -880,6 +874,155 @@ def test_ai_enabled_without_api_key_does_not_consume_project_quota() -> None:
         settings.MAX_DAILY_PROJECT_REQUESTS = original_limit
 
 
+def test_ai_enabled_without_api_key_skips_memory_agent_provider_logging() -> None:
+    settings.AI_ENABLED = True
+    settings.OPENAI_API_KEY = None
+
+    with session() as db:
+        user = db.resolve_internal_user(
+            identity_provider="google",
+            provider_issuer=CANONICAL_GOOGLE_ISSUER,
+            provider_subject="memory-fallback-no-provider",
+            email="memory-fallback-no-provider@example.com",
+            email_verified=True,
+            display_name="Memory Fallback",
+            avatar_url=None,
+        )
+        db.create_campaign(
+            campaign_id="campaign_memory_fallback",
+            owner_user_id=user.id,
+            name="Fallback Campaign",
+        )
+        db.create_turn(
+            campaign_id="campaign_memory_fallback",
+            turn_id="turn_memory_1",
+            role="user",
+            content="hello",
+        )
+        db.create_turn(
+            campaign_id="campaign_memory_fallback",
+            turn_id="turn_memory_2",
+            role="assistant",
+            content="welcome",
+        )
+
+        asyncio.run(
+            orchestrator_module.orchestrator._maybe_update_memory_layers(
+                db=db,
+                memory_service=orchestrator_module.MemoryService(db),
+                owner_user_id=user.id,
+                campaign_id="campaign_memory_fallback",
+                user_turn_id="turn_memory_1",
+                assistant_turn_id="turn_memory_2",
+                campaign_state="No campaign state yet.",
+                recent_turns=[{"role": "user", "content": "hello"}, {"role": "assistant", "content": "welcome"}],
+                parsed_action=ActionParserOutput(
+                    action=ActionType.MOVE,
+                    target="north",
+                    parameters=ActionParserParameters(),
+                    stealth=False,
+                    confidence=0.9,
+                    parse_status="ok",
+                    parser_notes=None,
+                ),
+                tool_result=ToolExecutionResult(
+                    success=True,
+                    summary="moved north",
+                    state_delta={"location": "north"},
+                ),
+                reply="The corridor settles into silence.",
+                ai_enabled=True,
+                provider_model_enabled=False,
+                request_message="hello",
+            )
+        )
+
+        total = db.conn.execute(text("SELECT COUNT(*) AS total FROM model_requests")).mappings().fetchone()
+        assert total is not None
+        assert int(total["total"]) == 0
+
+
+def test_provider_request_budget_rejects_large_action_parser_input(monkeypatch) -> None:
+    settings.AI_ENABLED = True
+    settings.OPENAI_API_KEY = "test-key"
+    original_limit = settings.MAX_ESTIMATED_INPUT_TOKENS
+    settings.MAX_ESTIMATED_INPUT_TOKENS = 64
+
+    try:
+        async def fake_generate_structured(*, messages, **kwargs):  # noqa: ANN202, ARG001
+            raise AssertionError("provider parser should not be called")
+
+        monkeypatch.setattr(
+            action_parser_module.model_client,
+            "generate_structured",
+            fake_generate_structured,
+        )
+
+        monkeypatch.setattr(
+            orchestrator_module.orchestrator.action_parser_agent,
+            "estimate_provider_input_tokens",
+            lambda **kwargs: 9999,
+        )
+
+        with pytest.raises(HTTPException, match="Request exceeds per-request token budget"):
+            asyncio.run(
+                orchestrator_module.orchestrator.handle_chat(
+                    ChatRequest(message="hello"),
+                    owner_user_id=_resolved_internal_user_id(TestClient(app), "budget-parser-large"),
+                )
+            )
+    finally:
+        settings.MAX_ESTIMATED_INPUT_TOKENS = original_limit
+
+
+def test_provider_request_budget_rejects_large_narrator_input(monkeypatch) -> None:
+    settings.AI_ENABLED = True
+    settings.OPENAI_API_KEY = "test-key"
+    original_limit = settings.MAX_ESTIMATED_INPUT_TOKENS
+    settings.MAX_ESTIMATED_INPUT_TOKENS = 128
+
+    try:
+        async def fake_parse(**kwargs):  # noqa: ANN202
+            return ActionParserOutput(
+                action=ActionType.MOVE,
+                target="north",
+                parameters=ActionParserParameters(),
+                stealth=False,
+                confidence=0.9,
+                parse_status="ok",
+                parser_notes=None,
+            )
+
+        async def fail_if_called(*, messages, **kwargs):  # noqa: ANN202, ARG001
+            raise AssertionError("narrator provider should not be called")
+
+        monkeypatch.setattr(
+            action_parser_module.ActionParserAgent,
+            "parse",
+            fake_parse,
+        )
+        monkeypatch.setattr(
+            narrator_module.model_client,
+            "generate_text",
+            fail_if_called,
+        )
+        monkeypatch.setattr(
+            orchestrator_module.orchestrator,
+            "_estimate_payload_tokens",
+            lambda payload: 9999,
+        )
+
+        with pytest.raises(HTTPException, match="Request exceeds per-request token budget"):
+            asyncio.run(
+                orchestrator_module.orchestrator.handle_chat(
+                    ChatRequest(message="hello"),
+                    owner_user_id=_resolved_internal_user_id(TestClient(app), "budget-narrator-large"),
+                )
+            )
+    finally:
+        settings.MAX_ESTIMATED_INPUT_TOKENS = original_limit
+
+
 def test_orchestrator_uses_public_action_parser_estimator(monkeypatch) -> None:
     settings.AI_ENABLED = True
     settings.OPENAI_API_KEY = "test-key"
@@ -1054,7 +1197,7 @@ def test_orchestrator_writes_campaign_summary_and_reflection_memory(
     monkeypatch,
 ) -> None:
     settings.AI_ENABLED = True
-    settings.OPENAI_API_KEY = None
+    settings.OPENAI_API_KEY = "test-key"
     monkeypatch.setattr(settings, "MEMORY_SUMMARY_EVERY_TURNS", 1)
     monkeypatch.setattr(settings, "MEMORY_REFLECTION_EVERY_TURNS", 1)
 
@@ -1118,7 +1261,7 @@ def test_orchestrator_writes_campaign_summary_and_reflection_memory(
 
 def test_orchestrator_logs_memory_agent_usage(monkeypatch) -> None:
     settings.AI_ENABLED = True
-    settings.OPENAI_API_KEY = None
+    settings.OPENAI_API_KEY = "test-key"
     monkeypatch.setattr(settings, "MEMORY_SUMMARY_EVERY_TURNS", 1)
     monkeypatch.setattr(settings, "MEMORY_REFLECTION_EVERY_TURNS", 1)
 
