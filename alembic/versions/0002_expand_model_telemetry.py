@@ -1,6 +1,6 @@
 """Expand model request telemetry to capture full OpenAI Responses API usage metadata.
 
-Revision ID: 0002_expand_model_request_telemetry
+Revision ID: 0002_expand_model_telemetry
 Revises: 0001_initial_schema
 Create Date: 2026-08-30 12:00:00.000000
 
@@ -10,7 +10,8 @@ import sqlalchemy as sa
 
 
 # revision identifiers, used by Alembic.
-revision = '0002_expand_model_request_telemetry'
+# NOTE: keep revision ids <= 32 chars; alembic_version.version_num is varchar(32) on Postgres.
+revision = '0002_expand_model_telemetry'
 down_revision = '0001_initial_schema'
 branch_labels = None
 depends_on = None
