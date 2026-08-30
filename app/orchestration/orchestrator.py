@@ -196,23 +196,12 @@ class ChatOrchestrator:
                 recent_turns=recent_turns,
             )
 
-            estimated_input_tokens = (
-                estimate_tokens(request.message)
-                + estimate_tokens(
-                    "structured action parsing and tool execution context"
-                )
-                + estimate_tokens(memory_service.format_memory_context(memory_context))
-            )
             validate_request_budget(
-                estimated_input_tokens, TokenBudget.narrator_max_output_tokens()
+                estimate_tokens(request.message), TokenBudget.narrator_max_output_tokens()
             )
             validate_daily_request_limit(db, owner_user_id)
-            validate_daily_token_limit(
-                db,
-                owner_user_id,
-                estimated_input_tokens,
-                TokenBudget.narrator_max_output_tokens(),
-            )
+            validate_daily_token_limit(db, owner_user_id, estimate_tokens(request.message), TokenBudget.narrator_max_output_tokens())
+            validate_project_request_limit(db)
 
             db.create_campaign(
                 campaign_id=campaign_id,
@@ -307,13 +296,12 @@ class ChatOrchestrator:
                     turn_id=player_turn_id,
                     agent_name="ActionParser",
                     model=ModelPolicy.action_parser_model(),
-                    estimated_input_tokens=estimated_input_tokens,
-                    actual_input_tokens=estimated_input_tokens,
-                    actual_output_tokens=0,
+                    estimated_input_tokens=parser_estimated_input_tokens,
+                    actual_input_tokens=None,
+                    actual_output_tokens=None,
                     latency_ms=parser_latency_ms,
                     success=False,
                     failure_reason=str(exc),
-                    cost_estimate=0.0,
                 )
                 raise HTTPException(
                     status_code=502, detail="Action parser service failed."
@@ -323,18 +311,6 @@ class ChatOrchestrator:
                 parser_latency_ms = int(
                     (time.perf_counter() - parser_start_time) * 1000
                 )
-                parser_input_tokens = getattr(parsed_action, "input_tokens", None)
-                parser_output_tokens = getattr(parsed_action, "output_tokens", None)
-                actual_input_tokens = (
-                    int(parser_input_tokens)
-                    if parser_input_tokens is not None
-                    else parser_estimated_input_tokens
-                )
-                actual_output_tokens = (
-                    int(parser_output_tokens)
-                    if parser_output_tokens is not None
-                    else estimate_tokens(parsed_action.model_dump_json())
-                )
                 db.log_model_request(
                     request_id=f"req_{uuid4().hex}",
                     owner_user_id=owner_user_id,
@@ -343,12 +319,14 @@ class ChatOrchestrator:
                     agent_name="ActionParser",
                     model=ModelPolicy.action_parser_model(),
                     estimated_input_tokens=parser_estimated_input_tokens,
-                    actual_input_tokens=actual_input_tokens,
-                    actual_output_tokens=actual_output_tokens,
+                    actual_input_tokens=parsed_action.input_tokens,
+                    cached_input_tokens=parsed_action.cached_input_tokens,
+                    cache_write_input_tokens=parsed_action.cache_write_input_tokens,
+                    actual_output_tokens=parsed_action.output_tokens,
+                    reasoning_output_tokens=parsed_action.reasoning_output_tokens,
+                    actual_total_tokens=parsed_action.total_tokens,
                     latency_ms=parser_latency_ms,
                     success=True,
-                    failure_reason=None,
-                    cost_estimate=0.0,
                 )
 
             if parsed_action.parse_status == "invalid":
@@ -455,16 +433,6 @@ class ChatOrchestrator:
                     )
                     reply = narrator_output.reply_text
                     latency_ms = int((time.perf_counter() - start_time) * 1000)
-                    actual_input_tokens = (
-                        narrator_output.input_tokens
-                        if narrator_output.input_tokens is not None
-                        else narrator_estimated_input_tokens
-                    )
-                    actual_output_tokens = (
-                        narrator_output.output_tokens
-                        if narrator_output.output_tokens is not None
-                        else estimate_tokens(reply)
-                    )
                     db.log_model_request(
                         request_id=f"req_{uuid4().hex}",
                         owner_user_id=owner_user_id,
@@ -473,12 +441,14 @@ class ChatOrchestrator:
                         agent_name=agent_name,
                         model=model,
                         estimated_input_tokens=narrator_estimated_input_tokens,
-                        actual_input_tokens=actual_input_tokens,
-                        actual_output_tokens=actual_output_tokens,
+                        actual_input_tokens=narrator_output.input_tokens,
+                        cached_input_tokens=narrator_output.cached_input_tokens,
+                        cache_write_input_tokens=narrator_output.cache_write_input_tokens,
+                        actual_output_tokens=narrator_output.output_tokens,
+                        reasoning_output_tokens=narrator_output.reasoning_output_tokens,
+                        actual_total_tokens=narrator_output.total_tokens,
                         latency_ms=latency_ms,
                         success=True,
-                        failure_reason=None,
-                        cost_estimate=0.0,
                     )
                 except Exception as exc:
                     latency_ms = int((time.perf_counter() - start_time) * 1000)
@@ -501,12 +471,11 @@ class ChatOrchestrator:
                         agent_name=agent_name,
                         model=model,
                         estimated_input_tokens=narrator_estimated_input_tokens,
-                        actual_input_tokens=narrator_estimated_input_tokens,
-                        actual_output_tokens=0,
+                        actual_input_tokens=None,
+                        actual_output_tokens=None,
                         latency_ms=latency_ms,
                         success=False,
                         failure_reason=str(exc),
-                        cost_estimate=0.0,
                     )
                     raise HTTPException(status_code=502, detail="AI service failed.")
 
@@ -619,8 +588,6 @@ class ChatOrchestrator:
                         summary_latency_ms = int(
                             (time.perf_counter() - summary_start_time) * 1000
                         )
-                        actual_input_tokens = summary_output.input_tokens if summary_output.input_tokens is not None else summary_estimated_tokens
-                        actual_output_tokens = summary_output.output_tokens if summary_output.output_tokens is not None else summary_output.token_usage or estimate_tokens(summary_output.summary_text)
                         db.log_model_request(
                             request_id=f"req_{uuid4().hex}",
                             owner_user_id=owner_user_id,
@@ -629,12 +596,14 @@ class ChatOrchestrator:
                             agent_name=self.memory_summarizer_agent.name,
                             model=summary_model,
                             estimated_input_tokens=summary_estimated_tokens,
-                            actual_input_tokens=actual_input_tokens,
-                            actual_output_tokens=actual_output_tokens,
+                            actual_input_tokens=summary_output.input_tokens,
+                            cached_input_tokens=summary_output.cached_input_tokens,
+                            cache_write_input_tokens=summary_output.cache_write_input_tokens,
+                            actual_output_tokens=summary_output.output_tokens,
+                            reasoning_output_tokens=summary_output.reasoning_output_tokens,
+                            actual_total_tokens=summary_output.total_tokens,
                             latency_ms=summary_latency_ms,
                             success=True,
-                            failure_reason=None,
-                            cost_estimate=0.0,
                         )
                     memory_service.store_summary(
                         owner_user_id=owner_user_id,
@@ -654,12 +623,11 @@ class ChatOrchestrator:
                             agent_name=self.memory_summarizer_agent.name,
                             model=summary_model,
                             estimated_input_tokens=summary_estimated_tokens,
-                            actual_input_tokens=summary_estimated_tokens,
-                            actual_output_tokens=0,
+                            actual_input_tokens=None,
+                            actual_output_tokens=None,
                             latency_ms=summary_latency_ms,
                             success=False,
                             failure_reason=str(exc),
-                            cost_estimate=0.0,
                         )
 
             if memory_service.should_reflect_memory(
@@ -693,8 +661,6 @@ class ChatOrchestrator:
                         reflection_latency_ms = int(
                             (time.perf_counter() - reflection_start_time) * 1000
                         )
-                        actual_input_tokens = reflection_output.input_tokens if reflection_output.input_tokens is not None else reflection_estimated_tokens
-                        actual_output_tokens = reflection_output.output_tokens if reflection_output.output_tokens is not None else reflection_output.token_usage or estimate_tokens("\n".join(item.text for item in reflection_output.memories_to_store))
                         db.log_model_request(
                             request_id=f"req_{uuid4().hex}",
                             owner_user_id=owner_user_id,
@@ -703,12 +669,14 @@ class ChatOrchestrator:
                             agent_name=self.memory_reflection_agent.name,
                             model=reflection_model,
                             estimated_input_tokens=reflection_estimated_tokens,
-                            actual_input_tokens=actual_input_tokens,
-                            actual_output_tokens=actual_output_tokens,
+                            actual_input_tokens=reflection_output.input_tokens,
+                            cached_input_tokens=reflection_output.cached_input_tokens,
+                            cache_write_input_tokens=reflection_output.cache_write_input_tokens,
+                            actual_output_tokens=reflection_output.output_tokens,
+                            reasoning_output_tokens=reflection_output.reasoning_output_tokens,
+                            actual_total_tokens=reflection_output.total_tokens,
                             latency_ms=reflection_latency_ms,
                             success=True,
-                            failure_reason=None,
-                            cost_estimate=0.0,
                         )
                     memory_service.store_reflection_memories(
                         owner_user_id=owner_user_id,
@@ -729,12 +697,11 @@ class ChatOrchestrator:
                             agent_name=self.memory_reflection_agent.name,
                             model=reflection_model,
                             estimated_input_tokens=reflection_estimated_tokens,
-                            actual_input_tokens=reflection_estimated_tokens,
-                            actual_output_tokens=0,
+                            actual_input_tokens=None,
+                            actual_output_tokens=None,
                             latency_ms=reflection_latency_ms,
                             success=False,
                             failure_reason=str(exc),
-                            cost_estimate=0.0,
                         )
         except Exception:
             return
@@ -776,12 +743,6 @@ class ChatOrchestrator:
             )
             reply = narrator_output.reply_text
             latency_ms = int((time.perf_counter() - start_time) * 1000)
-            actual_input_tokens = (
-                narrator_output.input_tokens if narrator_output.input_tokens is not None else estimated_input_tokens
-            )
-            actual_output_tokens = (
-                narrator_output.output_tokens if narrator_output.output_tokens is not None else estimate_tokens(reply)
-            )
             db.log_model_request(
                 request_id=f"req_{uuid4().hex}",
                 owner_user_id=owner_user_id,
@@ -790,12 +751,14 @@ class ChatOrchestrator:
                 agent_name=agent_name,
                 model=model,
                 estimated_input_tokens=estimated_input_tokens,
-                actual_input_tokens=actual_input_tokens,
-                actual_output_tokens=actual_output_tokens,
+                actual_input_tokens=narrator_output.input_tokens,
+                cached_input_tokens=narrator_output.cached_input_tokens,
+                cache_write_input_tokens=narrator_output.cache_write_input_tokens,
+                actual_output_tokens=narrator_output.output_tokens,
+                reasoning_output_tokens=narrator_output.reasoning_output_tokens,
+                actual_total_tokens=narrator_output.total_tokens,
                 latency_ms=latency_ms,
                 success=True,
-                failure_reason=None,
-                cost_estimate=0.0,
             )
             return reply
         except Exception as exc:
@@ -819,12 +782,11 @@ class ChatOrchestrator:
                 agent_name=agent_name,
                 model=model,
                 estimated_input_tokens=estimated_input_tokens,
-                actual_input_tokens=estimated_input_tokens,
-                actual_output_tokens=0,
+                actual_input_tokens=None,
+                actual_output_tokens=None,
                 latency_ms=latency_ms,
                 success=False,
                 failure_reason=str(exc),
-                cost_estimate=0.0,
             )
             raise HTTPException(status_code=502, detail="AI service failed.")
 

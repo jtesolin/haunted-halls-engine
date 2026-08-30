@@ -410,14 +410,35 @@ class Repository:
         return int(total or 0)
 
     def _model_request_token_total(self, row: Any) -> int:
-        actual_input = int(row.get("actual_input_tokens") or 0)
-        actual_output = int(row.get("actual_output_tokens") or 0)
-        estimated_input = int(row.get("estimated_input_tokens") or 0)
-        if actual_input > 0 or actual_output > 0:
-            return actual_input + actual_output
-        if estimated_input > 0:
-            return estimated_input + max(1, estimated_input // 3)
-        return 0
+        """Calculate effective token total using provider actuals where available, with fallback to estimates."""
+        # Prefer provider-reported total if available
+        actual_total = row.get("actual_total_tokens")
+        if actual_total is not None and actual_total > 0:
+            return int(actual_total)
+        
+        # Get component values
+        actual_input = row.get("actual_input_tokens")
+        actual_output = row.get("actual_output_tokens")
+        estimated_input = row.get("estimated_input_tokens") or 0
+        
+        # When provider doesn't return usage (both actual values are 0 or None),
+        # treat as missing and use estimates
+        provider_gave_usage = (actual_input is not None and actual_input > 0) or (actual_output is not None and actual_output > 0)
+        
+        if provider_gave_usage:
+            # Use whatever actual values were provided
+            effective_input = int(actual_input) if actual_input is not None and actual_input > 0 else int(estimated_input)
+            if actual_output is not None and actual_output > 0:
+                effective_output = int(actual_output)
+            else:
+                # Estimate output as roughly 1/3 of input, with minimum of 1
+                effective_output = max(1, effective_input // 3) if effective_input > 0 else 0
+        else:
+            # Provider gave no usage data, fall back to estimate with no output component
+            effective_input = int(estimated_input)
+            effective_output = 0
+        
+        return effective_input + effective_output
 
     def sum_user_model_tokens_since(
         self, owner_user_id: str, since_iso: str
@@ -497,17 +518,19 @@ class Repository:
         agent_name: str,
         model: str,
         estimated_input_tokens: int,
-        actual_input_tokens: int,
-        actual_output_tokens: int,
-        latency_ms: int,
-        success: bool,
+        actual_input_tokens: int | None = None,
+        actual_output_tokens: int | None = None,
+        cached_input_tokens: int | None = None,
+        cache_write_input_tokens: int | None = None,
+        reasoning_output_tokens: int | None = None,
+        actual_total_tokens: int | None = None,
+        latency_ms: int = 0,
+        success: bool = False,
         failure_reason: str | None = None,
         cost_estimate: float | None = None,
     ) -> None:
         self._ensure_model_request_parents(owner_user_id)
         created_at = datetime.utcnow().isoformat()
-        persisted_input_tokens = int(actual_input_tokens or estimated_input_tokens or 0)
-        persisted_output_tokens = int(actual_output_tokens or 0)
         self.conn.execute(
             insert(model_requests).values(
                 request_id=request_id,
@@ -517,8 +540,12 @@ class Repository:
                 agent_name=agent_name,
                 model=model,
                 estimated_input_tokens=estimated_input_tokens,
-                actual_input_tokens=persisted_input_tokens,
-                actual_output_tokens=persisted_output_tokens,
+                actual_input_tokens=actual_input_tokens,
+                cached_input_tokens=cached_input_tokens,
+                cache_write_input_tokens=cache_write_input_tokens,
+                actual_output_tokens=actual_output_tokens,
+                reasoning_output_tokens=reasoning_output_tokens,
+                actual_total_tokens=actual_total_tokens,
                 latency_ms=latency_ms,
                 success=success,
                 failure_reason=failure_reason,

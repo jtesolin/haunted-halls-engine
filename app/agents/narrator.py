@@ -26,8 +26,11 @@ class NarratorAgentInput(BaseModel):
 class NarratorAgentOutput(BaseModel):
     reply_text: str
     input_tokens: int | None = None
+    cached_input_tokens: int | None = None
+    cache_write_input_tokens: int | None = None
     output_tokens: int | None = None
-    token_usage: int | None = None
+    reasoning_output_tokens: int | None = None
+    total_tokens: int | None = None
 
 
 class NarratorAgent(BaseAgent):
@@ -70,18 +73,17 @@ class NarratorAgent(BaseAgent):
         if isinstance(result, ModelCallResult):
             reply = result.output or ""
             usage = result.usage
-            total_usage = None
             if usage is not None:
-                input_value = usage.input_tokens if usage.input_tokens is not None else 0
-                output_value = usage.output_tokens if usage.output_tokens is not None else 0
-                if usage.input_tokens is not None or usage.output_tokens is not None:
-                    total_usage = input_value + output_value
-            return NarratorAgentOutput(
-                reply_text=reply,
-                input_tokens=usage.input_tokens if usage is not None else None,
-                output_tokens=usage.output_tokens if usage is not None else None,
-                token_usage=total_usage,
-            )
+                return NarratorAgentOutput(
+                    reply_text=reply,
+                    input_tokens=usage.input_tokens,
+                    cached_input_tokens=usage.cached_input_tokens,
+                    cache_write_input_tokens=usage.cache_write_input_tokens,
+                    output_tokens=usage.output_tokens,
+                    reasoning_output_tokens=usage.reasoning_output_tokens,
+                    total_tokens=usage.total_tokens,
+                )
+            return NarratorAgentOutput(reply_text=reply)
         return NarratorAgentOutput(reply_text=result)
 
     def _build_messages(

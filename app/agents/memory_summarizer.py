@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 from app.agents.base import BaseAgent
 from app.ai.model_client import ModelCallResult, model_client
 from app.guardrails.model_policy import ModelPolicy
-from app.guardrails.token_budget import TokenBudget, estimate_tokens
+from app.guardrails.token_budget import TokenBudget
 
 
 class MemorySummarizerInput(BaseModel):
@@ -24,8 +24,11 @@ class MemorySummarizerOutput(BaseModel):
     important_facts: list[str] = Field(default_factory=list)
     open_threads: list[str] = Field(default_factory=list)
     input_tokens: int | None = None
+    cached_input_tokens: int | None = None
+    cache_write_input_tokens: int | None = None
     output_tokens: int | None = None
-    token_usage: int | None = None
+    reasoning_output_tokens: int | None = None
+    total_tokens: int | None = None
 
 
 class MemorySummarizerAgent(BaseAgent):
@@ -54,28 +57,20 @@ class MemorySummarizerAgent(BaseAgent):
             summary_text = result.output if isinstance(result, ModelCallResult) else result
             summary = (summary_text or "").strip()
             if summary:
-                token_usage = None
                 if usage is not None:
-                    input_value = usage.input_tokens if usage.input_tokens is not None else 0
-                    output_value = usage.output_tokens if usage.output_tokens is not None else 0
-                    if usage.input_tokens is not None or usage.output_tokens is not None:
-                        token_usage = input_value + output_value
-                if token_usage is None:
-                    token_usage = estimate_tokens(summary)
-                return MemorySummarizerOutput(
-                    summary_text=summary,
-                    input_tokens=usage.input_tokens if usage is not None else None,
-                    output_tokens=usage.output_tokens if usage is not None else None,
-                    token_usage=token_usage,
-                )
+                    return MemorySummarizerOutput(
+                        summary_text=summary,
+                        input_tokens=usage.input_tokens,
+                        cached_input_tokens=usage.cached_input_tokens,
+                        cache_write_input_tokens=usage.cache_write_input_tokens,
+                        output_tokens=usage.output_tokens,
+                        reasoning_output_tokens=usage.reasoning_output_tokens,
+                        total_tokens=usage.total_tokens,
+                    )
+                return MemorySummarizerOutput(summary_text=summary)
 
         fallback_summary = self._build_fallback_summary(payload)
-        return MemorySummarizerOutput(
-            summary_text=fallback_summary,
-            input_tokens=None,
-            output_tokens=None,
-            token_usage=estimate_tokens(fallback_summary),
-        )
+        return MemorySummarizerOutput(summary_text=fallback_summary)
 
     def _build_messages(self, payload: MemorySummarizerInput) -> list[ChatCompletionMessageParam]:
         messages = [
