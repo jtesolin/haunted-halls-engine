@@ -54,7 +54,11 @@ class ChatOrchestrator:
         owner_user_id: str,
         estimated_input_tokens: int,
         max_output_tokens: int,
+        *,
+        provider_model_enabled: bool = True,
     ) -> None:
+        if not provider_model_enabled:
+            return
         validate_daily_token_limit(db, owner_user_id, estimated_input_tokens, max_output_tokens)
         validate_project_request_limit(db)
         validate_project_token_limit(db, estimated_input_tokens, max_output_tokens)
@@ -86,7 +90,10 @@ class ChatOrchestrator:
         with session() as db:
             self._validate_campaign_creation(db, owner_user_id)
 
-            if not (settings.AI_ENABLED or bool(settings.OPENAI_API_KEY)):
+            has_openai_key = bool((settings.OPENAI_API_KEY or "").strip())
+            provider_model_enabled = has_openai_key
+            ai_enabled = settings.AI_ENABLED or provider_model_enabled
+            if not ai_enabled:
                 opening_prompt = self._stub_campaign_opening()
                 campaign_name = self._stub_campaign_title()
             else:
@@ -94,21 +101,8 @@ class ChatOrchestrator:
                 recent_turns: list[dict[str, str]] = []
 
                 opening_request = self._build_campaign_opening_request()
-                opening_prompt = await self._generate_narrator_response(
-                    db=db,
-                    owner_user_id=owner_user_id,
-                    campaign_id=campaign_id,
-                    turn_id=assistant_turn_id,
-                    agent_name=agent_name,
-                    model=model,
-                    campaign_state=campaign_state,
-                    recent_turns=recent_turns,
-                    message=opening_request,
-                )
-
-                title_request = self._build_campaign_title_request(opening_prompt)
-                campaign_name = self._normalize_campaign_title(
-                    await self._generate_narrator_response(
+                if provider_model_enabled:
+                    opening_prompt = await self._generate_narrator_response(
                         db=db,
                         owner_user_id=owner_user_id,
                         campaign_id=campaign_id,
@@ -117,9 +111,48 @@ class ChatOrchestrator:
                         model=model,
                         campaign_state=campaign_state,
                         recent_turns=recent_turns,
-                        message=title_request,
+                        message=opening_request,
                     )
-                )
+                else:
+                    opening_prompt = (
+                        await self.narrator_agent.generate(
+                            payload=NarratorAgentInput(
+                                player_message=opening_request,
+                                campaign_state=campaign_state,
+                                recent_turns=recent_turns,
+                            ),
+                            model=model,
+                        )
+                    ).reply_text
+
+                title_request = self._build_campaign_title_request(opening_prompt)
+                if provider_model_enabled:
+                    campaign_name = self._normalize_campaign_title(
+                        await self._generate_narrator_response(
+                            db=db,
+                            owner_user_id=owner_user_id,
+                            campaign_id=campaign_id,
+                            turn_id=assistant_turn_id,
+                            agent_name=agent_name,
+                            model=model,
+                            campaign_state=campaign_state,
+                            recent_turns=recent_turns,
+                            message=title_request,
+                        )
+                    )
+                else:
+                    campaign_name = self._normalize_campaign_title(
+                        (
+                            await self.narrator_agent.generate(
+                                payload=NarratorAgentInput(
+                                    player_message=title_request,
+                                    campaign_state=campaign_state,
+                                    recent_turns=recent_turns,
+                                ),
+                                model=model,
+                            )
+                        ).reply_text
+                    )
 
             db.create_campaign(
                 campaign_id=campaign_id,
@@ -170,7 +203,8 @@ class ChatOrchestrator:
             validate_campaign_turn_limit(db, owner_user_id, campaign_id)
 
             has_openai_key = bool((settings.OPENAI_API_KEY or "").strip())
-            ai_enabled = settings.AI_ENABLED or has_openai_key
+            provider_model_enabled = has_openai_key
+            ai_enabled = settings.AI_ENABLED or provider_model_enabled
             parser_model_enabled = has_openai_key
             logger.info(
                 "chat_request_received owner_user_id=%s campaign_id=%s turn_id=%s ai_enabled=%s parser_model_enabled=%s has_openai_key=%s",
@@ -200,8 +234,12 @@ class ChatOrchestrator:
                 estimate_tokens(request.message), TokenBudget.narrator_max_output_tokens()
             )
             validate_daily_request_limit(db, owner_user_id)
-            validate_daily_token_limit(db, owner_user_id, estimate_tokens(request.message), TokenBudget.narrator_max_output_tokens())
-            validate_project_request_limit(db)
+            validate_daily_token_limit(
+                db,
+                owner_user_id,
+                estimate_tokens(request.message),
+                TokenBudget.narrator_max_output_tokens(),
+            )
 
             db.create_campaign(
                 campaign_id=campaign_id,
@@ -226,23 +264,20 @@ class ChatOrchestrator:
             parser_start_time = time.perf_counter()
             try:
                 if parser_model_enabled:
-                    parser_prompt = self.action_parser_agent.build_provider_request(
-                        message=request.message,
-                        campaign_state=campaign_state,
-                        recent_turns=recent_turns,
-                        memory_context=memory_context,
-                    )
-                    parser_estimated_input_tokens = sum(
-                        estimate_tokens(str(message.get("content", "")))
-                        for message in parser_prompt
-                        if isinstance(message, dict)
-                        and isinstance(message.get("content"), str)
+                    parser_estimated_input_tokens = (
+                        self.action_parser_agent.estimate_provider_input_tokens(
+                            message=request.message,
+                            campaign_state=campaign_state,
+                            recent_turns=recent_turns,
+                            memory_context=memory_context,
+                        )
                     )
                     self._check_model_call_budget(
                         db,
                         owner_user_id,
                         parser_estimated_input_tokens,
                         TokenBudget.action_parser_max_output_tokens(),
+                        provider_model_enabled=parser_model_enabled,
                     )
                     parsed_action = await self.action_parser_agent.parse(
                         message=request.message,
@@ -407,10 +442,9 @@ class ChatOrchestrator:
                         owner_user_id=owner_user_id, campaign_id=campaign_id
                     )
 
-            if not ai_enabled:
+            if not provider_model_enabled and not ai_enabled:
                 reply = self._stub_reply(request.message)
             else:
-                start_time = time.perf_counter()
                 narrator_payload = NarratorAgentInput(
                     player_message=request.message,
                     campaign_state=campaign_state,
@@ -419,65 +453,74 @@ class ChatOrchestrator:
                     parsed_action=parsed_action,
                     tool_result=tool_result,
                 )
-                narrator_estimated_input_tokens = self._estimate_payload_tokens(narrator_payload)
-                self._check_model_call_budget(
-                    db,
-                    owner_user_id,
-                    narrator_estimated_input_tokens,
-                    TokenBudget.narrator_max_output_tokens(),
-                )
-                try:
+                if provider_model_enabled:
+                    start_time = time.perf_counter()
+                    narrator_estimated_input_tokens = self._estimate_payload_tokens(narrator_payload)
+                    self._check_model_call_budget(
+                        db,
+                        owner_user_id,
+                        narrator_estimated_input_tokens,
+                        TokenBudget.narrator_max_output_tokens(),
+                        provider_model_enabled=provider_model_enabled,
+                    )
+                    try:
+                        narrator_output = await self.narrator_agent.generate(
+                            payload=narrator_payload,
+                            model=model,
+                        )
+                        reply = narrator_output.reply_text
+                        latency_ms = int((time.perf_counter() - start_time) * 1000)
+                        db.log_model_request(
+                            request_id=f"req_{uuid4().hex}",
+                            owner_user_id=owner_user_id,
+                            campaign_id=campaign_id,
+                            turn_id=assistant_turn_id,
+                            agent_name=agent_name,
+                            model=model,
+                            estimated_input_tokens=narrator_estimated_input_tokens,
+                            actual_input_tokens=narrator_output.input_tokens,
+                            cached_input_tokens=narrator_output.cached_input_tokens,
+                            cache_write_input_tokens=narrator_output.cache_write_input_tokens,
+                            actual_output_tokens=narrator_output.output_tokens,
+                            reasoning_output_tokens=narrator_output.reasoning_output_tokens,
+                            actual_total_tokens=narrator_output.total_tokens,
+                            latency_ms=latency_ms,
+                            success=True,
+                        )
+                    except Exception as exc:
+                        latency_ms = int((time.perf_counter() - start_time) * 1000)
+                        logger.error(
+                            "narrator_provider_failed owner_user_id=%s campaign_id=%s turn_id=%s model=%s latency_ms=%s error_type=%s error_message=%s",
+                            owner_user_id,
+                            campaign_id,
+                            assistant_turn_id,
+                            model,
+                            latency_ms,
+                            type(exc).__name__,
+                            str(exc),
+                            exc_info=True,
+                        )
+                        db.log_model_request(
+                            request_id=f"req_{uuid4().hex}",
+                            owner_user_id=owner_user_id,
+                            campaign_id=campaign_id,
+                            turn_id=assistant_turn_id,
+                            agent_name=agent_name,
+                            model=model,
+                            estimated_input_tokens=narrator_estimated_input_tokens,
+                            actual_input_tokens=None,
+                            actual_output_tokens=None,
+                            latency_ms=latency_ms,
+                            success=False,
+                            failure_reason=str(exc),
+                        )
+                        raise HTTPException(status_code=502, detail="AI service failed.")
+                else:
                     narrator_output = await self.narrator_agent.generate(
                         payload=narrator_payload,
                         model=model,
                     )
                     reply = narrator_output.reply_text
-                    latency_ms = int((time.perf_counter() - start_time) * 1000)
-                    db.log_model_request(
-                        request_id=f"req_{uuid4().hex}",
-                        owner_user_id=owner_user_id,
-                        campaign_id=campaign_id,
-                        turn_id=assistant_turn_id,
-                        agent_name=agent_name,
-                        model=model,
-                        estimated_input_tokens=narrator_estimated_input_tokens,
-                        actual_input_tokens=narrator_output.input_tokens,
-                        cached_input_tokens=narrator_output.cached_input_tokens,
-                        cache_write_input_tokens=narrator_output.cache_write_input_tokens,
-                        actual_output_tokens=narrator_output.output_tokens,
-                        reasoning_output_tokens=narrator_output.reasoning_output_tokens,
-                        actual_total_tokens=narrator_output.total_tokens,
-                        latency_ms=latency_ms,
-                        success=True,
-                    )
-                except Exception as exc:
-                    latency_ms = int((time.perf_counter() - start_time) * 1000)
-                    logger.error(
-                        "narrator_provider_failed owner_user_id=%s campaign_id=%s turn_id=%s model=%s latency_ms=%s error_type=%s error_message=%s",
-                        owner_user_id,
-                        campaign_id,
-                        assistant_turn_id,
-                        model,
-                        latency_ms,
-                        type(exc).__name__,
-                        str(exc),
-                        exc_info=True,
-                    )
-                    db.log_model_request(
-                        request_id=f"req_{uuid4().hex}",
-                        owner_user_id=owner_user_id,
-                        campaign_id=campaign_id,
-                        turn_id=assistant_turn_id,
-                        agent_name=agent_name,
-                        model=model,
-                        estimated_input_tokens=narrator_estimated_input_tokens,
-                        actual_input_tokens=None,
-                        actual_output_tokens=None,
-                        latency_ms=latency_ms,
-                        success=False,
-                        failure_reason=str(exc),
-                    )
-                    raise HTTPException(status_code=502, detail="AI service failed.")
 
             db.create_turn(
                 turn_id=assistant_turn_id,
@@ -508,6 +551,7 @@ class ChatOrchestrator:
                 tool_result=tool_result,
                 reply=reply,
                 ai_enabled=ai_enabled,
+                provider_model_enabled=provider_model_enabled,
                 request_message=request.message,
             )
 
@@ -544,6 +588,7 @@ class ChatOrchestrator:
         tool_result,
         reply: str,
         ai_enabled: bool,
+        provider_model_enabled: bool,
         request_message: str,
     ) -> None:
         try:
@@ -571,12 +616,13 @@ class ChatOrchestrator:
                 )
                 summary_start_time = time.perf_counter()
                 summary_estimated_tokens = self._estimate_payload_tokens(summarizer_payload)
-                if ai_enabled:
+                if provider_model_enabled:
                     self._check_model_call_budget(
                         db,
                         owner_user_id,
                         summary_estimated_tokens,
                         TokenBudget.summarizer_max_output_tokens(),
+                        provider_model_enabled=provider_model_enabled,
                     )
                 try:
                     summary_output = await self.memory_summarizer_agent.summarize(
@@ -644,12 +690,13 @@ class ChatOrchestrator:
                 )
                 reflection_start_time = time.perf_counter()
                 reflection_estimated_tokens = self._estimate_payload_tokens(reflection_payload)
-                if ai_enabled:
+                if provider_model_enabled:
                     self._check_model_call_budget(
                         db,
                         owner_user_id,
                         reflection_estimated_tokens,
                         TokenBudget.memory_reflection_max_output_tokens(),
+                        provider_model_enabled=provider_model_enabled,
                     )
                 try:
                     reflection_output = await self.memory_reflection_agent.reflect(
@@ -733,6 +780,7 @@ class ChatOrchestrator:
             owner_user_id,
             estimated_input_tokens,
             TokenBudget.narrator_max_output_tokens(),
+            provider_model_enabled=True,
         )
 
         start_time = time.perf_counter()

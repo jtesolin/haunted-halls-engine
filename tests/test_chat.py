@@ -12,6 +12,7 @@ from app.api.dependencies import INTERNAL_USER_ID_HEADER_NAME
 from app.core.config import settings
 from app.db.session import session
 from app.guardrails.model_policy import ModelPolicy
+from app.guardrails.token_budget import estimate_tokens
 from app.main import app
 from app.orchestration import orchestrator as orchestrator_module
 from app.schemas.chat import (
@@ -26,6 +27,7 @@ from app.schemas.internal_auth import CANONICAL_GOOGLE_ISSUER
 def _user_scoped_headers(
     client: TestClient, provider_subject: str = "chat-test-user"
 ) -> dict[str, str]:
+    auth_token = settings.INTERNAL_ENGINE_SERVICE_TOKEN or ""
     resolve_response = client.post(
         "/internal/auth/users/resolve",
         json={
@@ -38,18 +40,19 @@ def _user_scoped_headers(
             "avatar_url": "https://example.com/avatar.png",
         },
         headers={
-            "Authorization": f"Bearer {settings.INTERNAL_ENGINE_SERVICE_TOKEN or ''}"
+            "Authorization": f"Bearer {auth_token}"
         },
     )
     assert resolve_response.status_code == 200
     user_id = resolve_response.json()["user_id"]
     return {
-        "Authorization": "Bearer test-token",
+        "Authorization": f"Bearer {auth_token}",
         INTERNAL_USER_ID_HEADER_NAME: user_id,
     }
 
 
 def _resolved_internal_user_id(client: TestClient, provider_subject: str) -> str:
+    auth_token = settings.INTERNAL_ENGINE_SERVICE_TOKEN or ""
     resolve_response = client.post(
         "/internal/auth/users/resolve",
         json={
@@ -62,7 +65,7 @@ def _resolved_internal_user_id(client: TestClient, provider_subject: str) -> str
             "avatar_url": "https://example.com/avatar.png",
         },
         headers={
-            "Authorization": f"Bearer {settings.INTERNAL_ENGINE_SERVICE_TOKEN or ''}"
+            "Authorization": f"Bearer {auth_token}"
         },
     )
     assert resolve_response.status_code == 200
@@ -287,11 +290,25 @@ def test_chat_request_count_tracks_user_turns_only(monkeypatch) -> None:
 def test_usage_aggregation_uses_provider_tokens_and_estimates_missing_usage() -> None:
     settings.AI_ENABLED = False
     settings.OPENAI_API_KEY = None
-    user_id = "user_usage_aggregate"
     with session() as db:
+        user = db.resolve_internal_user(
+            identity_provider="google",
+            provider_issuer=CANONICAL_GOOGLE_ISSUER,
+            provider_subject="usage-aggregate",
+            email="usage-aggregate@example.com",
+            email_verified=True,
+            display_name="Usage Aggregate",
+            avatar_url=None,
+        )
+        db.create_campaign(
+            campaign_id="campaign_usage_1",
+            owner_user_id=user.id,
+            name="Usage Campaign",
+            description="Usage test",
+        )
         db.log_model_request(
             request_id="req_usage_1",
-            owner_user_id=user_id,
+            owner_user_id=user.id,
             campaign_id="campaign_usage_1",
             turn_id="turn_usage_1",
             agent_name="Narrator",
@@ -304,7 +321,7 @@ def test_usage_aggregation_uses_provider_tokens_and_estimates_missing_usage() ->
         )
         db.log_model_request(
             request_id="req_usage_2",
-            owner_user_id=user_id,
+            owner_user_id=user.id,
             campaign_id="campaign_usage_1",
             turn_id="turn_usage_2",
             agent_name="ActionParser",
@@ -316,7 +333,7 @@ def test_usage_aggregation_uses_provider_tokens_and_estimates_missing_usage() ->
             success=True,
         )
 
-        assert db.sum_user_model_tokens_since(user_id, "2000-01-01T00:00:00") == 452
+        assert db.sum_user_model_tokens_since(user.id, "2000-01-01T00:00:00") == 452
 
 
 def test_ai_disabled_stub_does_not_create_model_requests() -> None:
@@ -427,9 +444,28 @@ def test_model_call_budget_reserves_max_output_tokens_for_user_and_project() -> 
     settings.MAX_DAILY_PROJECT_TOKENS = 100
 
     with session() as db:
+        user = db.resolve_internal_user(
+            identity_provider="google",
+            provider_issuer=CANONICAL_GOOGLE_ISSUER,
+            provider_subject="budget-user",
+            email="budget-user@example.com",
+            email_verified=True,
+            display_name="Budget User",
+            avatar_url=None,
+        )
+        db.create_campaign(
+            campaign_id="campaign_budget_user",
+            owner_user_id=user.id,
+            name="Budget Campaign",
+        )
+        db.create_campaign(
+            campaign_id="campaign_budget_project",
+            owner_user_id=user.id,
+            name="Project Budget Campaign",
+        )
         db.log_model_request(
             request_id="req_budget_user",
-            owner_user_id="budget_user",
+            owner_user_id=user.id,
             campaign_id="campaign_budget_user",
             turn_id="turn_budget_user",
             agent_name="Narrator",
@@ -442,7 +478,7 @@ def test_model_call_budget_reserves_max_output_tokens_for_user_and_project() -> 
         )
         db.log_model_request(
             request_id="req_budget_project",
-            owner_user_id="budget_user",
+            owner_user_id=user.id,
             campaign_id="campaign_budget_project",
             turn_id="turn_budget_project",
             agent_name="Narrator",
@@ -456,7 +492,7 @@ def test_model_call_budget_reserves_max_output_tokens_for_user_and_project() -> 
 
         with pytest.raises(HTTPException):
             from app.guardrails.rate_limits import validate_daily_token_limit
-            validate_daily_token_limit(db, "budget_user", 30, max_output_tokens=41)
+            validate_daily_token_limit(db, user.id, 30, max_output_tokens=41)
 
         with pytest.raises(HTTPException):
             from app.guardrails.rate_limits import validate_project_token_limit
@@ -812,6 +848,138 @@ def test_ai_enabled_without_api_key_uses_deterministic_parser(monkeypatch) -> No
         assert campaign.state is not None
         campaign_state = json.loads(campaign.state)
         assert campaign_state["player"]["location"] == "grand_corridor"
+
+        request_total = db.conn.execute(text("SELECT COUNT(*) AS total FROM model_requests")).mappings().fetchone()
+        assert request_total is not None
+        assert int(request_total["total"]) == 0
+
+
+def test_ai_enabled_without_api_key_does_not_consume_project_quota() -> None:
+    settings.AI_ENABLED = True
+    settings.OPENAI_API_KEY = None
+    original_limit = settings.MAX_DAILY_PROJECT_REQUESTS
+    settings.MAX_DAILY_PROJECT_REQUESTS = 0
+    client = TestClient(app)
+    headers = _user_scoped_headers(client, "project-quota-ai-disabled")
+
+    try:
+        response = client.post(
+            "/api/chat",
+            json={"message": "hello"},
+            headers=headers,
+        )
+
+        assert response.status_code == 200
+        assert response.json()["reply"] == "AI narrator replies: hello"
+
+        with session() as db:
+            request_total = db.conn.execute(text("SELECT COUNT(*) AS total FROM model_requests")).mappings().fetchone()
+            assert request_total is not None
+            assert int(request_total["total"]) == 0
+    finally:
+        settings.MAX_DAILY_PROJECT_REQUESTS = original_limit
+
+
+def test_orchestrator_uses_public_action_parser_estimator(monkeypatch) -> None:
+    settings.AI_ENABLED = True
+    settings.OPENAI_API_KEY = "test-key"
+
+    async def fake_generate_structured(*, messages, model=None, **kwargs):  # noqa: ANN202, ARG001
+        return ActionParserOutput(
+            action=ActionType.MOVE,
+            target="north",
+            parameters=ActionParserParameters(),
+            stealth=False,
+            confidence=0.91,
+            parse_status="ok",
+            parser_notes=None,
+        )
+
+    async def fake_generate_text(*, messages, **kwargs) -> str:  # noqa: ARG001
+        return "A haunted reply"
+
+    monkeypatch.setattr(
+        action_parser_module.model_client,
+        "generate_structured",
+        fake_generate_structured,
+    )
+    monkeypatch.setattr(
+        narrator_module.model_client, "generate_text", fake_generate_text
+    )
+
+    original_estimator = orchestrator_module.orchestrator.action_parser_agent.estimate_provider_input_tokens
+    monkeypatch.setattr(
+        orchestrator_module.orchestrator.action_parser_agent,
+        "estimate_provider_input_tokens",
+        lambda **kwargs: 777,
+    )
+
+    try:
+        response = asyncio.run(
+            orchestrator_module.orchestrator.handle_chat(
+                ChatRequest(message="move north"),
+                owner_user_id=_resolved_internal_user_id(TestClient(app), "orchestrator-estimator"),
+            )
+        )
+    finally:
+        monkeypatch.setattr(
+            orchestrator_module.orchestrator.action_parser_agent,
+            "estimate_provider_input_tokens",
+            original_estimator,
+        )
+
+    assert response.reply == "A haunted reply"
+    with session() as db:
+        parser_rows = db.conn.execute(
+            text("SELECT estimated_input_tokens FROM model_requests WHERE agent_name = 'ActionParser'"),
+        ).mappings().fetchall()
+        assert parser_rows
+        assert {int(row["estimated_input_tokens"]) for row in parser_rows} == {777}
+
+
+def test_memory_context_budget_skips_oversized_summary_and_entries() -> None:
+    settings.MAX_MEMORY_CONTEXT_TOKENS = 180
+    settings.MEMORY_RELEVANT_ENTRIES = 10
+    with session() as db:
+        user = db.resolve_internal_user(
+            identity_provider="google",
+            provider_issuer="https://accounts.google.com",
+            provider_subject="memory-budget-user",
+            email="memory-budget@example.com",
+            email_verified=True,
+            display_name=None,
+            avatar_url=None,
+        )
+        db.create_campaign(
+            campaign_id="campaign_memory_budget",
+            owner_user_id=user.id,
+            name="Memory Budget",
+        )
+        db.add_summary(
+            campaign_id="campaign_memory_budget",
+            summary="This is a very long summary " * 30,
+        )
+        db.add_memory(campaign_id="campaign_memory_budget", kind="event", content="tiny memory")
+        db.add_memory(campaign_id="campaign_memory_budget", kind="event", content="A " * 120)
+        db.add_memory(
+            campaign_id="campaign_memory_budget",
+            kind="event",
+            content="small but relevant fact",
+        )
+        memory_service = orchestrator_module.MemoryService(db)
+        context = memory_service.load_memory_context(
+            owner_user_id=user.id,
+            campaign_id="campaign_memory_budget",
+            query="test query",
+            campaign_state="No campaign state yet.",
+            recent_turns=[{"role": "user", "content": "hello"}],
+        )
+
+    assert context
+    context_total = sum(estimate_tokens(entry["content"]) for entry in context)
+    assert context_total <= settings.MAX_MEMORY_CONTEXT_TOKENS
+    assert not any("very long summary" in entry["content"] for entry in context)
+    assert any("small but relevant fact" in entry["content"] for entry in context)
 
 
 def test_orchestrator_includes_relevant_memory_context(monkeypatch) -> None:

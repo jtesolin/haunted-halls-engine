@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import pytest
 from alembic import command
 from alembic.config import Config
 from sqlalchemy import Column, Integer, Table, inspect, text
@@ -104,6 +105,113 @@ def test_initial_migration_does_not_follow_live_metadata(tmp_path) -> None:
     finally:
         metadata.remove(future_table)
         settings.DATABASE_URL = original_database_url
+
+
+def test_create_turn_raises_on_duplicate_turn_id() -> None:
+    migrate_database()
+    with session() as db:
+        user = db.resolve_internal_user(
+            identity_provider="google",
+            provider_issuer="https://accounts.google.com",
+            provider_subject="turn-dup-user",
+            email="turn-dup@example.com",
+            email_verified=True,
+            display_name=None,
+            avatar_url=None,
+        )
+        db.create_campaign(
+            campaign_id="campaign_dup_turn",
+            owner_user_id=user.id,
+            name="Duplicate turn campaign",
+        )
+        db.create_turn(
+            campaign_id="campaign_dup_turn",
+            turn_id="turn_dup_1",
+            role="user",
+            content="first message",
+        )
+
+        with pytest.raises(IntegrityError):
+            db.create_turn(
+                campaign_id="campaign_dup_turn",
+                turn_id="turn_dup_1",
+                role="assistant",
+                content="duplicate",
+            )
+
+
+def test_log_model_request_requires_legitimate_internal_user() -> None:
+    migrate_database()
+    with session() as db:
+        with pytest.raises(IntegrityError):
+            db.log_model_request(
+                request_id="req_missing_user",
+                owner_user_id="missing-user",
+                campaign_id="campaign_missing_user",
+                turn_id="turn_missing_user",
+                agent_name="Narrator",
+                model="gpt-4.1-mini",
+                estimated_input_tokens=42,
+                latency_ms=5,
+                success=True,
+            )
+
+
+def test_model_request_token_aggregation_matches_effective_totals() -> None:
+    migrate_database()
+    with session() as db:
+        user = db.resolve_internal_user(
+            identity_provider="google",
+            provider_issuer="https://accounts.google.com",
+            provider_subject="token-aggregate-user",
+            email="token-aggregate@example.com",
+            email_verified=True,
+            display_name=None,
+            avatar_url=None,
+        )
+        db.log_model_request(
+            request_id="req_total",
+            owner_user_id=user.id,
+            campaign_id="campaign_total",
+            turn_id="turn_total",
+            agent_name="Narrator",
+            model="gpt-4.1-mini",
+            estimated_input_tokens=120,
+            actual_input_tokens=80,
+            actual_output_tokens=32,
+            actual_total_tokens=112,
+            latency_ms=10,
+            success=True,
+        )
+        db.log_model_request(
+            request_id="req_estimate_only",
+            owner_user_id=user.id,
+            campaign_id="campaign_total",
+            turn_id="turn_estimate_only",
+            agent_name="ActionParser",
+            model="gpt-4.1-mini",
+            estimated_input_tokens=200,
+            actual_input_tokens=None,
+            actual_output_tokens=None,
+            latency_ms=12,
+            success=True,
+        )
+        db.log_model_request(
+            request_id="req_zero_usage",
+            owner_user_id=user.id,
+            campaign_id="campaign_total",
+            turn_id="turn_zero_usage",
+            agent_name="Narrator",
+            model="gpt-4.1-mini",
+            estimated_input_tokens=180,
+            actual_input_tokens=0,
+            actual_output_tokens=0,
+            latency_ms=14,
+            success=True,
+        )
+
+        assert db.sum_user_model_tokens_since(user.id, "2000-01-01T00:00:00") == 112 + 200 + 180
+        assert db.sum_project_model_tokens_since("2000-01-01T00:00:00") == 112 + 200 + 180
 
 
 def test_database_url_fixture_is_isolated() -> None:

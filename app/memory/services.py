@@ -58,8 +58,9 @@ class MemoryService:
                 "content": f"Campaign summary:\n{latest_summary.summary}",
             }
             summary_tokens = estimate_tokens(summary_message.get("content", ""))
-            total_tokens += summary_tokens
-            memory_messages.append(summary_message)
+            if summary_tokens <= max_tokens and total_tokens + summary_tokens <= max_tokens:
+                total_tokens += summary_tokens
+                memory_messages.append(summary_message)
 
         memories = self.repository.search_campaign_memories(
             owner_user_id=owner_user_id,
@@ -71,17 +72,19 @@ class MemoryService:
         for memory in memories:
             if entries_added >= max_entries:
                 break
-            
+
             memory_message = {
                 "role": "user",
                 "content": f"{memory.kind.replace('_', ' ').title()} memory:\n{memory.content}",
             }
             memory_tokens = estimate_tokens(memory_message.get("content", ""))
-            
-            # Stop adding entries if this one would exceed the token budget
+
+            if memory_tokens > max_tokens:
+                continue
+
             if total_tokens + memory_tokens > max_tokens:
-                break
-            
+                continue
+
             total_tokens += memory_tokens
             memory_messages.append(memory_message)
             entries_added += 1

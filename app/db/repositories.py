@@ -6,7 +6,7 @@ from datetime import timezone
 from typing import Any, Optional
 from uuid import uuid4
 
-from sqlalchemy import and_, delete, func, insert, select, update
+from sqlalchemy import and_, case, delete, func, insert, select, update
 from sqlalchemy.engine import Connection
 from sqlalchemy.exc import IntegrityError
 
@@ -411,47 +411,68 @@ class Repository:
 
     def _model_request_token_total(self, row: Any) -> int:
         """Calculate effective token total using provider actuals where available, with fallback to estimates."""
-        # Prefer provider-reported total if available
         actual_total = row.get("actual_total_tokens")
         if actual_total is not None and actual_total > 0:
             return int(actual_total)
-        
-        # Get component values
+
         actual_input = row.get("actual_input_tokens")
         actual_output = row.get("actual_output_tokens")
         estimated_input = row.get("estimated_input_tokens") or 0
-        
-        # When provider doesn't return usage (both actual values are 0 or None),
-        # treat as missing and use estimates
-        provider_gave_usage = (actual_input is not None and actual_input > 0) or (actual_output is not None and actual_output > 0)
-        
+
+        provider_gave_usage = (
+            actual_input is not None and actual_input > 0
+        ) or (actual_output is not None and actual_output > 0)
+
         if provider_gave_usage:
-            # Use whatever actual values were provided
-            effective_input = int(actual_input) if actual_input is not None and actual_input > 0 else int(estimated_input)
-            if actual_output is not None and actual_output > 0:
-                effective_output = int(actual_output)
-            else:
-                # Estimate output as roughly 1/3 of input, with minimum of 1
-                effective_output = max(1, effective_input // 3) if effective_input > 0 else 0
+            effective_input = (
+                int(actual_input)
+                if actual_input is not None and actual_input > 0
+                else int(estimated_input)
+            )
+            effective_output = (
+                int(actual_output)
+                if actual_output is not None and actual_output > 0
+                else 0
+            )
         else:
-            # Provider gave no usage data, fall back to estimate with no output component
             effective_input = int(estimated_input)
             effective_output = 0
-        
+
         return effective_input + effective_output
+
+    def _model_request_total_sql(self):
+        actual_total = model_requests.c.actual_total_tokens
+        actual_input = model_requests.c.actual_input_tokens
+        actual_output = model_requests.c.actual_output_tokens
+        estimated_input = model_requests.c.estimated_input_tokens
+
+        effective_input = case(
+            (actual_input.is_not(None) & (actual_input > 0), actual_input),
+            else_=estimated_input,
+        )
+        effective_output = case(
+            (actual_output.is_not(None) & (actual_output > 0), actual_output),
+            else_=0,
+        )
+        return case(
+            (actual_total.is_not(None) & (actual_total > 0), actual_total),
+            else_=(effective_input + effective_output),
+        )
 
     def sum_user_model_tokens_since(
         self, owner_user_id: str, since_iso: str
     ) -> int:
-        rows = self.conn.execute(
-            select(model_requests).where(
+        total = self.conn.execute(
+            select(func.coalesce(func.sum(self._model_request_total_sql()), 0))
+            .select_from(model_requests)
+            .where(
                 and_(
                     model_requests.c.owner_user_id == owner_user_id,
                     model_requests.c.created_at >= since_iso,
                 )
             )
-        ).mappings().all()
-        return sum(self._model_request_token_total(row) for row in rows)
+        ).scalar_one()
+        return int(total or 0)
 
     def sum_user_estimated_input_tokens_since(
         self, owner_user_id: str, since_iso: str
@@ -459,10 +480,12 @@ class Repository:
         return self.sum_user_model_tokens_since(owner_user_id, since_iso)
 
     def sum_project_model_tokens_since(self, since_iso: str) -> int:
-        rows = self.conn.execute(
-            select(model_requests).where(model_requests.c.created_at >= since_iso)
-        ).mappings().all()
-        return sum(self._model_request_token_total(row) for row in rows)
+        total = self.conn.execute(
+            select(func.coalesce(func.sum(self._model_request_total_sql()), 0))
+            .select_from(model_requests)
+            .where(model_requests.c.created_at >= since_iso)
+        ).scalar_one()
+        return int(total or 0)
 
     def count_campaign_turns(self, campaign_id: str, owner_user_id: str) -> int:
         total = self.conn.execute(
@@ -478,36 +501,6 @@ class Repository:
             )
         ).scalar_one()
         return int(total or 0)
-
-    def _ensure_model_request_parents(
-        self,
-        owner_user_id: str | None,
-    ) -> None:
-        if not owner_user_id:
-            return
-
-        user_row = self.conn.execute(
-            select(internal_users).where(internal_users.c.user_id == owner_user_id)
-        ).mappings().first()
-        if user_row is not None:
-            return
-
-        created_at = self._now_utc_iso()
-        self.conn.execute(
-            insert(internal_users).values(
-                user_id=owner_user_id,
-                identity_provider="synthetic",
-                provider_issuer="synthetic",
-                provider_subject=owner_user_id,
-                email=f"{owner_user_id}@synthetic.local",
-                email_verified=True,
-                display_name=None,
-                avatar_url=None,
-                created_at=created_at,
-                updated_at=created_at,
-                last_login_at=created_at,
-            )
-        )
 
     def log_model_request(
         self,
@@ -529,7 +522,6 @@ class Repository:
         failure_reason: str | None = None,
         cost_estimate: float | None = None,
     ) -> None:
-        self._ensure_model_request_parents(owner_user_id)
         created_at = datetime.utcnow().isoformat()
         self.conn.execute(
             insert(model_requests).values(
@@ -561,18 +553,6 @@ class Repository:
         role: str,
         content: str,
     ) -> TurnDBModel:
-        existing = self.conn.execute(
-            select(turns).where(turns.c.turn_id == turn_id)
-        ).mappings().first()
-        if existing is not None:
-            return TurnDBModel(
-                existing["turn_id"],
-                existing["campaign_id"],
-                existing["role"],
-                existing["content"],
-                datetime.fromisoformat(existing["created_at"]),
-            )
-
         created_at = datetime.utcnow().isoformat()
         self.conn.execute(
             insert(turns).values(
