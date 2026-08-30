@@ -31,7 +31,7 @@ def test_fresh_database_has_full_alembic_schema() -> None:
     with get_engine().connect() as connection:
         assert set(inspect(connection).get_table_names()) == EXPECTED_TABLES
         revision = connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-    assert revision == "0002_expand_model_telemetry"
+    assert revision == "0003_add_estimated_output_tokens"
 
 
 def test_session_commits_and_rolls_back() -> None:
@@ -177,6 +177,7 @@ def test_model_request_token_aggregation_matches_effective_totals() -> None:
             agent_name="Narrator",
             model="gpt-4.1-mini",
             estimated_input_tokens=120,
+            estimated_output_tokens=40,
             actual_input_tokens=80,
             actual_output_tokens=32,
             actual_total_tokens=112,
@@ -191,6 +192,7 @@ def test_model_request_token_aggregation_matches_effective_totals() -> None:
             agent_name="ActionParser",
             model="gpt-4.1-mini",
             estimated_input_tokens=200,
+            estimated_output_tokens=60,
             actual_input_tokens=None,
             actual_output_tokens=None,
             latency_ms=12,
@@ -204,17 +206,18 @@ def test_model_request_token_aggregation_matches_effective_totals() -> None:
             agent_name="Narrator",
             model="gpt-4.1-mini",
             estimated_input_tokens=180,
+            estimated_output_tokens=80,
             actual_input_tokens=0,
             actual_output_tokens=0,
             latency_ms=14,
             success=True,
         )
 
-        assert db.sum_user_model_tokens_since(user.id, "2000-01-01T00:00:00") == 112 + 200 + 0
-        assert db.sum_project_model_tokens_since("2000-01-01T00:00:00") == 112 + 200 + 0
+        assert db.sum_user_model_tokens_since(user.id, "2000-01-01T00:00:00") == 112 + 260 + 0
+        assert db.sum_project_model_tokens_since("2000-01-01T00:00:00") == 112 + 260 + 0
 
 
-def test_model_request_token_aggregation_distinguishes_null_and_zero() -> None:
+def test_model_request_token_aggregation_preserves_null_and_zero_semantics() -> None:
     migrate_database()
     with session() as db:
         user = db.resolve_internal_user(
@@ -234,6 +237,7 @@ def test_model_request_token_aggregation_distinguishes_null_and_zero() -> None:
             agent_name="Narrator",
             model="gpt-4.1-mini",
             estimated_input_tokens=120,
+            estimated_output_tokens=40,
             actual_input_tokens=None,
             actual_output_tokens=None,
             actual_total_tokens=0,
@@ -248,6 +252,7 @@ def test_model_request_token_aggregation_distinguishes_null_and_zero() -> None:
             agent_name="Narrator",
             model="gpt-4.1-mini",
             estimated_input_tokens=80,
+            estimated_output_tokens=30,
             actual_input_tokens=0,
             actual_output_tokens=0,
             latency_ms=11,
@@ -261,6 +266,7 @@ def test_model_request_token_aggregation_distinguishes_null_and_zero() -> None:
             agent_name="Narrator",
             model="gpt-4.1-mini",
             estimated_input_tokens=70,
+            estimated_output_tokens=30,
             actual_input_tokens=25,
             actual_output_tokens=0,
             latency_ms=12,
@@ -274,6 +280,7 @@ def test_model_request_token_aggregation_distinguishes_null_and_zero() -> None:
             agent_name="Narrator",
             model="gpt-4.1-mini",
             estimated_input_tokens=60,
+            estimated_output_tokens=30,
             actual_input_tokens=None,
             actual_output_tokens=9,
             latency_ms=13,
@@ -287,6 +294,7 @@ def test_model_request_token_aggregation_distinguishes_null_and_zero() -> None:
             agent_name="Narrator",
             model="gpt-4.1-mini",
             estimated_input_tokens=50,
+            estimated_output_tokens=40,
             actual_input_tokens=12,
             actual_output_tokens=None,
             latency_ms=14,
@@ -300,14 +308,51 @@ def test_model_request_token_aggregation_distinguishes_null_and_zero() -> None:
             agent_name="Narrator",
             model="gpt-4.1-mini",
             estimated_input_tokens=40,
+            estimated_output_tokens=30,
             actual_input_tokens=None,
             actual_output_tokens=None,
             latency_ms=15,
             success=True,
         )
 
-        assert db.sum_user_model_tokens_since(user.id, "2000-01-01T00:00:00") == 0 + 0 + 25 + 69 + 12 + 40
-        assert db.sum_project_model_tokens_since("2000-01-01T00:00:00") == 0 + 0 + 25 + 69 + 12 + 40
+        expected_total = 0 + 0 + 25 + 69 + 52 + 70
+        assert db.sum_user_model_tokens_since(user.id, "2000-01-01T00:00:00") == expected_total
+        assert db.sum_project_model_tokens_since("2000-01-01T00:00:00") == expected_total
+
+
+def test_model_request_partial_usage_uses_estimated_output_tokens() -> None:
+    migrate_database()
+    with session() as db:
+        user = db.resolve_internal_user(
+            identity_provider="google",
+            provider_issuer="https://accounts.google.com",
+            provider_subject="token-partial-usage-user",
+            email="token-partial-usage@example.com",
+            email_verified=True,
+            display_name=None,
+            avatar_url=None,
+        )
+        db.log_model_request(
+            request_id="req_partial_output",
+            owner_user_id=user.id,
+            campaign_id="campaign_partial_output",
+            turn_id="turn_partial_output",
+            agent_name="Narrator",
+            model="gpt-4.1-mini",
+            estimated_input_tokens=1000,
+            estimated_output_tokens=500,
+            actual_input_tokens=900,
+            actual_output_tokens=None,
+            actual_total_tokens=None,
+            latency_ms=10,
+            success=True,
+        )
+
+        user_total = db.sum_user_model_tokens_since(user.id, "2000-01-01T00:00:00")
+        project_total = db.sum_project_model_tokens_since("2000-01-01T00:00:00")
+        assert user_total == 1400
+        assert user_total > 900
+        assert project_total == user_total
 
 
 def test_model_request_token_total_helper_removed() -> None:

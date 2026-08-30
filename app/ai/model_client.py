@@ -240,23 +240,23 @@ class ModelClient:
         usage = getattr(response, "usage", None)
         if usage is None:
             return None
-        
+
         input_tokens = getattr(usage, "input_tokens", None)
         output_tokens = getattr(usage, "output_tokens", None)
         total_tokens = getattr(usage, "total_tokens", None)
-        
+
         # Extract detail objects if present
         input_details = getattr(usage, "input_tokens_details", None)
         cached_input = getattr(input_details, "cached_tokens", None) if input_details else None
         cache_write_input = getattr(input_details, "cache_write_tokens", None) if input_details else None
-        
+
         output_details = getattr(usage, "output_tokens_details", None)
         reasoning_output = getattr(output_details, "reasoning_tokens", None) if output_details else None
-        
+
         # Return None only if all fields are None
         if all(v is None for v in [input_tokens, output_tokens, total_tokens, cached_input, cache_write_input, reasoning_output]):
             return None
-        
+
         return ModelUsage(
             input_tokens=int(input_tokens) if input_tokens is not None else None,
             cached_input_tokens=int(cached_input) if cached_input is not None else None,

@@ -79,6 +79,7 @@ model_requests = Table(
     String("campaign_id", nullable=False), String("turn_id", nullable=False),
     String("agent_name", nullable=False), String("model", nullable=False),
     Integer("estimated_input_tokens", nullable=False),
+    Integer("estimated_output_tokens", nullable=False),
     Integer("actual_input_tokens", nullable=True),
     Integer("cached_input_tokens", nullable=True),
     Integer("cache_write_input_tokens", nullable=True),
