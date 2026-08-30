@@ -7,9 +7,9 @@ from openai.types.chat import ChatCompletionMessageParam
 from pydantic import BaseModel, Field
 
 from app.agents.base import BaseAgent
-from app.ai.model_client import model_client
+from app.ai.model_client import ModelCallResult, model_client
 from app.guardrails.model_policy import ModelPolicy
-from app.guardrails.token_budget import TokenBudget, estimate_tokens
+from app.guardrails.token_budget import TokenBudget
 
 
 class MemorySummarizerInput(BaseModel):
@@ -23,7 +23,12 @@ class MemorySummarizerOutput(BaseModel):
     summary_text: str
     important_facts: list[str] = Field(default_factory=list)
     open_threads: list[str] = Field(default_factory=list)
-    token_usage: int | None = None
+    input_tokens: int | None = None
+    cached_input_tokens: int | None = None
+    cache_write_input_tokens: int | None = None
+    output_tokens: int | None = None
+    reasoning_output_tokens: int | None = None
+    total_tokens: int | None = None
 
 
 class MemorySummarizerAgent(BaseAgent):
@@ -37,28 +42,36 @@ class MemorySummarizerAgent(BaseAgent):
         payload: MemorySummarizerInput,
         model: str | None = None,
         ai_enabled: bool,
+        provider_model_enabled: bool = False,
     ) -> MemorySummarizerOutput:
-        if ai_enabled:
+        if provider_model_enabled:
             messages = self._build_messages(payload)
-            summary_text = await model_client.generate_text(
+            result = await model_client.generate_text(
                 messages=messages,
                 model=model or ModelPolicy.summarizer_model(),
                 max_output_tokens=TokenBudget.summarizer_max_output_tokens(),
                 reasoning_effort="minimal",
                 timeout=15,
+                return_usage=True,
             )
-            summary = summary_text.strip()
+            usage = result.usage if isinstance(result, ModelCallResult) else None
+            summary_text = result.output if isinstance(result, ModelCallResult) else result
+            summary = (summary_text or "").strip()
             if summary:
-                return MemorySummarizerOutput(
-                    summary_text=summary,
-                    token_usage=estimate_tokens(summary),
-                )
+                if usage is not None:
+                    return MemorySummarizerOutput(
+                        summary_text=summary,
+                        input_tokens=usage.input_tokens,
+                        cached_input_tokens=usage.cached_input_tokens,
+                        cache_write_input_tokens=usage.cache_write_input_tokens,
+                        output_tokens=usage.output_tokens,
+                        reasoning_output_tokens=usage.reasoning_output_tokens,
+                        total_tokens=usage.total_tokens,
+                    )
+                return MemorySummarizerOutput(summary_text=summary)
 
         fallback_summary = self._build_fallback_summary(payload)
-        return MemorySummarizerOutput(
-            summary_text=fallback_summary,
-            token_usage=estimate_tokens(fallback_summary),
-        )
+        return MemorySummarizerOutput(summary_text=fallback_summary)
 
     def _build_messages(self, payload: MemorySummarizerInput) -> list[ChatCompletionMessageParam]:
         messages = [

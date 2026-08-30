@@ -6,10 +6,11 @@ from datetime import timezone
 from typing import Any, Optional
 from uuid import uuid4
 
-from sqlalchemy import and_, delete, func, insert, select, update
+from sqlalchemy import and_, case, delete, func, insert, select, update
 from sqlalchemy.engine import Connection
 from sqlalchemy.exc import IntegrityError
 
+from app.core.config import settings
 from app.db.models import (
     CampaignDBModel,
     CharacterDBModel,
@@ -389,6 +390,51 @@ class Repository:
     def count_user_requests_since(self, owner_user_id: str, since_iso: str) -> int:
         total = self.conn.execute(
             select(func.count())
+            .select_from(turns)
+            .join(campaigns, turns.c.campaign_id == campaigns.c.campaign_id)
+            .where(
+                and_(
+                    campaigns.c.owner_user_id == owner_user_id,
+                    turns.c.role == "user",
+                    turns.c.created_at >= since_iso,
+                )
+            )
+        ).scalar_one()
+        return int(total or 0)
+
+    def count_project_requests_since(self, since_iso: str) -> int:
+        total = self.conn.execute(
+            select(func.count())
+            .select_from(model_requests)
+            .where(model_requests.c.created_at >= since_iso)
+        ).scalar_one()
+        return int(total or 0)
+
+    def _model_request_total_sql(self):
+        actual_total = model_requests.c.actual_total_tokens
+        actual_input = model_requests.c.actual_input_tokens
+        actual_output = model_requests.c.actual_output_tokens
+        estimated_input = model_requests.c.estimated_input_tokens
+        estimated_output = model_requests.c.estimated_output_tokens
+
+        effective_input = case(
+            (actual_input.is_not(None), actual_input),
+            else_=estimated_input,
+        )
+        effective_output = case(
+            (actual_output.is_not(None), actual_output),
+            else_=estimated_output,
+        )
+        return case(
+            (actual_total.is_not(None), actual_total),
+            else_=(effective_input + effective_output),
+        )
+
+    def sum_user_model_tokens_since(
+        self, owner_user_id: str, since_iso: str
+    ) -> int:
+        total = self.conn.execute(
+            select(func.coalesce(func.sum(self._model_request_total_sql()), 0))
             .select_from(model_requests)
             .where(
                 and_(
@@ -402,14 +448,13 @@ class Repository:
     def sum_user_estimated_input_tokens_since(
         self, owner_user_id: str, since_iso: str
     ) -> int:
+        return self.sum_user_model_tokens_since(owner_user_id, since_iso)
+
+    def sum_project_model_tokens_since(self, since_iso: str) -> int:
         total = self.conn.execute(
-            select(func.coalesce(func.sum(model_requests.c.estimated_input_tokens), 0))
-            .where(
-                and_(
-                    model_requests.c.owner_user_id == owner_user_id,
-                    model_requests.c.created_at >= since_iso,
-                )
-            )
+            select(func.coalesce(func.sum(self._model_request_total_sql()), 0))
+            .select_from(model_requests)
+            .where(model_requests.c.created_at >= since_iso)
         ).scalar_one()
         return int(total or 0)
 
@@ -437,10 +482,15 @@ class Repository:
         agent_name: str,
         model: str,
         estimated_input_tokens: int,
-        actual_input_tokens: int,
-        actual_output_tokens: int,
-        latency_ms: int,
-        success: bool,
+        estimated_output_tokens: int = settings.MAX_OUTPUT_TOKENS,
+        actual_input_tokens: int | None = None,
+        actual_output_tokens: int | None = None,
+        cached_input_tokens: int | None = None,
+        cache_write_input_tokens: int | None = None,
+        reasoning_output_tokens: int | None = None,
+        actual_total_tokens: int | None = None,
+        latency_ms: int = 0,
+        success: bool = False,
         failure_reason: str | None = None,
         cost_estimate: float | None = None,
     ) -> None:
@@ -454,8 +504,13 @@ class Repository:
                 agent_name=agent_name,
                 model=model,
                 estimated_input_tokens=estimated_input_tokens,
+                estimated_output_tokens=estimated_output_tokens,
                 actual_input_tokens=actual_input_tokens,
+                cached_input_tokens=cached_input_tokens,
+                cache_write_input_tokens=cache_write_input_tokens,
                 actual_output_tokens=actual_output_tokens,
+                reasoning_output_tokens=reasoning_output_tokens,
+                actual_total_tokens=actual_total_tokens,
                 latency_ms=latency_ms,
                 success=success,
                 failure_reason=failure_reason,

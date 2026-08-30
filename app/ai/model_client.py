@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import Any, TypeVar, cast
+from dataclasses import dataclass
+from typing import Any, Generic, Literal, TypeVar, cast, overload
 
 from openai import AsyncOpenAI
 from openai.types.chat import ChatCompletionMessageParam
@@ -12,6 +13,23 @@ from app.core.config import settings
 
 
 StructuredResponseT = TypeVar("StructuredResponseT", bound=BaseModel)
+ModelOutputT = TypeVar("ModelOutputT")
+
+
+@dataclass
+class ModelUsage:
+    input_tokens: int | None
+    cached_input_tokens: int | None = None
+    cache_write_input_tokens: int | None = None
+    output_tokens: int | None = None
+    reasoning_output_tokens: int | None = None
+    total_tokens: int | None = None
+
+
+@dataclass
+class ModelCallResult(Generic[ModelOutputT]):
+    output: ModelOutputT | None
+    usage: ModelUsage | None = None
 
 
 class ModelClient:
@@ -24,6 +42,7 @@ class ModelClient:
             self._client = AsyncOpenAI(api_key=api_key)
         return self._client
 
+    @overload
     async def generate_text(
         self,
         *,
@@ -33,11 +52,38 @@ class ModelClient:
         max_output_tokens: int,
         timeout: int,
         retry_reasoning_effort: ReasoningEffort = "minimal",
-    ) -> str:
+        return_usage: Literal[False] = False,
+    ) -> str: ...
+
+    @overload
+    async def generate_text(
+        self,
+        *,
+        messages: list[ChatCompletionMessageParam],
+        reasoning_effort: ReasoningEffort,
+        model: str,
+        max_output_tokens: int,
+        timeout: int,
+        retry_reasoning_effort: ReasoningEffort = "minimal",
+        return_usage: Literal[True],
+    ) -> ModelCallResult[str]: ...
+
+    async def generate_text(
+        self,
+        *,
+        messages: list[ChatCompletionMessageParam],
+        reasoning_effort: ReasoningEffort,
+        model: str,
+        max_output_tokens: int,
+        timeout: int,
+        retry_reasoning_effort: ReasoningEffort = "minimal",
+        return_usage: bool = False,
+    ) -> str | ModelCallResult[str]:
         client = self._get_client()
 
         if client is None:
-            return self._fake_ai_narration(messages)
+            content = self._fake_ai_narration(messages)
+            return ModelCallResult(output=content, usage=None) if return_usage else content
         assert client is not None
 
         request_model = model
@@ -56,9 +102,11 @@ class ModelClient:
             **request_kwargs,
         )
         content = self._extract_response_text(response)
+        usage = self._extract_usage(response)
 
         if content:
-            return content
+            result = ModelCallResult(output=content, usage=usage)
+            return result if return_usage else content
 
         if self._is_incomplete_max_tokens(response):
             retry_kwargs = dict(request_kwargs)
@@ -68,8 +116,37 @@ class ModelClient:
                 **retry_kwargs,
             )
             content = self._extract_response_text(response)
+            usage = self._extract_usage(response)
 
-        return content or self._fake_ai_narration(messages)
+        content = content or self._fake_ai_narration(messages)
+        result = ModelCallResult(output=content, usage=usage)
+        return result if return_usage else content
+
+    @overload
+    async def generate_structured(
+        self,
+        *,
+        messages: list[ChatCompletionMessageParam],
+        response_model: type[StructuredResponseT],
+        reasoning_effort: ReasoningEffort,
+        model: str,
+        max_output_tokens: int,
+        timeout: int,
+        return_usage: Literal[False] = False,
+    ) -> StructuredResponseT | None: ...
+
+    @overload
+    async def generate_structured(
+        self,
+        *,
+        messages: list[ChatCompletionMessageParam],
+        response_model: type[StructuredResponseT],
+        reasoning_effort: ReasoningEffort,
+        model: str,
+        max_output_tokens: int,
+        timeout: int,
+        return_usage: Literal[True],
+    ) -> ModelCallResult[StructuredResponseT]: ...
 
     async def generate_structured(
         self,
@@ -80,7 +157,8 @@ class ModelClient:
         model: str,
         max_output_tokens: int,
         timeout: int,
-    ) -> StructuredResponseT | None:
+        return_usage: bool = False,
+    ) -> StructuredResponseT | ModelCallResult[StructuredResponseT] | None:
         client = self._get_client()
         if client is None:
             raise RuntimeError("Structured model output requires an OpenAI client.")
@@ -97,10 +175,14 @@ class ModelClient:
 
         parsed = getattr(response, "output_parsed", None)
         if parsed is None:
-            return None
+            result = ModelCallResult(output=None, usage=self._extract_usage(response))
+            return result if return_usage else None
         if isinstance(parsed, response_model):
-            return parsed
-        return response_model.model_validate(parsed)
+            payload = parsed
+        else:
+            payload = response_model.model_validate(parsed)
+        result = ModelCallResult(output=payload, usage=self._extract_usage(response))
+        return result if return_usage else payload
 
     def _is_incomplete_max_tokens(self, response: Any) -> bool:
         status = getattr(response, "status", None)
@@ -153,6 +235,36 @@ class ModelClient:
             )
 
         return converted
+
+    def _extract_usage(self, response: Any) -> ModelUsage | None:
+        usage = getattr(response, "usage", None)
+        if usage is None:
+            return None
+
+        input_tokens = getattr(usage, "input_tokens", None)
+        output_tokens = getattr(usage, "output_tokens", None)
+        total_tokens = getattr(usage, "total_tokens", None)
+
+        # Extract detail objects if present
+        input_details = getattr(usage, "input_tokens_details", None)
+        cached_input = getattr(input_details, "cached_tokens", None) if input_details else None
+        cache_write_input = getattr(input_details, "cache_write_tokens", None) if input_details else None
+
+        output_details = getattr(usage, "output_tokens_details", None)
+        reasoning_output = getattr(output_details, "reasoning_tokens", None) if output_details else None
+
+        # Return None only if all fields are None
+        if all(v is None for v in [input_tokens, output_tokens, total_tokens, cached_input, cache_write_input, reasoning_output]):
+            return None
+
+        return ModelUsage(
+            input_tokens=int(input_tokens) if input_tokens is not None else None,
+            cached_input_tokens=int(cached_input) if cached_input is not None else None,
+            cache_write_input_tokens=int(cache_write_input) if cache_write_input is not None else None,
+            output_tokens=int(output_tokens) if output_tokens is not None else None,
+            reasoning_output_tokens=int(reasoning_output) if reasoning_output is not None else None,
+            total_tokens=int(total_tokens) if total_tokens is not None else None,
+        )
 
     def _extract_response_text(self, response: Any) -> str:
         output_text = getattr(response, "output_text", None)

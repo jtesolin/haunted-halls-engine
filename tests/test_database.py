@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import pytest
 from alembic import command
 from alembic.config import Config
 from sqlalchemy import Column, Integer, Table, inspect, text
@@ -30,7 +31,7 @@ def test_fresh_database_has_full_alembic_schema() -> None:
     with get_engine().connect() as connection:
         assert set(inspect(connection).get_table_names()) == EXPECTED_TABLES
         revision = connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-    assert revision == "0001_initial_schema"
+    assert revision == "0003_add_estimated_output_tokens"
 
 
 def test_session_commits_and_rolls_back() -> None:
@@ -104,6 +105,258 @@ def test_initial_migration_does_not_follow_live_metadata(tmp_path) -> None:
     finally:
         metadata.remove(future_table)
         settings.DATABASE_URL = original_database_url
+
+
+def test_create_turn_raises_on_duplicate_turn_id() -> None:
+    migrate_database()
+    with session() as db:
+        user = db.resolve_internal_user(
+            identity_provider="google",
+            provider_issuer="https://accounts.google.com",
+            provider_subject="turn-dup-user",
+            email="turn-dup@example.com",
+            email_verified=True,
+            display_name=None,
+            avatar_url=None,
+        )
+        db.create_campaign(
+            campaign_id="campaign_dup_turn",
+            owner_user_id=user.id,
+            name="Duplicate turn campaign",
+        )
+        db.create_turn(
+            campaign_id="campaign_dup_turn",
+            turn_id="turn_dup_1",
+            role="user",
+            content="first message",
+        )
+
+        with pytest.raises(IntegrityError):
+            db.create_turn(
+                campaign_id="campaign_dup_turn",
+                turn_id="turn_dup_1",
+                role="assistant",
+                content="duplicate",
+            )
+
+
+def test_log_model_request_requires_legitimate_internal_user() -> None:
+    migrate_database()
+    with session() as db:
+        with pytest.raises(IntegrityError):
+            db.log_model_request(
+                request_id="req_missing_user",
+                owner_user_id="missing-user",
+                campaign_id="campaign_missing_user",
+                turn_id="turn_missing_user",
+                agent_name="Narrator",
+                model="gpt-4.1-mini",
+                estimated_input_tokens=42,
+                latency_ms=5,
+                success=True,
+            )
+
+
+def test_model_request_token_aggregation_matches_effective_totals() -> None:
+    migrate_database()
+    with session() as db:
+        user = db.resolve_internal_user(
+            identity_provider="google",
+            provider_issuer="https://accounts.google.com",
+            provider_subject="token-aggregate-user",
+            email="token-aggregate@example.com",
+            email_verified=True,
+            display_name=None,
+            avatar_url=None,
+        )
+        db.log_model_request(
+            request_id="req_total",
+            owner_user_id=user.id,
+            campaign_id="campaign_total",
+            turn_id="turn_total",
+            agent_name="Narrator",
+            model="gpt-4.1-mini",
+            estimated_input_tokens=120,
+            estimated_output_tokens=40,
+            actual_input_tokens=80,
+            actual_output_tokens=32,
+            actual_total_tokens=112,
+            latency_ms=10,
+            success=True,
+        )
+        db.log_model_request(
+            request_id="req_estimate_only",
+            owner_user_id=user.id,
+            campaign_id="campaign_total",
+            turn_id="turn_estimate_only",
+            agent_name="ActionParser",
+            model="gpt-4.1-mini",
+            estimated_input_tokens=200,
+            estimated_output_tokens=60,
+            actual_input_tokens=None,
+            actual_output_tokens=None,
+            latency_ms=12,
+            success=True,
+        )
+        db.log_model_request(
+            request_id="req_zero_usage",
+            owner_user_id=user.id,
+            campaign_id="campaign_total",
+            turn_id="turn_zero_usage",
+            agent_name="Narrator",
+            model="gpt-4.1-mini",
+            estimated_input_tokens=180,
+            estimated_output_tokens=80,
+            actual_input_tokens=0,
+            actual_output_tokens=0,
+            latency_ms=14,
+            success=True,
+        )
+
+        assert db.sum_user_model_tokens_since(user.id, "2000-01-01T00:00:00") == 112 + 260 + 0
+        assert db.sum_project_model_tokens_since("2000-01-01T00:00:00") == 112 + 260 + 0
+
+
+def test_model_request_token_aggregation_preserves_null_and_zero_semantics() -> None:
+    migrate_database()
+    with session() as db:
+        user = db.resolve_internal_user(
+            identity_provider="google",
+            provider_issuer="https://accounts.google.com",
+            provider_subject="token-null-zero-user",
+            email="token-null-zero@example.com",
+            email_verified=True,
+            display_name=None,
+            avatar_url=None,
+        )
+        db.log_model_request(
+            request_id="req_total_zero",
+            owner_user_id=user.id,
+            campaign_id="campaign_total_zero",
+            turn_id="turn_total_zero",
+            agent_name="Narrator",
+            model="gpt-4.1-mini",
+            estimated_input_tokens=120,
+            estimated_output_tokens=40,
+            actual_input_tokens=None,
+            actual_output_tokens=None,
+            actual_total_tokens=0,
+            latency_ms=10,
+            success=True,
+        )
+        db.log_model_request(
+            request_id="req_input_zero",
+            owner_user_id=user.id,
+            campaign_id="campaign_total_zero",
+            turn_id="turn_input_zero",
+            agent_name="Narrator",
+            model="gpt-4.1-mini",
+            estimated_input_tokens=80,
+            estimated_output_tokens=30,
+            actual_input_tokens=0,
+            actual_output_tokens=0,
+            latency_ms=11,
+            success=True,
+        )
+        db.log_model_request(
+            request_id="req_output_zero",
+            owner_user_id=user.id,
+            campaign_id="campaign_total_zero",
+            turn_id="turn_output_zero",
+            agent_name="Narrator",
+            model="gpt-4.1-mini",
+            estimated_input_tokens=70,
+            estimated_output_tokens=30,
+            actual_input_tokens=25,
+            actual_output_tokens=0,
+            latency_ms=12,
+            success=True,
+        )
+        db.log_model_request(
+            request_id="req_missing_input",
+            owner_user_id=user.id,
+            campaign_id="campaign_total_zero",
+            turn_id="turn_missing_input",
+            agent_name="Narrator",
+            model="gpt-4.1-mini",
+            estimated_input_tokens=60,
+            estimated_output_tokens=30,
+            actual_input_tokens=None,
+            actual_output_tokens=9,
+            latency_ms=13,
+            success=True,
+        )
+        db.log_model_request(
+            request_id="req_missing_output",
+            owner_user_id=user.id,
+            campaign_id="campaign_total_zero",
+            turn_id="turn_missing_output",
+            agent_name="Narrator",
+            model="gpt-4.1-mini",
+            estimated_input_tokens=50,
+            estimated_output_tokens=40,
+            actual_input_tokens=12,
+            actual_output_tokens=None,
+            latency_ms=14,
+            success=True,
+        )
+        db.log_model_request(
+            request_id="req_all_missing",
+            owner_user_id=user.id,
+            campaign_id="campaign_total_zero",
+            turn_id="turn_all_missing",
+            agent_name="Narrator",
+            model="gpt-4.1-mini",
+            estimated_input_tokens=40,
+            estimated_output_tokens=30,
+            actual_input_tokens=None,
+            actual_output_tokens=None,
+            latency_ms=15,
+            success=True,
+        )
+
+        expected_total = 0 + 0 + 25 + 69 + 52 + 70
+        assert db.sum_user_model_tokens_since(user.id, "2000-01-01T00:00:00") == expected_total
+        assert db.sum_project_model_tokens_since("2000-01-01T00:00:00") == expected_total
+
+
+def test_model_request_partial_usage_uses_estimated_output_tokens() -> None:
+    migrate_database()
+    with session() as db:
+        user = db.resolve_internal_user(
+            identity_provider="google",
+            provider_issuer="https://accounts.google.com",
+            provider_subject="token-partial-usage-user",
+            email="token-partial-usage@example.com",
+            email_verified=True,
+            display_name=None,
+            avatar_url=None,
+        )
+        db.log_model_request(
+            request_id="req_partial_output",
+            owner_user_id=user.id,
+            campaign_id="campaign_partial_output",
+            turn_id="turn_partial_output",
+            agent_name="Narrator",
+            model="gpt-4.1-mini",
+            estimated_input_tokens=1000,
+            estimated_output_tokens=500,
+            actual_input_tokens=900,
+            actual_output_tokens=None,
+            actual_total_tokens=None,
+            latency_ms=10,
+            success=True,
+        )
+
+        user_total = db.sum_user_model_tokens_since(user.id, "2000-01-01T00:00:00")
+        project_total = db.sum_project_model_tokens_since("2000-01-01T00:00:00")
+        assert user_total == 1400
+        assert user_total > 900
+        assert project_total == user_total
+
+
+def test_model_request_token_total_helper_removed() -> None:
+    assert not hasattr(Repository, "_model_request_token_total")
 
 
 def test_database_url_fixture_is_isolated() -> None:

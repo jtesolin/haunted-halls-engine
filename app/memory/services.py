@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 
 from app.core.config import settings
+from app.guardrails.token_budget import estimate_tokens
 from app.memory.repository import MemoryRepository
 
 
@@ -38,37 +39,55 @@ class MemoryService:
             part
             for part in [
                 query,
-                campaign_state,
                 " ".join(turn.get("content", "") for turn in recent_turns[-2:]),
             ]
             if part
         )
 
         memory_messages: list[dict[str, str]] = []
+        total_tokens = 0
+        max_tokens = settings.MAX_MEMORY_CONTEXT_TOKENS
+        max_entries = settings.MEMORY_RELEVANT_ENTRIES
+
         latest_summary = self.repository.get_latest_summary(
             owner_user_id=owner_user_id, campaign_id=campaign_id
         )
         if latest_summary is not None:
-            memory_messages.append(
-                {
-                    "role": "user",
-                    "content": f"Campaign summary:\n{latest_summary.summary}",
-                }
-            )
+            summary_message = {
+                "role": "user",
+                "content": f"Campaign summary:\n{latest_summary.summary}",
+            }
+            summary_tokens = estimate_tokens(summary_message.get("content", ""))
+            if summary_tokens <= max_tokens and total_tokens + summary_tokens <= max_tokens:
+                total_tokens += summary_tokens
+                memory_messages.append(summary_message)
 
         memories = self.repository.search_campaign_memories(
             owner_user_id=owner_user_id,
             campaign_id=campaign_id,
             query=memory_query,
-            limit=settings.MEMORY_RELEVANT_ENTRIES,
+            limit=max_entries,
         )
+        entries_added = 0
         for memory in memories:
-            memory_messages.append(
-                {
-                    "role": "user",
-                    "content": f"{memory.kind.replace('_', ' ').title()} memory:\n{memory.content}",
-                }
-            )
+            if entries_added >= max_entries:
+                break
+
+            memory_message = {
+                "role": "user",
+                "content": f"{memory.kind.replace('_', ' ').title()} memory:\n{memory.content}",
+            }
+            memory_tokens = estimate_tokens(memory_message.get("content", ""))
+
+            if memory_tokens > max_tokens:
+                continue
+
+            if total_tokens + memory_tokens > max_tokens:
+                continue
+
+            total_tokens += memory_tokens
+            memory_messages.append(memory_message)
+            entries_added += 1
 
         return memory_messages
 
@@ -128,16 +147,6 @@ class MemoryService:
                 kind="message",
                 content=f"Player said: {request_message}",
                 importance=0.3,
-                source_event_id=user_turn_id,
-            )
-
-        if campaign_state and campaign_state != "No campaign state yet.":
-            self.repository.add_memory(
-                owner_user_id=owner_user_id,
-                campaign_id=campaign_id,
-                kind="state",
-                content=f"Current campaign state snapshot: {campaign_state}",
-                importance=0.2,
                 source_event_id=user_turn_id,
             )
 

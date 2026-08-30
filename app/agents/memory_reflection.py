@@ -7,9 +7,9 @@ from openai.types.chat import ChatCompletionMessageParam
 from pydantic import BaseModel, Field
 
 from app.agents.base import BaseAgent
-from app.ai.model_client import model_client
+from app.ai.model_client import ModelCallResult, model_client
 from app.guardrails.model_policy import ModelPolicy
-from app.guardrails.token_budget import TokenBudget, estimate_tokens
+from app.guardrails.token_budget import TokenBudget
 
 
 class MemoryCandidate(BaseModel):
@@ -27,7 +27,12 @@ class MemoryReflectionInput(BaseModel):
 
 class MemoryReflectionOutput(BaseModel):
     memories_to_store: list[MemoryCandidate] = Field(default_factory=list)
-    token_usage: int | None = None
+    input_tokens: int | None = None
+    cached_input_tokens: int | None = None
+    cache_write_input_tokens: int | None = None
+    output_tokens: int | None = None
+    reasoning_output_tokens: int | None = None
+    total_tokens: int | None = None
 
 
 class MemoryReflectionAgent(BaseAgent):
@@ -41,23 +46,38 @@ class MemoryReflectionAgent(BaseAgent):
         payload: MemoryReflectionInput,
         model: str | None = None,
         ai_enabled: bool,
+        provider_model_enabled: bool = False,
     ) -> MemoryReflectionOutput:
-        if ai_enabled:
+        if provider_model_enabled:
             messages = self._build_messages(payload)
-            raw_facts = await model_client.generate_text(
+            result = await model_client.generate_text(
                 messages=messages,
                 model=model or ModelPolicy.memory_reflection_model(),
                 max_output_tokens=TokenBudget.memory_reflection_max_output_tokens(),
                 reasoning_effort="minimal",
                 timeout=15,
+                return_usage=True,
             )
-            facts = self._parse_reflection_facts(raw_facts)
+            usage = result.usage if isinstance(result, ModelCallResult) else None
+            raw_facts = result.output if isinstance(result, ModelCallResult) else result
+            facts = self._parse_reflection_facts(raw_facts or "")
             if facts:
+                if usage is not None:
+                    return MemoryReflectionOutput(
+                        memories_to_store=[
+                            MemoryCandidate(text=fact, importance=1.0, memory_type="reflection") for fact in facts
+                        ],
+                        input_tokens=usage.input_tokens,
+                        cached_input_tokens=usage.cached_input_tokens,
+                        cache_write_input_tokens=usage.cache_write_input_tokens,
+                        output_tokens=usage.output_tokens,
+                        reasoning_output_tokens=usage.reasoning_output_tokens,
+                        total_tokens=usage.total_tokens,
+                    )
                 return MemoryReflectionOutput(
                     memories_to_store=[
                         MemoryCandidate(text=fact, importance=1.0, memory_type="reflection") for fact in facts
-                    ],
-                    token_usage=estimate_tokens(raw_facts),
+                    ]
                 )
 
         fallback_facts = self._fallback_reflection_facts(
@@ -67,8 +87,7 @@ class MemoryReflectionAgent(BaseAgent):
         return MemoryReflectionOutput(
             memories_to_store=[
                 MemoryCandidate(text=fact, importance=1.0, memory_type="reflection") for fact in fallback_facts
-            ],
-            token_usage=estimate_tokens("\n".join(fallback_facts)),
+            ]
         )
 
     def _build_messages(self, payload: MemoryReflectionInput) -> list[ChatCompletionMessageParam]:

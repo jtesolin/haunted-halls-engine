@@ -78,6 +78,12 @@ class ParsedAction(BaseModel):
     confidence: float = 0.0
     parse_status: ParseStatus = "invalid"
     parser_notes: Optional[str] = None
+    input_tokens: Optional[int] = None
+    cached_input_tokens: Optional[int] = None
+    cache_write_input_tokens: Optional[int] = None
+    output_tokens: Optional[int] = None
+    reasoning_output_tokens: Optional[int] = None
+    total_tokens: Optional[int] = None
 
 
 class ToolExecutionResult(BaseModel):

@@ -1,9 +1,11 @@
 import asyncio
 from typing import Any
 
+from types import SimpleNamespace
+
 from pydantic import BaseModel
 
-from app.ai.model_client import ModelClient
+from app.ai.model_client import ModelClient, ModelUsage
 
 
 class _FakeResponsesAPI:
@@ -203,6 +205,16 @@ def test_generate_text_uses_fallback_when_client_unavailable(monkeypatch) -> Non
     )
 
     assert result == "AI narrator replies: hello"
+
+
+def test_extract_usage_preserves_partial_and_zero_values() -> None:
+    model_client = ModelClient()
+
+    assert model_client._extract_usage(SimpleNamespace(usage=SimpleNamespace(input_tokens=100, output_tokens=50))) == ModelUsage(input_tokens=100, output_tokens=50)
+    assert model_client._extract_usage(SimpleNamespace(usage=SimpleNamespace(input_tokens=100, output_tokens=None))) == ModelUsage(input_tokens=100, output_tokens=None)
+    assert model_client._extract_usage(SimpleNamespace(usage=SimpleNamespace(input_tokens=None, output_tokens=50))) == ModelUsage(input_tokens=None, output_tokens=50)
+    assert model_client._extract_usage(SimpleNamespace(usage=SimpleNamespace(input_tokens=None, output_tokens=None))) is None
+    assert model_client._extract_usage(SimpleNamespace(usage=SimpleNamespace(input_tokens=0, output_tokens=0))) == ModelUsage(input_tokens=0, output_tokens=0)
 
 
 def test_generate_structured_uses_responses_parse(monkeypatch) -> None:

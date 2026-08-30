@@ -6,7 +6,7 @@ from openai.types.chat import ChatCompletionMessageParam
 from pydantic import BaseModel, Field
 
 from app.agents.base import BaseAgent
-from app.ai.model_client import model_client
+from app.ai.model_client import ModelCallResult, model_client
 from app.ai.prompts import narrator_prompt
 from app.guardrails.model_policy import ModelPolicy
 from app.guardrails.token_budget import TokenBudget
@@ -25,6 +25,12 @@ class NarratorAgentInput(BaseModel):
 
 class NarratorAgentOutput(BaseModel):
     reply_text: str
+    input_tokens: int | None = None
+    cached_input_tokens: int | None = None
+    cache_write_input_tokens: int | None = None
+    output_tokens: int | None = None
+    reasoning_output_tokens: int | None = None
+    total_tokens: int | None = None
 
 
 class NarratorAgent(BaseAgent):
@@ -56,14 +62,29 @@ class NarratorAgent(BaseAgent):
             parsed_action=payload.parsed_action,
             tool_result=payload.tool_result,
         )
-        reply = await model_client.generate_text(
+        result = await model_client.generate_text(
             messages=messages,
             model=model or ModelPolicy.narrator_model(),
             max_output_tokens=TokenBudget.narrator_max_output_tokens(),
             reasoning_effort="medium",
             timeout=20,
+            return_usage=True,
         )
-        return NarratorAgentOutput(reply_text=reply)
+        if isinstance(result, ModelCallResult):
+            reply = result.output or ""
+            usage = result.usage
+            if usage is not None:
+                return NarratorAgentOutput(
+                    reply_text=reply,
+                    input_tokens=usage.input_tokens,
+                    cached_input_tokens=usage.cached_input_tokens,
+                    cache_write_input_tokens=usage.cache_write_input_tokens,
+                    output_tokens=usage.output_tokens,
+                    reasoning_output_tokens=usage.reasoning_output_tokens,
+                    total_tokens=usage.total_tokens,
+                )
+            return NarratorAgentOutput(reply_text=reply)
+        return NarratorAgentOutput(reply_text=result)
 
     def _build_messages(
         self,
