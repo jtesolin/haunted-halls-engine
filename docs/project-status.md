@@ -129,6 +129,27 @@ Deferred work includes:
 
 This phase should remain deferred until local product/game development warrants hosting.
 
+### D3D — Deployment Migration Readiness
+
+**Status: Complete — deployment migration contract formalized**
+
+D3D formalizes the database migration contract and strengthens CI validation around migrations to support future deployment automation (D5).
+
+Implemented as part of D3D:
+
+* **Migration contract documentation** — The production deployment sequence: build image → run migration job → `alembic upgrade head` → migrate succeeds → deploy application. Application startup must remain independent of migrations.
+* **Migration failure semantics** — Migration failure blocks application deployment; the new application revision must not start if migrations fail.
+* **Rollback expectations** — Clarified distinction between application rollback and schema downgrade. Backward-compatible schema changes are preferred; destructive downgrade during application rollback is not automatic or assumed.
+* **Direct SQLite workflow documentation** — Explicit guidance on `make db-upgrade` + `make dev` for local development without Compose.
+* **Direct Compose PostgreSQL workflow documentation** — Clarified that `make docker-up` automatically applies migrations via the one-shot migration service; `make docker-migrate` is used only when pulling new migrations while the stack is already running.
+* **Migration creation workflow** — Documented the flow: modify metadata → `alembic revision --autogenerate` → review generated migration → `make db-upgrade` → test → commit together. Migrations are production code requiring review.
+* **Migration safety expectations** — Prefer additive changes, avoid destructive changes in the same deployment, test against both SQLite and PostgreSQL, review migrations carefully.
+* **CI migration validation** — Enhanced CI checks: single-head validation (detects accidental multiple heads) and migration drift detection (`alembic check`).
+* **Makefile improvements** — Engine Makefile now includes `db-heads` and `db-check` targets with clear documentation for each migration command. Frontend Makefile clarified with detailed explanations of Compose workflow including automatic migration ordering.
+* **Documentation fixes** — Corrected stale references to SQLite persistence in Compose; documentation now correctly reflects PostgreSQL.
+
+D3D does not implement production deployment (D4/D5) or GCP infrastructure; it provides the contract and validation that those future phases will consume.
+
 ## Phase 4 — Long-Term Memory
 
 **Status: Complete — v1**

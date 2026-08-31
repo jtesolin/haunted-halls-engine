@@ -35,6 +35,65 @@ The underlying commands are `alembic upgrade head`, `alembic current`, and `alem
 3. FastAPI engine starts and depends on migration success
 4. Frontend starts and depends on engine health
 
+### Direct Local SQLite Development
+
+For direct development without Compose (the default):
+
+```bash
+make db-upgrade
+make dev
+```
+
+This applies all pending migrations to the local SQLite database (`data/haunted_halls.db`), then starts the FastAPI server. The migration step is explicit; application startup does not automatically run migrations.
+
+If you delete the SQLite database, repeat the `make db-upgrade` step to recreate it with the current schema.
+
+### Migration Workflows
+
+**After pulling new migrations:**
+
+- If using direct SQLite: `make db-upgrade` then `make dev`
+- If using Compose: `make docker-up` (migrations run automatically)
+- If Compose stack is already running: `make docker-migrate` to run migrations explicitly
+
+**When creating a new migration:**
+
+1. Modify SQLAlchemy schema metadata in the engine
+2. Generate the migration: `alembic revision --autogenerate -m "description of change"`
+3. Review the generated `alembic/versions/*.py` file — Alembic autogenerate output should not be blindly accepted
+4. Apply locally: `make db-upgrade`
+5. Run tests and verify behavior
+6. Commit metadata changes and migration together
+
+**Never commit SQLAlchemy schema changes without the corresponding migration.**
+
+### Migration Safety Expectations
+
+- Prefer additive / backward-compatible schema changes when practical
+- Avoid destructive changes in the same deployment that switches application code
+- Do not assume database schema downgrade (`alembic downgrade`) is safe during application rollback; instead, revert the application revision and use expand/contract patterns for risky changes
+- Migrations are production code; review and test them as carefully as application code
+
+### Deployment Migration Contract
+
+The intended production deployment pattern is:
+
+```
+build immutable application image
+    ↓
+run that image as a one-shot migration job
+    ↓
+alembic upgrade head
+    ↓
+migration succeeds?
+    ├─ no  → deployment stops, application does not start
+    └─ yes → deploy/start new application revision
+```
+
+The same engine image/version that is being deployed must contain and execute its matching Alembic migrations. Application startup **must remain independent** of migration execution — do not configure the entrypoint or application startup to run Alembic.
+
+If migrations fail during the deployment migration step, the new application revision must not be deployed or started. This separation between migration job and application process is intentional and critical to safe deployment ordering.
+
 ## Container Debugging
 
 - The sibling `haunted-halls` repository owns the Compose stack; start the debug stack there with `make debug-up`.
