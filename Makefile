@@ -15,7 +15,7 @@ help:
 	@echo "  lint              Run ruff and pyright checks"
 	@echo "  typecheck         Run pyright type checker"
 	@echo ""
-	@echo "Database (SQLite):"
+	@echo "Database (Alembic / default: SQLite):"
 	@echo "  db-upgrade        Apply all pending Alembic migrations to DATABASE_URL"
 	@echo "                    Use after: creating/deleting a local SQLite database, or pulling new migrations"
 	@echo "  db-current        Show the revision currently applied to DATABASE_URL"

@@ -183,7 +183,7 @@ jobs:
 
       - name: Check PostgreSQL migration drift
         run: |
-          DATABASE_URL="$TEST_DATABASE_URL" alembic check || true
+          DATABASE_URL="$TEST_DATABASE_URL" alembic check
 
   docker-build:
     name: Engine / Docker Build
