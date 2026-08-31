@@ -102,16 +102,30 @@ The D2 baseline makes both applications reproducibly buildable and runnable as l
 
 The engine persistence layer now uses native SQLAlchemy Core statements instead of the legacy SQLite placeholder adapter, and the repository remains dialect-neutral across SQLite and PostgreSQL. Alembic upgrades are validated against both a fresh SQLite database and a fresh PostgreSQL database. SQLite remains the default lightweight local database, while PostgreSQL is supported for engine persistence and CI validation. Cloud SQL deployment remains deferred.
 
+### D3C — Local PostgreSQL Integration
+
+**Status: Complete — PostgreSQL integrated into Docker Compose stack**
+
+The Docker Compose application stack now uses PostgreSQL 16 instead of SQLite. The Compose configuration includes:
+
+* PostgreSQL 16 Alpine service with persistent volume and health check.
+* One-shot migration service that runs `alembic upgrade head` before the engine starts.
+* Explicit service dependency ordering: PostgreSQL → migration → engine → frontend.
+* Engine DATABASE_URL configured to use PostgreSQL when running in Compose.
+* Direct local development and pytest continue to use SQLite as the default database.
+* Debug Compose stack shares the same PostgreSQL database as the normal stack.
+* Sibling `haunted-halls` repository Makefile targets updated to reflect PostgreSQL persistence model.
+
 The following production infrastructure remains deferred because development remains local:
 
 Deferred work includes:
 
 * Production hosting.
-* Network/private-service deployment.
+* GCP / Cloud SQL.
+* Terraform and deployment automation.
 * Production secrets management.
-* Production database.
 * Production observability.
-* Deployment automation and infrastructure-as-code expansion.
+* Network/private-service deployment at scale.
 
 This phase should remain deferred until local product/game development warrants hosting.
 
@@ -350,7 +364,10 @@ The Director should remain deferred until the deterministic world model contains
 
 ## Current Persistence
 
-**SQLite — suitable for current local development**
+**Persistence Architecture:**
+
+* **SQLite** — Default lightweight database for direct local development and pytest.
+* **PostgreSQL** — Used by Docker Compose application stack; persists across normal stack restarts; removed only by explicit `docker compose down -v` or `make docker-reset-db` from `../haunted-halls`.
 
 Persisted concepts include:
 
@@ -363,15 +380,7 @@ Persisted concepts include:
 * Summaries.
 * Memories.
 
-A PostgreSQL migration is not currently required.
-
-Potential future reasons to migrate include:
-
-* Hosted multi-user operation.
-* Higher concurrency.
-* Stronger migrations/schema lifecycle.
-* Vector search through pgvector.
-* Production operations requirements.
+Both databases are validated to support current migrations and application behavior. PostgreSQL in Compose represents the first step toward a production-capable persistence layer.
 
 ## Testing
 

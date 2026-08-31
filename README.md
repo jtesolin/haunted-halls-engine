@@ -17,7 +17,7 @@ Keep this document updated as engine changes affect architecture, behavior, road
 
 ## Database Migrations
 
-SQLAlchemy Core is the engine persistence layer, SQLite remains the default lightweight local database, and PostgreSQL is now a supported engine database. Alembic owns the schema lifecycle; application startup does not create or migrate tables.
+SQLAlchemy Core is the engine persistence layer. SQLite remains the default lightweight local database for direct development and testing. PostgreSQL is now a supported backend and is the database used by the Docker Compose stack.
 
 For a fresh local database, run:
 
@@ -25,9 +25,15 @@ For a fresh local database, run:
 make db-upgrade
 ```
 
-This engine keeps SQLite as the default for local development and tests, while PostgreSQL is supported through the SQLAlchemy `postgresql+psycopg://` driver. Delete and recreate disposable local data before upgrading it. For the Docker Compose database, use `docker compose down -v` from `../haunted-halls` to reset the existing SQLite volume, then start the stack again. A local PostgreSQL Compose service remains deferred to D3C.
+For the Docker Compose stack, migrations are applied automatically by the one-shot `migrate` service defined in the sibling `haunted-halls` repository's Compose stack before the engine starts. PostgreSQL data is stored in a Compose-managed volume, persists across normal `docker compose down` / `docker compose up` cycles, and is removed only by `docker compose down -v` (or `make docker-reset-db` from `../haunted-halls`).
 
 The underlying commands are `alembic upgrade head`, `alembic current`, and `alembic history`. To use another local database, set `DATABASE_URL` before invoking them. For a PostgreSQL-backed test run, set `TEST_DATABASE_URL` before invoking pytest.
+
+**Compose stack startup order:**
+1. PostgreSQL service starts and becomes healthy (`pg_isready`)
+2. Migration service runs `alembic upgrade head` and exits successfully
+3. FastAPI engine starts and depends on migration success
+4. Frontend starts and depends on engine health
 
 ## Container Debugging
 
@@ -107,7 +113,7 @@ docker compose up -d
 
 The engine is reachable from the frontend as `http://engine:8000` and is not published directly to the host. View logs with `docker compose logs -f engine`, stop with `docker compose down`, and rebuild after changes with `docker compose up -d --build engine`.
 
-The SQLite database is mounted at `/app/data` from the Compose-managed `engine-data` volume, so stopping, recreating, or rebuilding the engine preserves local data. To intentionally reset it, run `docker compose down -v` from `../haunted-halls`.
+The PostgreSQL database uses a Compose-managed volume, so stopping, recreating, or rebuilding the engine preserves local data. To intentionally reset it, run `docker compose down -v` from `../haunted-halls`.
 
 This mirrors the repo-defined Python 3.14 development setup and runs on the standard GitHub-hosted Linux runner.
 
