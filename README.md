@@ -25,7 +25,7 @@ For a fresh local database, run:
 make db-upgrade
 ```
 
-For the Docker Compose stack, migrations are applied automatically by the one-shot `migrate` service before the engine starts. PostgreSQL data persists across normal `docker-compose down` / `docker-compose up` cycles and is removed only by `docker-compose down -v` (or `make docker-reset-db` from `../haunted-halls`).
+For the Docker Compose stack, migrations are applied automatically by the one-shot `migrate` service before the engine starts. PostgreSQL data is stored in a Compose-managed volume, persists across normal `docker compose down` / `docker compose up` cycles, and is removed only by `docker compose down -v` (or `make docker-reset-db` from `../haunted-halls`).
 
 The underlying commands are `alembic upgrade head`, `alembic current`, and `alembic history`. To use another local database, set `DATABASE_URL` before invoking them. For a PostgreSQL-backed test run, set `TEST_DATABASE_URL` before invoking pytest.
 
@@ -113,7 +113,7 @@ docker compose up -d
 
 The engine is reachable from the frontend as `http://engine:8000` and is not published directly to the host. View logs with `docker compose logs -f engine`, stop with `docker compose down`, and rebuild after changes with `docker compose up -d --build engine`.
 
-The SQLite database is mounted at `/app/data` from the Compose-managed `engine-data` volume, so stopping, recreating, or rebuilding the engine preserves local data. To intentionally reset it, run `docker compose down -v` from `../haunted-halls`.
+The PostgreSQL database uses a Compose-managed volume, so stopping, recreating, or rebuilding the engine preserves local data. To intentionally reset it, run `docker compose down -v` from `../haunted-halls`.
 
 This mirrors the repo-defined Python 3.14 development setup and runs on the standard GitHub-hosted Linux runner.
 
