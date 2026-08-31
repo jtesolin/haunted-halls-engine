@@ -114,7 +114,7 @@ The Docker Compose application stack now uses PostgreSQL 16 instead of SQLite. T
 * Engine DATABASE_URL configured to use PostgreSQL when running in Compose.
 * Direct local development and pytest continue to use SQLite as the default database.
 * Debug Compose stack shares the same PostgreSQL database as the normal stack.
-* Makefile targets updated to reflect PostgreSQL persistence model.
+* Sibling `haunted-halls` repository Makefile targets updated to reflect PostgreSQL persistence model.
 
 The following production infrastructure remains deferred because development remains local:
 

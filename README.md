@@ -25,7 +25,7 @@ For a fresh local database, run:
 make db-upgrade
 ```
 
-For the Docker Compose stack, migrations are applied automatically by the one-shot `migrate` service before the engine starts. PostgreSQL data is stored in a Compose-managed volume, persists across normal `docker compose down` / `docker compose up` cycles, and is removed only by `docker compose down -v` (or `make docker-reset-db` from `../haunted-halls`).
+For the Docker Compose stack, migrations are applied automatically by the one-shot `migrate` service defined in the sibling `haunted-halls` repository's Compose stack before the engine starts. PostgreSQL data is stored in a Compose-managed volume, persists across normal `docker compose down` / `docker compose up` cycles, and is removed only by `docker compose down -v` (or `make docker-reset-db` from `../haunted-halls`).
 
 The underlying commands are `alembic upgrade head`, `alembic current`, and `alembic history`. To use another local database, set `DATABASE_URL` before invoking them. For a PostgreSQL-backed test run, set `TEST_DATABASE_URL` before invoking pytest.
 
