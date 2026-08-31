@@ -367,7 +367,7 @@ The Director should remain deferred until the deterministic world model contains
 **Persistence Architecture:**
 
 * **SQLite** — Default lightweight database for direct local development and pytest.
-* **PostgreSQL** — Used by Docker Compose application stack; persists across normal stack restarts; removed only by explicit `docker compose down -v` or `make docker-reset-db`.
+* **PostgreSQL** — Used by Docker Compose application stack; persists across normal stack restarts; removed only by explicit `docker compose down -v` or `make docker-reset-db` from `../haunted-halls`.
 
 Persisted concepts include:
 
