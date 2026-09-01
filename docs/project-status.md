@@ -79,22 +79,15 @@ Next.js is the public application boundary. Google OIDC authentication occurs th
 
 ### Phase 3 — Production Infrastructure
 
-**Status: Partially complete — D2 containerization baseline implemented**
+**Status: Complete — D3D deployment-readiness contract implemented (production deployment deferred)**
 
-The D2 containerization baseline is implemented across both repositories:
+The production-infrastructure foundation is now in the correct state for the planned D4/D5 rollout:
 
-* Multi-stage production-oriented Docker images for the Next.js frontend/BFF and FastAPI engine.
-* Node 24.18.0 and Python 3.14 slim runtime bases with non-root container users.
-* Next.js standalone output and production startup configuration.
-* Docker Compose local multi-service execution with container-to-container BFF-to-engine networking.
-* Existing internal service authentication and trusted user-context propagation preserved in Compose.
-* FastAPI `/health` and frontend `/api/health` container health checks.
-* Docker-managed SQLite persistence through the Compose `engine-data` volume.
-* Runtime configuration injection: Compose loads the engine's host `.env` through `env_file` (optional) so containerized runs use the developer's real AI configuration, while Compose-level `environment` values still pin `DATABASE_URL` and the shared internal service token. `.env` files remain excluded from images.
-* Local container debugging: a `docker-compose.debug.yml` override adds debug Dockerfile stages, source bind mounts, `debugpy` on 5678, and the Node inspector on 9229, with VS Code attach configurations in both repositories. Production images and CI builds keep using the production stages.
-* CI Docker-build checks that build both images without pushing or deploying them.
+* Local containerization and Compose orchestration remain in place for developer workflows.
+* PostgreSQL compatibility and migration readiness were validated and formalized in D3B through D3D.
+* D4A completes the shared GCP and Terraform foundation for future Cloud Run and Cloud SQL deployment work.
 
-The D2 baseline makes both applications reproducibly buildable and runnable as local containers. It does not constitute production deployment.
+The D2 baseline is no longer the current production-infrastructure status; it is superseded by the D3/D4 deployment-readiness work.
 
 ### D3B — PostgreSQL Compatibility
 
@@ -149,6 +142,25 @@ Implemented as part of D3D:
 * **Documentation fixes** — Corrected stale references to SQLite persistence in Compose; documentation now correctly reflects PostgreSQL.
 
 D3D does not implement production deployment (D4/D5) or GCP infrastructure; it provides the contract and validation that those future phases will consume.
+
+### D4A — GCP + Terraform Foundation
+
+**Status: Complete — shared GCP/Terraform control plane established**
+
+D4A establishes the foundational Google Cloud and Terraform platform needed before creating billable database or application runtime resources. The frontend repository owns the shared deployment infrastructure and the Terraform foundation includes:
+
+* GCS remote state bootstrap with a dedicated state bucket
+* reusable `infra/terraform` configuration managed under the frontend repository
+* GA Terraform provider configuration and lock file discipline
+* GCP API enablement for Cloud Run, Artifact Registry, Cloud SQL, Secret Manager, IAM, IAM Credentials, Service Usage, Cloud Resource Manager, and billing budgets
+* Artifact Registry repository for future Docker images
+* dedicated runtime service accounts for frontend, engine, and migration workloads
+* separate frontend and engine GitHub deployment service accounts
+* GitHub OIDC Workload Identity Federation restricted to the trusted main-branch repository context
+* project budget guardrail with a $20 monthly default
+* credential-free Terraform validation in CI
+
+D4A intentionally does not create Cloud Run services, Cloud SQL, VPC networking, or other billable runtime resources yet. That remains for D4B/D4C and later deployment work.
 
 ## Phase 4 — Long-Term Memory
 
