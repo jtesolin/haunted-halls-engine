@@ -170,11 +170,11 @@ D4B deploys the managed database and production secrets foundation on top of the
 * Backups disabled and deletion protection disabled for the current development environment.
 * Public IPv4 retained intentionally for Cloud SQL Auth Proxy/connector access, with `connector_enforcement = "REQUIRED"` and zero authorized networks, so only proxy/connector traffic is accepted.
 * Application database `haunted_halls` and application user `haunted_halls_app` created; Alembic remains authoritative for application schema, which has not yet been migrated onto this instance (that migration job is D4C runtime work).
-* Secret Manager containers created for `hh-database-url`, `hh-internal-engine-service-token`, `hh-nextauth-secret`, `hh-openai-api-key`, and `hh-google-client-secret`.
-* Terraform-generated secrets (`hh-database-url`, `hh-internal-engine-service-token`, `hh-nextauth-secret`) use ephemeral/write-only handling so values are never stored in Terraform state; generated secret rotation is controlled through explicit version variables.
+* Secret Manager secret containers created for the database URL, internal engine service token, NextAuth secret, OpenAI API key, and Google OAuth client secret.
+* Terraform-generated secrets (database URL, internal engine service token, NextAuth secret) use ephemeral/write-only handling so values are not written to Terraform state; generated secret rotation is controlled through explicit version variables.
 * Secret-level IAM grants `roles/secretmanager.secretAccessor` only to the runtime identities that require each secret; only the engine and migration runtime identities receive `roles/cloudsql.client`; the frontend runtime has no direct database access.
-* `hh-openai-api-key` has been populated with the production OpenAI service-account key, stored as an enabled Secret Manager version (value not recorded here).
-* `hh-google-client-secret` container and IAM foundation exist, but the production OAuth client secret is intentionally not populated yet; the production Google OAuth client will be created/configured during D4C once the production frontend URL exists.
+* OpenAI API key is stored in Secret Manager (value not recorded here).
+* Google OAuth client secret container and IAM foundation exist, but the secret value is intentionally not populated yet; it will be created/configured during D4C once the production frontend URL exists.
 * Final post-apply Terraform plan reported no drift.
 
 ## Phase 4 — Long-Term Memory
