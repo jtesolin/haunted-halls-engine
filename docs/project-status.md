@@ -93,7 +93,7 @@ The D2 baseline is no longer the current production-infrastructure status; it is
 
 **Status: Complete — PostgreSQL compatibility validated**
 
-The engine persistence layer now uses native SQLAlchemy Core statements instead of the legacy SQLite placeholder adapter, and the repository remains dialect-neutral across SQLite and PostgreSQL. Alembic upgrades are validated against both a fresh SQLite database and a fresh PostgreSQL database. SQLite remains the default lightweight local database, while PostgreSQL is supported for engine persistence and CI validation. Cloud SQL deployment remains deferred.
+The engine persistence layer now uses native SQLAlchemy Core statements instead of the legacy SQLite placeholder adapter, and the repository remains dialect-neutral across SQLite and PostgreSQL. Alembic upgrades are validated against both a fresh SQLite database and a fresh PostgreSQL database. SQLite remains the default lightweight local database, while PostgreSQL is supported for engine persistence and CI validation. Cloud SQL PostgreSQL was later deployed as managed infrastructure in D4B; the application schema has not yet been migrated onto it.
 
 ### D3C — Local PostgreSQL Integration
 
@@ -109,18 +109,16 @@ The Docker Compose application stack now uses PostgreSQL 16 instead of SQLite. T
 * Debug Compose stack shares the same PostgreSQL database as the normal stack.
 * Sibling `haunted-halls` repository Makefile targets updated to reflect PostgreSQL persistence model.
 
-The following production infrastructure remains deferred because development remains local:
+At the time D3C was implemented, the following production infrastructure was deferred because development remained local. The GCP/Terraform foundation, Cloud SQL, and production secrets management have since been established in D4A/D4B; application hosting/runtime deployment remains deferred to D4C:
 
-Deferred work includes:
+Still deferred:
 
-* Production hosting.
-* GCP / Cloud SQL.
-* Terraform and deployment automation.
-* Production secrets management.
+* Production hosting (Cloud Run application runtime).
+* Deployment automation (D5).
 * Production observability.
 * Network/private-service deployment at scale.
 
-This phase should remain deferred until local product/game development warrants hosting.
+Application hosting should proceed through the planned D4C/D5 phases.
 
 ### D3D — Deployment Migration Readiness
 
@@ -160,7 +158,24 @@ D4A establishes the foundational Google Cloud and Terraform platform needed befo
 * project budget guardrail with a $20 monthly default
 * credential-free Terraform validation in CI
 
-D4A intentionally does not create Cloud Run services, Cloud SQL, VPC networking, or other billable runtime resources yet. That remains for D4B/D4C and later deployment work.
+D4A intentionally did not create Cloud SQL or Cloud Run; Cloud SQL was added in D4B, while Cloud Run remains D4C work.
+
+### D4B — Cloud SQL + Secret Manager
+
+**Status: Complete — managed PostgreSQL and production secret foundation deployed**
+
+D4B deploys the managed database and production secrets foundation on top of the D4A GCP/Terraform control plane. Implemented and verified in GCP:
+
+* Cloud SQL PostgreSQL 16 instance in `us-east1`, edition `ENTERPRISE`, `db-f1-micro` shared-core development tier, ZONAL availability, 10 GB SSD storage with autoresize.
+* Backups disabled and deletion protection disabled for the current development environment.
+* Public IPv4 retained intentionally for Cloud SQL Auth Proxy/connector access, with `connector_enforcement = "REQUIRED"` and zero authorized networks, so only proxy/connector traffic is accepted.
+* Application database `haunted_halls` and application user `haunted_halls_app` created; Alembic remains authoritative for application schema, which has not yet been migrated onto this instance (that migration job is D4C runtime work).
+* Secret Manager containers created for `hh-database-url`, `hh-internal-engine-service-token`, `hh-nextauth-secret`, `hh-openai-api-key`, and `hh-google-client-secret`.
+* Terraform-generated secrets (`hh-database-url`, `hh-internal-engine-service-token`, `hh-nextauth-secret`) use ephemeral/write-only handling so values are never stored in Terraform state; generated secret rotation is controlled through explicit version variables.
+* Secret-level IAM grants `roles/secretmanager.secretAccessor` only to the runtime identities that require each secret; only the engine and migration runtime identities receive `roles/cloudsql.client`; the frontend runtime has no direct database access.
+* `hh-openai-api-key` has been populated with the production OpenAI service-account key, stored as an enabled Secret Manager version (value not recorded here).
+* `hh-google-client-secret` container and IAM foundation exist, but the production OAuth client secret is intentionally not populated yet; the production Google OAuth client will be created/configured during D4C once the production frontend URL exists.
+* Final post-apply Terraform plan reported no drift.
 
 ## Phase 4 — Long-Term Memory
 
@@ -400,7 +415,8 @@ The Director should remain deferred until the deterministic world model contains
 **Persistence Architecture:**
 
 * **SQLite** — Default lightweight database for direct local development and pytest.
-* **PostgreSQL** — Used by Docker Compose application stack; persists across normal stack restarts; removed only by explicit `docker compose down -v` or `make docker-reset-db` from `../haunted-halls`.
+* **PostgreSQL via Docker Compose** — Used by the local containerized Compose application stack; persists across normal stack restarts; removed only by explicit `docker compose down -v` or `make docker-reset-db` from `../haunted-halls`.
+* **Cloud SQL PostgreSQL 16** — Deployed managed remote database foundation (D4B). The instance, `haunted_halls` database, and `haunted_halls_app` user exist in GCP, but the application schema has not yet been migrated onto it; that migration job is D4C runtime work, so production application traffic is not using Cloud SQL yet.
 
 Persisted concepts include:
 
@@ -413,7 +429,7 @@ Persisted concepts include:
 * Summaries.
 * Memories.
 
-Both databases are validated to support current migrations and application behavior. PostgreSQL in Compose represents the first step toward a production-capable persistence layer.
+All three databases share the same Alembic migration contract. SQLite and Compose PostgreSQL are validated to support current migrations and application behavior; Cloud SQL is the deployed managed target that D4C's migration job will bring up to date.
 
 ## Testing
 
@@ -596,19 +612,21 @@ This should be driven by an observed retrieval-quality or scaling need rather th
 
 ## Production Deployment
 
-Still deferred.
+Production deployment infrastructure is in progress.
 
-Likely future work:
+Completed:
 
-* Hosted Next.js BFF.
-* Private FastAPI engine.
-* Managed database.
-* Production secrets.
-* Logging/metrics/tracing.
-* Error monitoring.
-* CI/CD.
-* Backups.
-* Data migrations.
+* D4A — GCP/Terraform foundation.
+* D4B — Cloud SQL + Secret Manager.
+
+Remaining:
+
+* D4C — Cloud Run frontend/engine/migration runtime and first deployment.
+* D5 — CI/CD deployment automation.
+* D6 — Custom domain.
+* D7 — Operability/observability.
+
+The application is not currently hosted; no Cloud Run services, production URLs, or automated deployments exist yet.
 
 # Architectural Principles
 
@@ -677,15 +695,22 @@ PostgreSQL, vector databases, deployment infrastructure, additional agents, and 
 | Rich NPC model                | Planned           |
 | Rule-based world interactions | Planned           |
 | Director Agent                | Deferred          |
-| Domain MCP servers            | Future            |
-| PostgreSQL/vector DB          | Deferred          |
-| Production deployment         | Deferred          |
+| Domain MCP servers             | Future            |
+| PostgreSQL local/CI compatibility | Complete       |
+| Cloud SQL PostgreSQL foundation | Complete         |
+| Vector database / pgvector    | Deferred          |
+| GCP/Terraform foundation       | Complete          |
+| Cloud SQL/Secret Manager       | Complete          |
+| Cloud Run application deployment | Planned / Next infra phase |
+| CI/CD deployment automation   | Planned           |
 
 # Next Step
 
-**Phase 6B — Item Model**
+**Phase 6C — NPC Model**
 
-This is the active implementation phase.
+This is the active gameplay implementation phase. Phase 6B is complete; see the Phase 6C section above for scope.
+
+Separately, the next active infrastructure phase is **D4C — Cloud Run runtime + first deployment**.
 
 Phase 5 should be considered closed as of engine commit:
 
