@@ -79,7 +79,7 @@ Next.js is the public application boundary. Google OIDC authentication occurs th
 
 ### Phase 3 — Production Infrastructure
 
-**Status: Complete — D3D deployment-readiness contract implemented**
+**Status: Complete — D3D deployment-readiness contract implemented (production deployment deferred)**
 
 The production-infrastructure foundation is now in the correct state for the planned D4/D5 rollout:
 
@@ -145,7 +145,7 @@ D3D does not implement production deployment (D4/D5) or GCP infrastructure; it p
 
 ### D4A — GCP + Terraform Foundation
 
-**Status: Complete — shared GCP/terraform control plane established**
+**Status: Complete — shared GCP/Terraform control plane established**
 
 D4A establishes the foundational Google Cloud and Terraform platform needed before creating billable database or application runtime resources. The frontend repository owns the shared deployment infrastructure and the Terraform foundation includes:
 
