@@ -79,13 +79,15 @@ Next.js is the public application boundary. Google OIDC authentication occurs th
 
 ### Phase 3 — Production Infrastructure
 
-**Status: Complete — D3D deployment-readiness contract implemented (production deployment deferred)**
+**Status: Complete — D4C Cloud Run runtime and first production deployment verified**
 
-The production-infrastructure foundation is now in the correct state for the planned D4/D5 rollout:
+The production infrastructure is now deployed through D4C and ready for the future D5 rollout:
 
 * Local containerization and Compose orchestration remain in place for developer workflows.
 * PostgreSQL compatibility and migration readiness were validated and formalized in D3B through D3D.
-* D4A completes the shared GCP and Terraform foundation for future Cloud Run and Cloud SQL deployment work.
+* D4A completed the shared GCP and Terraform foundation.
+* D4B completed the Cloud SQL and Secret Manager foundation.
+* D4C completed and verified the Cloud Run runtime and first production deployment.
 
 The D2 baseline is no longer the current production-infrastructure status; it is superseded by the D3/D4 deployment-readiness work.
 
@@ -93,7 +95,7 @@ The D2 baseline is no longer the current production-infrastructure status; it is
 
 **Status: Complete — PostgreSQL compatibility validated**
 
-The engine persistence layer now uses native SQLAlchemy Core statements instead of the legacy SQLite placeholder adapter, and the repository remains dialect-neutral across SQLite and PostgreSQL. Alembic upgrades are validated against both a fresh SQLite database and a fresh PostgreSQL database. SQLite remains the default lightweight local database, while PostgreSQL is supported for engine persistence and CI validation. Cloud SQL PostgreSQL was later deployed as managed infrastructure in D4B; the application schema has not yet been migrated onto it.
+The engine persistence layer now uses native SQLAlchemy Core statements instead of the legacy SQLite placeholder adapter, and the repository remains dialect-neutral across SQLite and PostgreSQL. Alembic upgrades are validated against both a fresh SQLite database and a fresh PostgreSQL database. SQLite remains the default lightweight local database, while PostgreSQL is supported for engine persistence and CI validation. Cloud SQL PostgreSQL was later deployed as managed infrastructure in D4B, and the current Alembic schema was applied there by the D4C migration job.
 
 ### D3C — Local PostgreSQL Integration
 
@@ -109,16 +111,15 @@ The Docker Compose application stack now uses PostgreSQL 16 instead of SQLite. T
 * Debug Compose stack shares the same PostgreSQL database as the normal stack.
 * Sibling `haunted-halls` repository Makefile targets updated to reflect PostgreSQL persistence model.
 
-At the time D3C was implemented, the following production infrastructure was deferred because development remained local. The GCP/Terraform foundation, Cloud SQL, and production secrets management have since been established in D4A/D4B; application hosting/runtime deployment remains deferred to D4C:
+At the time D3C was implemented, the following production infrastructure was deferred because development remained local. The GCP/Terraform foundation, Cloud SQL, production secrets management, and Cloud Run application runtime have since been established in D4A-D4C:
 
 Still deferred:
 
-* Production hosting (Cloud Run application runtime).
 * Deployment automation (D5).
 * Production observability.
 * Network/private-service deployment at scale.
 
-Application hosting should proceed through the planned D4C/D5 phases.
+Application hosting is complete through D4C; automated deployment remains future D5 work.
 
 ### D3D — Deployment Migration Readiness
 
@@ -139,7 +140,7 @@ Implemented as part of D3D:
 * **Makefile improvements** — Engine Makefile now includes `db-heads` and `db-check` targets with clear documentation for each migration command. Frontend Makefile clarified with detailed explanations of Compose workflow including automatic migration ordering.
 * **Documentation fixes** — Corrected stale references to SQLite persistence in Compose; documentation now correctly reflects PostgreSQL.
 
-D3D does not implement production deployment (D4/D5) or GCP infrastructure; it provides the contract and validation that those future phases will consume.
+D3D provided the migration contract and validation consumed by the completed D4C deployment and future D5 automation.
 
 ### D4A — GCP + Terraform Foundation
 
@@ -158,7 +159,7 @@ D4A establishes the foundational Google Cloud and Terraform platform needed befo
 * project budget guardrail with a $20 monthly default
 * credential-free Terraform validation in CI
 
-D4A intentionally did not create Cloud SQL or Cloud Run; Cloud SQL was added in D4B, while Cloud Run remains D4C work.
+D4A intentionally did not create Cloud SQL or Cloud Run; Cloud SQL was added in D4B, and Cloud Run runtime deployment was completed in D4C.
 
 ### D4B — Cloud SQL + Secret Manager
 
@@ -169,13 +170,63 @@ D4B deploys the managed database and production secrets foundation on top of the
 * Cloud SQL PostgreSQL 16 instance in `us-east1`, edition `ENTERPRISE`, `db-f1-micro` shared-core development tier, ZONAL availability, 10 GB SSD storage with autoresize.
 * Backups disabled and deletion protection disabled for the current development environment.
 * Public IPv4 retained intentionally for Cloud SQL Auth Proxy/connector access, with `connector_enforcement = "REQUIRED"` and zero authorized networks, so only proxy/connector traffic is accepted.
-* Application database `haunted_halls` and application user `haunted_halls_app` created; Alembic remains authoritative for application schema, which has not yet been migrated onto this instance (that migration job is D4C runtime work).
+* Application database `haunted_halls` and application user `haunted_halls_app` created; Alembic remains authoritative for the application schema, which was applied to this instance by the successful D4C migration job.
 * Secret Manager secret containers created for the database URL, internal engine service token, NextAuth secret, OpenAI API key, and Google OAuth client secret.
 * Terraform-generated secrets (database URL, internal engine service token, NextAuth secret) use ephemeral/write-only handling so values are not written to Terraform state; generated secret rotation is controlled through explicit version variables.
 * Secret-level IAM grants `roles/secretmanager.secretAccessor` only to the runtime identities that require each secret; only the engine and migration runtime identities receive `roles/cloudsql.client`; the frontend runtime has no direct database access.
 * OpenAI API key is stored in Secret Manager (value not recorded here).
-* Google OAuth client secret container and IAM foundation exist, but the secret value is intentionally not populated yet; it will be created/configured during D4C once the production frontend URL exists.
+* Production Google OAuth Web Application is configured, with its client secret stored in the `hh-google-client-secret` Secret Manager secret.
 * Final post-apply Terraform plan reported no drift.
+
+### D4C — Cloud Run runtime + first deployment
+
+**Status: Complete — production runtime deployed and verified**
+
+D4C deploys the public frontend BFF, private engine, and migration job in `us-east1`:
+
+```text
+Internet
+   |
+   v
+Cloud Run — haunted-halls-frontend
+   |
+   | Cloud Run IAM:
+   | X-Serverless-Authorization: Bearer <Google ID token>
+   |
+   | application service auth:
+   | Authorization: Bearer <Haunted Halls internal service token>
+   |
+   v
+Cloud Run — haunted-halls-engine
+   |
+   v
+Cloud SQL PostgreSQL 16
+```
+
+The migration path uses the same engine image:
+
+```text
+engine image
+      |
+      v
+Cloud Run Job — haunted-halls-migrate
+      |
+      v
+alembic upgrade head
+      |
+      v
+Cloud SQL
+```
+
+The deployed resources are `haunted-halls-frontend`, `haunted-halls-engine`, and `haunted-halls-migrate`. Runtime identities are `hh-frontend-runtime`, `hh-engine-runtime`, and `hh-migration-runtime`. Cloud Run uses minimum instances `0`, maximum instances `2`, and initial sizing of `1 CPU / 512 MiB`. The production engine uses `TOOL_REGISTRY_TRANSPORT=local`.
+
+The first deployment used `application_services_enabled = false` to provision the migration job without application services. After `alembic upgrade head` completed successfully, `application_services_enabled = true` enabled Terraform management of the engine, frontend, and service IAM. The migration succeeds before application services are deployed; future D5 automation must preserve this contract.
+
+Production authentication has two layers: `X-Serverless-Authorization` carries a Google-signed ID token for Cloud Run IAM, while `Authorization` carries the Haunted Halls internal service token for FastAPI application authentication. The browser does not receive or control either credential. The frontend runtime has `roles/run.invoker` on the engine, the engine has no unauthenticated Cloud Run invocation, and the frontend is the public application boundary. Local Compose continues to use only the application-level token without Cloud Run identity tokens.
+
+The configured stable deterministic URLs are derived from service name, project number, and region. Cloud Run also reports valid hash-based `a.run.app` aliases. The deterministic frontend URL is used for `NEXTAUTH_URL` and the Google OAuth origin/callback; the deterministic engine URL is used for `ENGINE_BASE_URL` and `ENGINE_ID_TOKEN_AUDIENCE`.
+
+Acceptance evidence includes a successful migration execution, Ready engine and frontend services, frontend health `200`, unauthenticated direct engine rejection `403`, correct IAM boundaries, and a final Terraform plan reporting `No changes`. Manual browser verification confirmed frontend loading, Google sign-in/callback, authenticated sessions, campaign workflow, chat, private engine invocation, Cloud SQL persistence, and OpenAI narration without blocking authentication or runtime errors.
 
 ## Phase 4 — Long-Term Memory
 
@@ -416,7 +467,7 @@ The Director should remain deferred until the deterministic world model contains
 
 * **SQLite** — Default lightweight database for direct local development and pytest.
 * **PostgreSQL via Docker Compose** — Used by the local containerized Compose application stack; persists across normal stack restarts; removed only by explicit `docker compose down -v` or `make docker-reset-db` from `../haunted-halls`.
-* **Cloud SQL PostgreSQL 16** — Deployed managed remote database foundation (D4B). The instance, `haunted_halls` database, and `haunted_halls_app` user exist in GCP, but the application schema has not yet been migrated onto it; that migration job is D4C runtime work, so production application traffic is not using Cloud SQL yet.
+* **Cloud SQL PostgreSQL 16** — Deployed managed production database. The instance, `haunted_halls` database, and `haunted_halls_app` user exist in GCP; the current Alembic schema has been applied, and the Cloud Run engine is connected to it.
 
 Persisted concepts include:
 
@@ -429,7 +480,7 @@ Persisted concepts include:
 * Summaries.
 * Memories.
 
-All three databases share the same Alembic migration contract. SQLite and Compose PostgreSQL are validated to support current migrations and application behavior; Cloud SQL is the deployed managed target that D4C's migration job will bring up to date.
+All three databases share the same Alembic migration contract. SQLite and Compose PostgreSQL are validated to support current migrations and application behavior; Cloud SQL is the deployed managed production database with the current schema applied.
 
 ## Testing
 
@@ -612,21 +663,23 @@ This should be driven by an observed retrieval-quality or scaling need rather th
 
 ## Production Deployment
 
-Production deployment infrastructure is in progress.
+Production deployment infrastructure is deployed; automated deployment remains future work.
 
 Completed:
 
 * D4A — GCP/Terraform foundation.
 * D4B — Cloud SQL + Secret Manager.
+* D4C — Cloud Run runtime + first deployment.
 
 Remaining:
 
-* D4C — Cloud Run frontend/engine/migration runtime and first deployment.
-* D5 — CI/CD deployment automation.
+* D5 — GitHub Actions CD.
 * D6 — Custom domain.
 * D7 — Operability/observability.
 
-The application is not currently hosted; no Cloud Run services, production URLs, or automated deployments exist yet.
+The application is hosted on Cloud Run using the configured deterministic production `run.app` URLs. Automated deployments do not yet exist.
+
+Future D5 automation should build from an explicit intended Git revision, publish immutable images, use GitHub OIDC / Workload Identity Federation, execute the migration job and wait for success before application rollout, preserve rollback safety, and avoid long-lived GCP keys.
 
 # Architectural Principles
 
@@ -701,8 +754,8 @@ PostgreSQL, vector databases, deployment infrastructure, additional agents, and 
 | Vector database / pgvector    | Deferred          |
 | GCP/Terraform foundation       | Complete          |
 | Cloud SQL/Secret Manager       | Complete          |
-| Cloud Run application deployment | Planned / Next infra phase |
-| CI/CD deployment automation   | Planned           |
+| Cloud Run application deployment | Complete |
+| CI/CD deployment automation   | Planned / Next infra phase |
 
 # Next Step
 
@@ -710,7 +763,7 @@ PostgreSQL, vector databases, deployment infrastructure, additional agents, and 
 
 This is the active gameplay implementation phase. Phase 6B is complete; see the Phase 6C section above for scope.
 
-Separately, the next active infrastructure phase is **D4C — Cloud Run runtime + first deployment**.
+Separately, the next active infrastructure phase is **D5 — GitHub Actions CD**.
 
 Phase 5 should be considered closed as of engine commit:
 
