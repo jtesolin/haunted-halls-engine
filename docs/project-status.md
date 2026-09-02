@@ -191,10 +191,10 @@ Internet
 Cloud Run — haunted-halls-frontend
    |
    | Cloud Run IAM:
-   | X-Serverless-Authorization: Google ID token
+   | X-Serverless-Authorization: Bearer <Google ID token>
    |
    | application service auth:
-   | Authorization: Haunted Halls internal bearer token
+   | Authorization: Bearer <Haunted Halls internal service token>
    |
    v
 Cloud Run — haunted-halls-engine
