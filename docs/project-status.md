@@ -662,7 +662,7 @@ This should be driven by an observed retrieval-quality or scaling need rather th
 
 ## Production Deployment
 
-Production runtime is deployed. GitHub Actions deployment automation is partially complete: D5A is complete, D5B (engine CD) is complete and production verified, and D5C (frontend CD) is next.
+Production runtime is deployed. GitHub Actions deployment automation is complete for both application sides: D5A is complete, D5B (engine CD) is complete and production verified, and D5C (frontend CD) is now complete as well.
 
 Completed:
 
@@ -671,14 +671,14 @@ Completed:
 * D4C — Cloud Run runtime + first deployment.
 * D5A — GitHub Actions CD foundation.
 * D5B — Engine CD, complete and production verified.
+* D5C — Frontend CD, complete and production verified.
 
 Remaining:
 
-* D5C — Frontend CD.
 * D6 — Custom domain.
 * D7 — Operability/observability.
 
-The application is hosted on Cloud Run using the configured deterministic production `run.app` URLs. Engine deployments are fully automated end to end, including migration execution and post-deployment verification. Frontend CD does not yet exist.
+The application is hosted on Cloud Run using the configured deterministic production `run.app` URLs. Engine and frontend deployments are both automated end to end, including migration execution and post-deployment verification for the engine and public health verification for the frontend.
 
 ### D5 — GitHub Actions CD
 
@@ -712,9 +712,9 @@ The application is hosted on Cloud Run using the configured deterministic produc
   Earlier rollout testing exposed two workflow-verification defects (a wrong migration-job image field path and a fragile Ready-condition `gcloud` format filter). Both were corrected; neither produced incorrect production state.
 
   **Production acceptance evidence — Engine Deploy run `33786120964` (commit `e72f54d`):** migration execution `haunted-halls-migrate-p7wld` succeeded; engine revision `haunted-halls-engine-00003-f24` was deployed with 100% of traffic routed to it; Ready `== True`; the private unauthenticated boundary returned HTTP 403.
-* **D5C — Next.** Frontend CD remains to be implemented.
+* **D5C — Complete.** Frontend CD is implemented and production verified.
 
-Engine CD is complete and production verified. The remaining D5 work is D5C frontend deployment automation.
+Engine and frontend CD are complete and production verified. D5 work is complete.
 
 # Architectural Principles
 
@@ -790,7 +790,7 @@ PostgreSQL, vector databases, deployment infrastructure, additional agents, and 
 | GCP/Terraform foundation       | Complete          |
 | Cloud SQL/Secret Manager       | Complete          |
 | Cloud Run application deployment | Complete |
-| CI/CD deployment automation   | In progress — engine CD complete, frontend CD next |
+| CI/CD deployment automation   | Complete — engine and frontend CD verified |
 
 # Next Step
 
@@ -798,7 +798,7 @@ PostgreSQL, vector databases, deployment infrastructure, additional agents, and 
 
 This is the active gameplay implementation phase. Phase 6B is complete; see the Phase 6C section above for scope.
 
-Separately, the next active infrastructure step is **D5C — Frontend GitHub Actions CD**.
+Separately, the next active infrastructure step is **D6 — Custom domain**.
 
 Phase 5 should be considered closed as of engine commit:
 
