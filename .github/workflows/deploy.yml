@@ -137,7 +137,7 @@ jobs:
           configured_image="$(gcloud run jobs describe haunted-halls-migrate \
             --project="$GCP_PROJECT" \
             --region="$GCP_REGION" \
-            --format='value(template.template.containers[0].image)')"
+            --format='value(spec.template.spec.template.spec.containers[0].image)')"
           if [[ "$configured_image" != "$IMAGE_REF" ]]; then
             echo "Migration job image mismatch: expected $IMAGE_REF, got $configured_image" >&2
             exit 1
@@ -153,7 +153,6 @@ jobs:
             --wait \
             --format='value(metadata.name)')"
           echo "execution_name=$execution_name" >> "$GITHUB_OUTPUT"
-          echo "status=SUCCEEDED" >> "$GITHUB_OUTPUT"
 
       - name: Update engine service image
         env:
@@ -226,14 +225,14 @@ jobs:
           {
             echo "## Engine Deploy"
             echo
-            echo "- Deployment Git SHA: \\`$DEPLOY_SHA\\`"
-            echo "- Immutable image digest: \\`$IMAGE_DIGEST\\`"
-            echo "- Migration execution: \\`$MIGRATION_EXECUTION\\`"
-            echo "- Migration status: \\`${MIGRATION_STATUS:-not verified}\\` (gcloud --wait)"
-            echo "- Previous engine image: \\`$PREVIOUS_ENGINE_IMAGE\\`"
-            echo "- Deployed engine image: \\`$IMAGE_REF\\`"
-            echo "- Engine Ready status: \\`${ENGINE_READY:-not verified}\\`"
-            echo "- Private boundary: HTTP \\`${PRIVATE_BOUNDARY_STATUS:-not verified}\\`"
+            printf -- '- Deployment Git SHA: `%s`\n' "${DEPLOY_SHA:-not available}"
+            printf -- '- Immutable image digest: `%s`\n' "${IMAGE_DIGEST:-not available}"
+            printf -- '- Migration execution: `%s`\n' "${MIGRATION_EXECUTION:-not available}"
+            printf -- '- Migration status: `%s` (gcloud --wait)\n' "${MIGRATION_STATUS:-not verified}"
+            printf -- '- Previous engine image: `%s`\n' "${PREVIOUS_ENGINE_IMAGE:-not available}"
+            printf -- '- Deployed engine image: `%s`\n' "${IMAGE_REF:-not available}"
+            printf -- '- Engine Ready status: `%s`\n' "${ENGINE_READY:-not verified}"
+            printf -- '- Private boundary: HTTP `%s`\n' "${PRIVATE_BOUNDARY_STATUS:-not verified}"
             echo
             echo "Rollback is manual: redeploy the previous engine image or another known-good digest. Schema downgrade is not part of rollback."
           } >> "$GITHUB_STEP_SUMMARY"
