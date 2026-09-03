@@ -1,0 +1,230 @@
+name: Engine Deploy
+
+on:
+  workflow_run:
+    workflows:
+      - Engine CI
+    types:
+      - completed
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: haunted-halls-engine-production
+  cancel-in-progress: false
+
+env:
+  GCP_PROJECT: haunted-halls-development
+  GCP_REGION: us-east1
+  IMAGE_REPOSITORY: us-east1-docker.pkg.dev/haunted-halls-development/haunted-halls/engine
+  WIF_PROVIDER: projects/458395246135/locations/global/workloadIdentityPools/github-actions/providers/github
+  DEPLOY_SERVICE_ACCOUNT: hh-engine-deployer@haunted-halls-development.iam.gserviceaccount.com
+
+jobs:
+  deploy:
+    name: Deploy Engine to Production
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'workflow_run' &&
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push')
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Resolve deployment SHA
+        id: revision
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          WORKFLOW_RUN_SHA: ${{ github.event.workflow_run.head_sha }}
+          MANUAL_REF: ${{ github.ref }}
+          MANUAL_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+
+          if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
+            if [[ "$MANUAL_REF" != "refs/heads/main" ]]; then
+              echo "Manual production deployments are allowed only from refs/heads/main (received $MANUAL_REF)." >&2
+              exit 1
+            fi
+            deploy_sha="$MANUAL_SHA"
+          else
+            deploy_sha="$WORKFLOW_RUN_SHA"
+          fi
+
+          if [[ ! "$deploy_sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Resolved deployment SHA is not a full commit SHA: $deploy_sha" >&2
+            exit 1
+          fi
+
+          echo "deploy_sha=$deploy_sha" >> "$GITHUB_OUTPUT"
+          echo "Deployment SHA: $deploy_sha"
+
+      - name: Check out deployment revision
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ steps.revision.outputs.deploy_sha }}
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT }}
+          workload_identity_provider: ${{ env.WIF_PROVIDER }}
+          service_account: ${{ env.DEPLOY_SERVICE_ACCOUNT }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3
+
+      - name: Configure Artifact Registry authentication
+        run: gcloud auth configure-docker us-east1-docker.pkg.dev --quiet
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push immutable engine image
+        id: image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          target: runner
+          push: true
+          tags: ${{ env.IMAGE_REPOSITORY }}:${{ steps.revision.outputs.deploy_sha }}
+          cache-from: type=gha,scope=haunted-halls-engine
+          cache-to: type=gha,mode=max,scope=haunted-halls-engine
+
+      - name: Resolve image and previous deployment metadata
+        id: metadata
+        env:
+          IMAGE_DIGEST: ${{ steps.image.outputs.digest }}
+        run: |
+          set -euo pipefail
+
+          if [[ ! "$IMAGE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "Build did not return a valid image digest: $IMAGE_DIGEST" >&2
+            exit 1
+          fi
+
+          image_ref="${IMAGE_REPOSITORY}@${IMAGE_DIGEST}"
+          previous_engine_image="$(gcloud run services describe haunted-halls-engine \
+            --project="$GCP_PROJECT" \
+            --region="$GCP_REGION" \
+            --format='value(spec.template.spec.containers[0].image)')"
+
+          echo "image_ref=$image_ref" >> "$GITHUB_OUTPUT"
+          echo "previous_engine_image=$previous_engine_image" >> "$GITHUB_OUTPUT"
+
+      - name: Update migration job image
+        env:
+          IMAGE_REF: ${{ steps.metadata.outputs.image_ref }}
+        run: |
+          set -euo pipefail
+          gcloud run jobs update haunted-halls-migrate \
+            --image="$IMAGE_REF" \
+            --project="$GCP_PROJECT" \
+            --region="$GCP_REGION" \
+            --quiet
+
+      - name: Verify migration job image
+        env:
+          IMAGE_REF: ${{ steps.metadata.outputs.image_ref }}
+        run: |
+          set -euo pipefail
+          configured_image="$(gcloud run jobs describe haunted-halls-migrate \
+            --project="$GCP_PROJECT" \
+            --region="$GCP_REGION" \
+            --format='value(template.template.containers[0].image)')"
+          if [[ "$configured_image" != "$IMAGE_REF" ]]; then
+            echo "Migration job image mismatch: expected $IMAGE_REF, got $configured_image" >&2
+            exit 1
+          fi
+
+      - name: Execute migration and wait
+        id: migration
+        run: |
+          set -euo pipefail
+          execution_name="$(gcloud run jobs execute haunted-halls-migrate \
+            --project="$GCP_PROJECT" \
+            --region="$GCP_REGION" \
+            --wait \
+            --format='value(metadata.name)')"
+          echo "execution_name=$execution_name" >> "$GITHUB_OUTPUT"
+          echo "status=SUCCEEDED" >> "$GITHUB_OUTPUT"
+
+      - name: Update engine service image
+        env:
+          IMAGE_REF: ${{ steps.metadata.outputs.image_ref }}
+        run: |
+          set -euo pipefail
+          gcloud run services update haunted-halls-engine \
+            --image="$IMAGE_REF" \
+            --project="$GCP_PROJECT" \
+            --region="$GCP_REGION" \
+            --quiet
+
+      - name: Verify engine rollout and private boundary
+        id: verify
+        run: |
+          set -euo pipefail
+          ready="$(gcloud run services describe haunted-halls-engine \
+            --project="$GCP_PROJECT" \
+            --region="$GCP_REGION" \
+            --format='value(status.conditions[?type="Ready"].status)')"
+          deployed_image="$(gcloud run services describe haunted-halls-engine \
+            --project="$GCP_PROJECT" \
+            --region="$GCP_REGION" \
+            --format='value(spec.template.spec.containers[0].image)')"
+          service_url="$(gcloud run services describe haunted-halls-engine \
+            --project="$GCP_PROJECT" \
+            --region="$GCP_REGION" \
+            --format='value(status.url)')"
+          expected_image="${IMAGE_REPOSITORY}@${{ steps.image.outputs.digest }}"
+
+          if [[ "$ready" != "True" ]]; then
+            echo "Engine service is not Ready: $ready" >&2
+            exit 1
+          fi
+          if [[ "$deployed_image" != "$expected_image" ]]; then
+            echo "Engine image mismatch: expected $expected_image, got $deployed_image" >&2
+            exit 1
+          fi
+
+          private_status="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' "$service_url")"
+          if [[ "$private_status" != "403" ]]; then
+            echo "Expected unauthenticated engine request to return 403, got $private_status" >&2
+            exit 1
+          fi
+
+          echo "ready=$ready" >> "$GITHUB_OUTPUT"
+          echo "private_status=$private_status" >> "$GITHUB_OUTPUT"
+
+      - name: Write deployment summary
+        if: always()
+        env:
+          DEPLOY_SHA: ${{ steps.revision.outputs.deploy_sha }}
+          IMAGE_DIGEST: ${{ steps.image.outputs.digest }}
+          IMAGE_REF: ${{ steps.metadata.outputs.image_ref }}
+          PREVIOUS_ENGINE_IMAGE: ${{ steps.metadata.outputs.previous_engine_image }}
+          MIGRATION_EXECUTION: ${{ steps.migration.outputs.execution_name }}
+          MIGRATION_STATUS: ${{ steps.migration.outputs.status }}
+          ENGINE_READY: ${{ steps.verify.outputs.ready }}
+          PRIVATE_BOUNDARY_STATUS: ${{ steps.verify.outputs.private_status }}
+        run: |
+          {
+            echo "## Engine Deploy"
+            echo
+            echo "- Deployment Git SHA: \\`$DEPLOY_SHA\\`"
+            echo "- Immutable image digest: \\`$IMAGE_DIGEST\\`"
+            echo "- Migration execution: \\`$MIGRATION_EXECUTION\\`"
+            echo "- Migration status: \\`${MIGRATION_STATUS:-not verified}\\` (gcloud --wait)"
+            echo "- Previous engine image: \\`$PREVIOUS_ENGINE_IMAGE\\`"
+            echo "- Deployed engine image: \\`$IMAGE_REF\\`"
+            echo "- Engine Ready status: \\`${ENGINE_READY:-not verified}\\`"
+            echo "- Private boundary: HTTP \\`${PRIVATE_BOUNDARY_STATUS:-not verified}\\`"
+            echo
+            echo "Rollback is manual: redeploy the previous engine image or another known-good digest. Schema downgrade is not part of rollback."
+          } >> "$GITHUB_STEP_SUMMARY"

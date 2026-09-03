@@ -160,6 +160,16 @@ The workflow validates the repository's existing Python checks:
 
 CI also builds the production Docker image as `Engine / Docker Build`; it does not push the image.
 
+## Production Deployment / D5B
+
+The production deployment workflow runs automatically after a successful `Engine CI` push to `main`. A `workflow_dispatch` run supports manual redeployment, but only from `main`. The workflow is implemented but requires its first live production verification after merge.
+
+Deployment uses GitHub OIDC and Google Workload Identity Federation, with no service account key or static credential. Docker BuildKit uses a GitHub Actions cache with a dedicated engine scope. The image is tagged with the deployment commit SHA and deployed by its immutable digest.
+
+The migration job image is updated and executed with `alembic upgrade head` before the engine service is updated. Migration failure stops the workflow before the engine update. Deployments are serialized so an in-progress migration or rollout is not canceled by a newer merge. Terraform remains the authority for all non-image configuration.
+
+Rollback currently means manually redeploying the recorded previous engine image or another known-good digest. Schema downgrade is not part of rollback; application rollback and database downgrade remain separate under the expand/contract migration model. Automatic rollback may be considered after normal CD is verified.
+
 ## Local Docker Stack
 
 Run the full local stack from the sibling frontend repository:
