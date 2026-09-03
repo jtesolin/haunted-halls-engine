@@ -8,6 +8,7 @@ __pycache__
 .ruff_cache
 .tox
 .env
+gha-creds-*.json
 data/*.db
 Dockerfile
 README.md
