@@ -169,18 +169,14 @@ jobs:
         id: verify
         run: |
           set -euo pipefail
-          ready="$(gcloud run services describe haunted-halls-engine \
+          service_json="$(gcloud run services describe haunted-halls-engine \
             --project="$GCP_PROJECT" \
             --region="$GCP_REGION" \
-            --format='value(status.conditions[?type="Ready"].status)')"
-          deployed_image="$(gcloud run services describe haunted-halls-engine \
-            --project="$GCP_PROJECT" \
-            --region="$GCP_REGION" \
-            --format='value(spec.template.spec.containers[0].image)')"
-          service_url="$(gcloud run services describe haunted-halls-engine \
-            --project="$GCP_PROJECT" \
-            --region="$GCP_REGION" \
-            --format='value(status.url)')"
+            --format=json)"
+
+          ready="$(jq -r '[.status.conditions[] | select(.type == "Ready")][0].status // empty' <<< "$service_json")"
+          deployed_image="$(jq -r '.spec.template.spec.containers[0].image // empty' <<< "$service_json")"
+          service_url="$(jq -r '.status.url // empty' <<< "$service_json")"
           expected_image="${IMAGE_REPOSITORY}@${{ steps.image.outputs.digest }}"
 
           if [[ "$ready" != "True" ]]; then
