@@ -662,7 +662,7 @@ This should be driven by an observed retrieval-quality or scaling need rather th
 
 ## Production Deployment
 
-Production runtime is deployed. GitHub Actions deployment automation is now in progress: D5A is complete, engine CD is implemented, and two live production run attempts have been made: the first stopped safely before migration or engine rollout because of a migration-image verification bug, while the second successfully completed migration and engine rollout but failed during post-deployment Ready verification because of a workflow query bug (both bugs are now fixed); frontend CD remains D5C.
+Production runtime is deployed. GitHub Actions deployment automation is partially complete: D5A is complete, D5B (engine CD) is complete and production verified, and D5C (frontend CD) is next.
 
 Completed:
 
@@ -670,29 +670,51 @@ Completed:
 * D4B — Cloud SQL + Secret Manager.
 * D4C — Cloud Run runtime + first deployment.
 * D5A — GitHub Actions CD foundation.
+* D5B — Engine CD, complete and production verified.
 
 Remaining:
 
-* D5B — Engine CD, in progress; second live verification attempted, progressed through migration execution and engine rollout, and failed only on the final Ready-condition verification query, pending a full successful production run.
 * D5C — Frontend CD.
 * D6 — Custom domain.
 * D7 — Operability/observability.
 
-The application is hosted on Cloud Run using the configured deterministic production `run.app` URLs. Engine CD is implemented. The first live run stopped during migration-image verification because of a workflow field-path bug, so no migration executed and no new engine revision deployed. The second live run, after that fix, authenticated via WIF, built and pushed the cached image, verified the migration job image, executed the migration successfully, updated the engine Cloud Run service, created a new revision (`haunted-halls-engine-00002-hcg`), and routed 100% of traffic to it — but the workflow's final Ready-condition query returned an empty value and failed the job. No incorrect production state resulted; the engine was already correctly deployed and serving traffic when the workflow failed. Frontend CD does not yet exist.
+The application is hosted on Cloud Run using the configured deterministic production `run.app` URLs. Engine deployments are fully automated end to end, including migration execution and post-deployment verification. Frontend CD does not yet exist.
 
 ### D5 — GitHub Actions CD
 
 **Status: In progress**
 
 * **D5A — Complete.** Terraform and CD ownership are separated: Terraform owns Cloud Run non-image configuration, while CD owns deployed image revisions. Image fields are ignored by Terraform to prevent image drift. `hh-frontend-deployer` and `hh-engine-deployer` have resource-scoped deployment IAM; Artifact Registry writer access is repository-scoped; runtime `serviceAccountUser` relationships are narrowly scoped; WIF is restricted to each repository's `deploy.yml` on `main`; and no long-lived service-account keys are used.
-* **D5B — Implemented; second live verification attempted.** `.github/workflows/deploy.yml` deploys after a successful `Engine CI` push run on `main`, or manually through `workflow_dispatch` from `main`. It resolves an explicit deployment Git SHA, authenticates with GitHub OIDC/WIF as `hh-engine-deployer`, builds with cached BuildKit, publishes a SHA tag and immutable digest, updates and waits for the migration job, then updates the engine service only after migration succeeds. The workflow verifies Ready status, the deployed digest, and the private boundary. Production deployments are serialized with `cancel-in-progress: false`; Terraform owns non-image configuration; rollback is manual to a previous known-good image, and schema downgrade is not automatic.
+* **D5B — Complete — production verified.** `.github/workflows/deploy.yml` deploys after a successful `Engine CI` push run on `main`, or manually through `workflow_dispatch` from `main`. The deployment pipeline is:
 
-  The first live production run authenticated through WIF successfully, built and pushed the immutable engine image, and successfully updated the migration job image, but stopped during migration-image verification because the workflow queried the wrong `gcloud run jobs describe` field path and read an empty value. As a result, the migration was **not** executed and the engine service was **not** updated — a safe deployment failure caused by workflow verification logic, not by the migration itself or by application code. That field-path bug was fixed (`spec.template.spec.template.spec.containers[0].image`), verified read-only against the live migration job, and the deployment-summary shell quoting was also corrected.
+  ```
+  successful Engine CI on main
+      ↓
+  Engine Deploy
+      ↓
+  GitHub OIDC / WIF
+      ↓
+  cached Buildx image build
+      ↓
+  immutable SHA tag + digest
+      ↓
+  migration job image update/verification
+      ↓
+  migration execute --wait
+      ↓
+  engine image rollout
+      ↓
+  Ready + digest + private 403 verification
+  ```
 
-  The second live production run (commit `2c8680f1f7455c2d265e5ec7c2a4cf04a1d7d827`, workflow run `33772553590`) progressed substantially farther: WIF authentication succeeded, the cached Buildx build/push succeeded, the migration job image update and verification succeeded, the migration executed successfully (`haunted-halls-migrate-klv2j`), the engine Cloud Run service update succeeded, a new revision was created (`haunted-halls-engine-00002-hcg`), and 100% of traffic was routed to it. The workflow failed only in the final `Verify engine rollout and private boundary` step because its Ready-condition query, `--format='value(status.conditions[?type="Ready"].status)'`, returned an empty value even though the service was Ready. Unlike the first attempt, **the migration DID execute successfully and the engine DID deploy successfully**; only the post-deploy verification query was defective. Read-only inspection of the live `gcloud run services describe --format=json` output confirmed the Knative/v1 condition representation (`status.conditions[]` entries with `type` and `status` fields, e.g. `{"type": "Ready", "status": "True"}`), that `spec.template.spec.containers[0].image` correctly resolves the deployed image, and that `status.url` correctly resolves the live service URL. The verification step was rewritten to fetch the service JSON once and derive the Ready condition, deployed image, and service URL from that single snapshot using `jq`, explicitly selecting the condition whose `type == "Ready"` rather than relying on a fragile `gcloud` format-filter expression or an assumed array index. D5B remains in progress, pending a full end-to-end production run that also passes final verification. Current production engine revision: `haunted-halls-engine-00002-hcg`.
+  The workflow resolves an explicit deployment Git SHA, authenticates with GitHub OIDC/WIF as `hh-engine-deployer` (no long-lived keys), builds with cached BuildKit (`scope=haunted-halls-engine`), publishes a SHA tag and immutable digest, updates and verifies the migration job image, executes the migration with `--wait`, then updates the engine service image only after the migration succeeds. Post-deployment verification derives Ready status, the deployed image digest, and the service URL from a single `gcloud run services describe --format=json` snapshot, and confirms the unauthenticated private boundary returns HTTP 403. Production deployments are serialized with `cancel-in-progress: false`; Terraform owns non-image configuration; rollback is manual to a previous known-good image, and schema downgrade is not automatic.
+
+  Earlier rollout testing exposed two workflow-verification defects (a wrong migration-job image field path and a fragile Ready-condition `gcloud` format filter). Both were corrected; neither produced incorrect production state.
+
+  **Production acceptance evidence — Engine Deploy run `33786120964` (commit `e72f54d`):** migration execution `haunted-halls-migrate-p7wld` succeeded; engine revision `haunted-halls-engine-00003-f24` was deployed with 100% of traffic routed to it; Ready `== True`; the private unauthenticated boundary returned HTTP 403.
 * **D5C — Next.** Frontend CD remains to be implemented.
 
-D5B is in progress / pending a successful full-workflow production run including final verification. The next live run will validate the corrected Ready-condition extraction end to end.
+Engine CD is complete and production verified. The remaining D5 work is D5C frontend deployment automation.
 
 # Architectural Principles
 
@@ -768,7 +790,7 @@ PostgreSQL, vector databases, deployment infrastructure, additional agents, and 
 | GCP/Terraform foundation       | Complete          |
 | Cloud SQL/Secret Manager       | Complete          |
 | Cloud Run application deployment | Complete |
-| CI/CD deployment automation   | In progress — engine CD implemented; second live run executed the migration and deployed the engine successfully, failing only on final Ready-condition verification (now fixed) |
+| CI/CD deployment automation   | In progress — engine CD complete, frontend CD next |
 
 # Next Step
 
@@ -776,7 +798,7 @@ PostgreSQL, vector databases, deployment infrastructure, additional agents, and 
 
 This is the active gameplay implementation phase. Phase 6B is complete; see the Phase 6C section above for scope.
 
-Separately, the next active infrastructure step is **D5B — rerun engine CD in production to validate the corrected Ready-condition verification, then D5C frontend CD**.
+Separately, the next active infrastructure step is **D5C — Frontend GitHub Actions CD**.
 
 Phase 5 should be considered closed as of engine commit:
 
