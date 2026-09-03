@@ -193,7 +193,16 @@ jobs:
             exit 1
           fi
 
-          private_status="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' "$service_url")"
+          private_status="$(curl \
+            --silent \
+            --show-error \
+            --output /dev/null \
+            --write-out '%{http_code}' \
+            --connect-timeout 5 \
+            --max-time 15 \
+            --retry 2 \
+            --retry-delay 1 \
+            "$service_url")"
           if [[ "$private_status" != "403" ]]; then
             echo "Expected unauthenticated engine request to return 403, got $private_status" >&2
             exit 1

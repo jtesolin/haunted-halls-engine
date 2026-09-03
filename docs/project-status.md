@@ -115,11 +115,10 @@ At the time D3C was implemented, the following production infrastructure was def
 
 Still deferred:
 
-* Deployment automation (D5).
 * Production observability.
 * Network/private-service deployment at scale.
 
-Application hosting is complete through D4C; automated deployment remains future D5 work.
+Application hosting is complete through D4C; GitHub Actions deployment automation is now in progress through D5.
 
 ### D3D — Deployment Migration Readiness
 
@@ -663,23 +662,33 @@ This should be driven by an observed retrieval-quality or scaling need rather th
 
 ## Production Deployment
 
-Production deployment infrastructure is deployed; automated deployment remains future work.
+Production runtime is deployed. GitHub Actions deployment automation is now in progress: D5A is complete, engine CD is implemented but pending live verification, and frontend CD remains D5C.
 
 Completed:
 
 * D4A — GCP/Terraform foundation.
 * D4B — Cloud SQL + Secret Manager.
 * D4C — Cloud Run runtime + first deployment.
+* D5A — GitHub Actions CD foundation.
 
 Remaining:
 
-* D5 — GitHub Actions CD.
+* D5B — Engine CD, pending live verification.
+* D5C — Frontend CD.
 * D6 — Custom domain.
 * D7 — Operability/observability.
 
-The application is hosted on Cloud Run using the configured deterministic production `run.app` URLs. Automated deployments do not yet exist.
+The application is hosted on Cloud Run using the configured deterministic production `run.app` URLs. Engine CD is implemented but pending first live verification; frontend CD does not yet exist.
 
-Future D5 automation should build from an explicit intended Git revision, publish immutable images, use GitHub OIDC / Workload Identity Federation, execute the migration job and wait for success before application rollout, preserve rollback safety, and avoid long-lived GCP keys.
+### D5 — GitHub Actions CD
+
+**Status: In progress**
+
+* **D5A — Complete.** Terraform and CD ownership are separated: Terraform owns Cloud Run non-image configuration, while CD owns deployed image revisions. Image fields are ignored by Terraform to prevent image drift. `hh-frontend-deployer` and `hh-engine-deployer` have resource-scoped deployment IAM; Artifact Registry writer access is repository-scoped; runtime `serviceAccountUser` relationships are narrowly scoped; WIF is restricted to each repository's `deploy.yml` on `main`; and no long-lived service-account keys are used.
+* **D5B — Implemented, pending first production verification.** `.github/workflows/deploy.yml` deploys after a successful `Engine CI` push run on `main`, or manually through `workflow_dispatch` from `main`. It resolves an explicit deployment Git SHA, authenticates with GitHub OIDC/WIF as `hh-engine-deployer`, builds with cached BuildKit, publishes a SHA tag and immutable digest, updates and waits for the migration job, then updates the engine service only after migration succeeds. The workflow verifies Ready status, the deployed digest, and the private boundary. Production deployments are serialized with `cancel-in-progress: false`; Terraform owns non-image configuration; rollback is manual to a previous known-good image, and schema downgrade is not automatic.
+* **D5C — Next.** Frontend CD remains to be implemented.
+
+The first real D5B deployment will occur only after the D5A Terraform IAM/WIF changes are applied and the D5B PR is merged. D5B has not yet been production-verified.
 
 # Architectural Principles
 
@@ -755,7 +764,7 @@ PostgreSQL, vector databases, deployment infrastructure, additional agents, and 
 | GCP/Terraform foundation       | Complete          |
 | Cloud SQL/Secret Manager       | Complete          |
 | Cloud Run application deployment | Complete |
-| CI/CD deployment automation   | Planned / Next infra phase |
+| CI/CD deployment automation   | In progress — engine CD implemented |
 
 # Next Step
 
@@ -763,7 +772,7 @@ PostgreSQL, vector databases, deployment infrastructure, additional agents, and 
 
 This is the active gameplay implementation phase. Phase 6B is complete; see the Phase 6C section above for scope.
 
-Separately, the next active infrastructure phase is **D5 — GitHub Actions CD**.
+Separately, the next active infrastructure step is **D5B — verify engine CD in production, then D5C frontend CD**.
 
 Phase 5 should be considered closed as of engine commit:
 
