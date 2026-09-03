@@ -174,7 +174,7 @@ jobs:
             --region="$GCP_REGION" \
             --format=json)"
 
-          ready="$(jq -r '[.status.conditions[] | select(.type == "Ready")][0].status // empty' <<< "$service_json")"
+          ready="$(jq -r '[((.status.conditions // [])[]) | select(.type == "Ready")][0].status // empty' <<< "$service_json")"
           deployed_image="$(jq -r '.spec.template.spec.containers[0].image // empty' <<< "$service_json")"
           service_url="$(jq -r '.status.url // empty' <<< "$service_json")"
           expected_image="${IMAGE_REPOSITORY}@${{ steps.image.outputs.digest }}"
@@ -185,6 +185,10 @@ jobs:
           fi
           if [[ "$deployed_image" != "$expected_image" ]]; then
             echo "Engine image mismatch: expected $expected_image, got $deployed_image" >&2
+            exit 1
+          fi
+          if [[ -z "$service_url" ]]; then
+            echo "Engine service URL is missing from Cloud Run describe output." >&2
             exit 1
           fi
 

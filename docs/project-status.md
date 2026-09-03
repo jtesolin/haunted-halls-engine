@@ -662,7 +662,7 @@ This should be driven by an observed retrieval-quality or scaling need rather th
 
 ## Production Deployment
 
-Production runtime is deployed. GitHub Actions deployment automation is now in progress: D5A is complete, engine CD is implemented, two live production run attempts have been made (both stopped safely before mutating anything incorrectly, due to two separate workflow verification bugs, both now fixed), and frontend CD remains D5C.
+Production runtime is deployed. GitHub Actions deployment automation is now in progress: D5A is complete, engine CD is implemented, and two live production run attempts have been made: the first stopped safely before migration or engine rollout because of a migration-image verification bug, while the second successfully completed migration and engine rollout but failed during post-deployment Ready verification because of a workflow query bug (both bugs are now fixed); frontend CD remains D5C.
 
 Completed:
 
