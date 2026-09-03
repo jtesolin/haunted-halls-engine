@@ -219,7 +219,7 @@ jobs:
           IMAGE_REF: ${{ steps.metadata.outputs.image_ref }}
           PREVIOUS_ENGINE_IMAGE: ${{ steps.metadata.outputs.previous_engine_image }}
           MIGRATION_EXECUTION: ${{ steps.migration.outputs.execution_name }}
-          MIGRATION_STATUS: ${{ steps.migration.outputs.status }}
+          MIGRATION_STATUS: ${{ steps.migration.outcome }}
           ENGINE_READY: ${{ steps.verify.outputs.ready }}
           PRIVATE_BOUNDARY_STATUS: ${{ steps.verify.outputs.private_status }}
         run: |
