@@ -544,7 +544,7 @@ Implemented behavior includes:
 * OBSERVE is a deterministic, non-mutating tool action that returns current room/exit/item/inventory context for narration instead of being treated as an unmatched-tool failure.
 * TAKE/DROP resolve name/alias/tag matches scoped to the actionable context first (current room for TAKE, inventory for DROP), falling back to a global lookup only to produce a precise not-found/wrong-location error — preventing false `ambiguous_item` results from same-tag items elsewhere in the world.
 
-### UI-1 — Mobile chat layout cleanup
+## UI-1 — Mobile chat layout cleanup
 
 **Status: Short frontend checkpoint before Phase 6C**
 
