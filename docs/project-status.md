@@ -1,8 +1,8 @@
 # Haunted Halls — Project Status
 
-**Last synchronized (planning memory sync):** August 13, 2026
-**Engine baseline:** `haunted-halls-engine` `main` at commit `0219311`
-**Web baseline:** `haunted-halls` `main`
+**Last synchronized (planning memory sync):** September 4, 2026
+**Engine baseline:** `haunted-halls-engine` `main` at commit `f07d7163ceb5954f630b92a9acba716656c34a73`
+**Web baseline:** `haunted-halls` `main` at commit `907bbac1081ae798954c6aa00fdf2c2a8f3a4816`
 
 Synchronization metadata meaning:
 
@@ -118,7 +118,7 @@ Still deferred:
 * Production observability.
 * Network/private-service deployment at scale.
 
-Application hosting is complete through D4C; GitHub Actions deployment automation is now in progress through D5.
+Application hosting and GitHub Actions deployment automation are complete through D5.
 
 ### D3D — Deployment Migration Readiness
 
@@ -386,7 +386,7 @@ Commit `0219311` closes the remaining reliability gap in structured player-actio
 
 ## Authentication and Authorization
 
-**Status: Complete for local development**
+**Status: Complete for the deployed public custom-domain BFF and private engine boundary**
 
 The following are implemented:
 
@@ -403,7 +403,7 @@ The following are implemented:
 * Same behavior for missing and unauthorized campaign resources.
 * Legacy unowned campaigns excluded from normal authenticated APIs.
 
-FastAPI is the domain-authorization boundary. The browser does not provide authoritative ownership or user identity.
+FastAPI is the domain-authorization boundary. The browser does not provide authoritative ownership or user identity. The deployed path has been verified through the public custom-domain BFF and the private engine boundary.
 
 ## Status Maintenance Checklist
 
@@ -544,6 +544,12 @@ Implemented behavior includes:
 * OBSERVE is a deterministic, non-mutating tool action that returns current room/exit/item/inventory context for narration instead of being treated as an unmatched-tool failure.
 * TAKE/DROP resolve name/alias/tag matches scoped to the actionable context first (current room for TAKE, inventory for DROP), falling back to a global lookup only to produce a precise not-found/wrong-location error — preventing false `ambiguous_item` results from same-tag items elsewhere in the world.
 
+### UI-1 — Mobile chat layout cleanup
+
+**Status: Short frontend checkpoint before Phase 6C**
+
+Responsive/mobile polish only: compact mobile header, no mobile horizontal or viewport overflow, reduced mobile layout chrome and padding, preserved sliding sidebar, and preserved desktop behavior. This is a brief UI interruption before returning to Phase 6C and does not change engine or gameplay architecture.
+
 ## Phase 6C — NPC Model
 
 **Next active subphase**
@@ -662,27 +668,11 @@ This should be driven by an observed retrieval-quality or scaling need rather th
 
 ## Production Deployment
 
-Production runtime is deployed. GitHub Actions deployment automation is in progress: D5A is complete, D5B (engine CD) is complete and production verified, and D5C (frontend CD) is implemented but pending the first live production verification.
-
-Completed:
-
-* D4A — GCP/Terraform foundation.
-* D4B — Cloud SQL + Secret Manager.
-* D4C — Cloud Run runtime + first deployment.
-* D5A — GitHub Actions CD foundation.
-* D5B — Engine CD, complete and production verified.
-
-Remaining:
-
-* D5C — Frontend CD, implemented and pending first live production verification.
-* D6 — Custom domain.
-* D7 — Operability/observability.
-
-The application is hosted on Cloud Run using the configured deterministic production `run.app` URLs. Engine deployments are fully automated end to end, including migration execution and post-deployment verification. The frontend deployment workflow is implemented and ready for its first live production verification, but that run has not yet succeeded.
+Production runtime and deployment automation are complete through D6. Terraform owns non-image Cloud Run configuration, while GitHub Actions CD owns application image revisions. The build → migration → deploy safety contract remains intact: a successful migration is required before the application rollout.
 
 ### D5 — GitHub Actions CD
 
-**Status: In progress**
+**Status: Complete — engine and frontend CD production verified**
 
 * **D5A — Complete.** Terraform and CD ownership are separated: Terraform owns Cloud Run non-image configuration, while CD owns deployed image revisions. Image fields are ignored by Terraform to prevent image drift. `hh-frontend-deployer` and `hh-engine-deployer` have resource-scoped deployment IAM; Artifact Registry writer access is repository-scoped; runtime `serviceAccountUser` relationships are narrowly scoped; WIF is restricted to each repository's `deploy.yml` on `main`; and no long-lived service-account keys are used.
 * **D5B — Complete — production verified.** `.github/workflows/deploy.yml` deploys after a successful `Engine CI` push run on `main`, or manually through `workflow_dispatch` from `main`. The deployment pipeline is:
@@ -712,9 +702,28 @@ The application is hosted on Cloud Run using the configured deterministic produc
   Earlier rollout testing exposed two workflow-verification defects (a wrong migration-job image field path and a fragile Ready-condition `gcloud` format filter). Both were corrected; neither produced incorrect production state.
 
   **Production acceptance evidence — Engine Deploy run `33786120964` (commit `e72f54d`):** migration execution `haunted-halls-migrate-p7wld` succeeded; engine revision `haunted-halls-engine-00003-f24` was deployed with 100% of traffic routed to it; Ready `== True`; the private unauthenticated boundary returned HTTP 403.
-* **D5C — Implemented; pending first live production verification.** The frontend deployment workflow is implemented with `successful Frontend CI on main` → `Frontend Deploy` → GitHub OIDC/WIF → cached Buildx image → immutable digest → frontend Cloud Run image-only rollout → Ready + digest + public health verification. This step is complete in code but has not yet run successfully in production.
+* **D5C — Complete — production verified.** The frontend deployment workflow uses `successful Frontend CI on main` → `Frontend Deploy` → GitHub OIDC/WIF → cached Buildx image → immutable digest → frontend Cloud Run image-only rollout → Ready + digest + public health verification.
 
-D5 is still in progress because the first live production Frontend Deploy has not yet succeeded. After that verification passes, the next infrastructure milestone will be D6 custom domain.
+### D6 — Custom Domain
+
+**Status: Complete — canonical frontend domain production verified**
+
+Canonical frontend: `https://haunted-halls.tesolin.us`
+
+* Network Solutions remains the registrar; Google Cloud DNS is authoritative for `tesolin.us`.
+* The Google ownership-verification TXT record is Terraform-managed and retained.
+* A Cloud Run domain mapping exists for `haunted-halls.tesolin.us`, and Terraform manages `haunted-halls.tesolin.us. CNAME ghs.googlehosted.com.`
+* Google-managed TLS is provisioned and healthy.
+* `NEXTAUTH_URL` uses the custom domain, and Google OAuth is configured for its custom-domain origin and callback.
+* `ENGINE_BASE_URL` and `ENGINE_ID_TOKEN_AUDIENCE` remain on the private deterministic engine `run.app` URL.
+* Browser acceptance verified custom-domain loading, Google sign-in, existing-conversation loading, narrator response, and campaign create/delete.
+* The old frontend `run.app` hostname is no longer the canonical user entry point. Redirecting the legacy hostname and eventually removing legacy OAuth entries remain deferred cleanup outside D6.
+
+### D7 — Operability/observability
+
+**Status: Future infrastructure roadmap item**
+
+D7 remains planned. Detailed subphases will be defined when this work becomes active.
 
 # Architectural Principles
 
@@ -779,7 +788,7 @@ PostgreSQL, vector databases, deployment infrastructure, additional agents, and 
 | Campaign ownership/authz      | Complete          |
 | SQLite local persistence      | Complete          |
 | Explicit rooms/world graph    | Complete          |
-| Item entity model             | Planned           |
+| Item entity model             | Complete          |
 | Rich NPC model                | Planned           |
 | Rule-based world interactions | Planned           |
 | Director Agent                | Deferred          |
@@ -790,15 +799,13 @@ PostgreSQL, vector databases, deployment infrastructure, additional agents, and 
 | GCP/Terraform foundation       | Complete          |
 | Cloud SQL/Secret Manager       | Complete          |
 | Cloud Run application deployment | Complete |
-| CI/CD deployment automation   | In progress — engine CD verified, frontend CD implemented and awaiting first live verification |
+| CI/CD deployment automation   | Complete — D5 engine and frontend CD production verified |
 
 # Next Step
 
-**Phase 6C — NPC Model**
+**UI-1 — Mobile chat layout cleanup**, then **Phase 6C — NPC Model**
 
-This is the active gameplay implementation phase. Phase 6B is complete; see the Phase 6C section above for scope.
-
-Separately, the next active infrastructure step is **merge D5C frontend workflow, then verify the first production Frontend Deploy**.
+UI-1 is a short responsive/mobile cleanup checkpoint. After it, Phase 6C is the active gameplay implementation phase; Phase 6B is complete and its scope is described above.
 
 Phase 5 should be considered closed as of engine commit:
 
