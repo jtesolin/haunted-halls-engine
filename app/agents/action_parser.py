@@ -12,7 +12,7 @@ from app.agents.base import BaseAgent
 from app.ai.model_client import ModelCallResult, model_client
 from app.ai.prompts import action_parser_prompt
 from app.game.items import ensure_items_state, inventory_item_ids, room_item_ids
-from app.game.npcs import ensure_npcs_state, parser_npc_projection
+from app.game.npcs import ensure_npcs_state, nearby_npc_ids_for_room, parser_npc_projection
 from app.game.world import DEFAULT_WORLD
 from app.guardrails.model_policy import ModelPolicy
 from app.guardrails.token_budget import TokenBudget, estimate_tokens
@@ -314,11 +314,9 @@ class ActionParserAgent(BaseAgent):
         inventory = inventory_item_ids(items)
 
         nearby_npcs: list[dict[str, Any]] = []
-        for npc_id, npc_state in npcs.items():
-            if not isinstance(npc_id, str) or not isinstance(npc_state, dict):
-                continue
-            if location is not None and npc_state.get("location") == location:
-                nearby_npcs.append(parser_npc_projection(npc_id, npc_state))
+        if location is not None:
+            for npc_id in nearby_npc_ids_for_room(npcs, location):
+                nearby_npcs.append(parser_npc_projection(npc_id, npcs[npc_id]))
 
         current_room = DEFAULT_WORLD.get_room(location) if location is not None else None
         if current_room is not None:

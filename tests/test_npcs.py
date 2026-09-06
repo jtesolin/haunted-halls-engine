@@ -6,6 +6,7 @@ from app.agents.action_parser import ActionParserAgent
 from app.game.npcs import (
     default_npcs_state,
     ensure_npcs_state,
+    nearby_npc_ids_for_room,
     nearby_npcs_for_room,
     resolve_npc_ids,
 )
@@ -103,6 +104,20 @@ def test_nearby_lookup_and_resolution_are_room_scoped() -> None:
     assert resolve_npc_ids(npcs, "ghost", "entry_hall") == []
 
 
+def test_nearby_npcs_use_stable_id_order_and_filter_absent_entities() -> None:
+    npcs = {
+        "warden": {"name": "Warden", "location": "entry_hall", "status": "active"},
+        "caretaker": {"name": "Caretaker", "location": "entry_hall", "status": "active"},
+        "ghost": {"name": "Ghost", "location": "entry_hall", "status": "absent"},
+    }
+
+    assert nearby_npc_ids_for_room(npcs, "entry_hall") == ["caretaker", "warden"]
+    assert [npc.id for npc in nearby_npcs_for_room(npcs, "entry_hall")] == [
+        "caretaker",
+        "warden",
+    ]
+
+
 def test_fresh_state_gets_development_npcs_and_round_trips() -> None:
     executor = _executor()
     state, result = executor.execute(
@@ -169,17 +184,28 @@ def test_parser_context_contains_structured_nearby_npcs_only() -> None:
             {
                 "player": {"location": "entry_hall"},
                 "npcs": {
-                    "caretaker": {
-                        "name": "Old Caretaker",
+                    "warden": {
+                        "name": "Warden",
                         "location": "entry_hall",
-                        "aliases": ["caretaker"],
+                        "aliases": [],
                     },
-                    "ghost": {"name": "Ghost", "location": "library", "aliases": ["spirit"]},
+                    "caretaker": {
+                        "name": "Caretaker",
+                        "location": "entry_hall",
+                        "aliases": ["keeper"],
+                    },
+                    "ghost": {
+                        "name": "Ghost",
+                        "location": "entry_hall",
+                        "status": "absent",
+                        "aliases": ["spirit"],
+                    },
                 },
             }
         )
     )
 
     assert context.nearby_npcs == [
-        {"id": "caretaker", "name": "Old Caretaker", "aliases": ["caretaker"]}
+        {"id": "caretaker", "name": "Caretaker", "aliases": ["keeper"]},
+        {"id": "warden", "name": "Warden", "aliases": []},
     ]

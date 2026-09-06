@@ -73,9 +73,19 @@ def nearby_npcs_for_room(
 ) -> list[NearbyNPC]:
     return [
         NearbyNPC(**npc_projection(npc_id, npc))
+        for npc_id in nearby_npc_ids_for_room(npcs, room_id)
+        for npc in [npcs[npc_id]]
+    ]
+
+
+def nearby_npc_ids_for_room(
+    npcs: dict[str, dict[str, Any]], room_id: str
+) -> list[str]:
+    return sorted(
+        npc_id
         for npc_id, npc in npcs.items()
         if npc.get("location") == room_id and npc.get("status") != "absent"
-    ]
+    )
 
 
 def resolve_npc_ids(
