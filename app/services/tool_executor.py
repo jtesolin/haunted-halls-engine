@@ -15,6 +15,11 @@ from app.game.items import (
     room_location,
     sync_inventory_projection,
 )
+from app.game.npcs import (
+    default_npcs_state,
+    ensure_npcs_state,
+    nearby_npcs_for_room,
+)
 from app.core.config import settings
 from app.game.world import DEFAULT_WORLD, World
 from app.schemas.chat import ActionType, ParsedAction, ToolExecutionResult
@@ -132,6 +137,7 @@ class ToolExecutor:
             )
 
         items = ensure_items_state(state)
+        npcs = ensure_npcs_state(state)
         return ToolExecutionResult(
             success=True,
             applied_tools=["observe"],
@@ -142,6 +148,7 @@ class ToolExecutor:
             available_exits=self.world.available_exits(room.id),
             available_items=available_items_for_room(items, room.id),
             inventory_items=inventory_item_ids(items),
+            nearby_npcs=nearby_npcs_for_room(npcs, room.id),
         )
 
     def move_player(self, state: dict[str, Any], requested_target: str) -> ToolExecutionResult:
@@ -166,6 +173,7 @@ class ToolExecutor:
 
         destination = self.world.resolve_exit(previous_location, requested_target)
         items = ensure_items_state(state)
+        npcs = ensure_npcs_state(state)
         if destination is None:
             available_exits = self.world.available_exits(previous_location)
             return ToolExecutionResult(
@@ -185,6 +193,7 @@ class ToolExecutor:
                 current_room_description=previous_room.description,
                 available_exits=available_exits,
                 available_items=available_items_for_room(items, previous_location),
+                nearby_npcs=nearby_npcs_for_room(npcs, previous_location),
             )
 
         player["location"] = destination.id
@@ -210,6 +219,7 @@ class ToolExecutor:
             current_room_description=destination.description,
             available_exits=available_exits,
             available_items=available_items_for_room(items, destination.id),
+            nearby_npcs=nearby_npcs_for_room(npcs, destination.id),
         )
 
     def take_item(self, state: dict[str, Any], requested_target: str | None) -> ToolExecutionResult:
@@ -416,9 +426,16 @@ class ToolExecutor:
         )
 
     def spawn_npc(self, state: dict[str, Any], npc_id: str, room_id: str) -> None:
-        npcs = state.setdefault("npcs", {})
+        npcs = ensure_npcs_state(state)
         npcs[npc_id] = {
-            "room": room_id,
+            "id": npc_id,
+            "name": " ".join(part.capitalize() for part in npc_id.replace("-", "_").split("_")),
+            "description": "",
+            "location": room_id,
+            "status": "active",
+            "disposition": "neutral",
+            "aliases": [],
+            "tags": [],
         }
 
     def advance_clock(self, state: dict[str, Any], amount: int) -> None:
@@ -461,6 +478,7 @@ class ToolExecutor:
             value = json.loads(campaign_state)
             if isinstance(value, dict):
                 ensure_items_state(value)
+                ensure_npcs_state(value)
                 return value
         except json.JSONDecodeError:
             pass
@@ -469,6 +487,7 @@ class ToolExecutor:
     def _build_fresh_campaign_state(self) -> dict[str, Any]:
         state = copy.deepcopy(DEFAULT_CAMPAIGN_STATE)
         items = ensure_items_state(state)
+        state["npcs"] = default_npcs_state()
         items.update(random_starting_inventory_items())
         sync_inventory_projection(state, items)
         return state
