@@ -12,6 +12,7 @@ from app.agents.base import BaseAgent
 from app.ai.model_client import ModelCallResult, model_client
 from app.ai.prompts import action_parser_prompt
 from app.game.items import ensure_items_state, inventory_item_ids, room_item_ids
+from app.game.npcs import ensure_npcs_state, nearby_npc_ids_for_room, parser_npc_projection
 from app.game.world import DEFAULT_WORLD
 from app.guardrails.model_policy import ModelPolicy
 from app.guardrails.token_budget import TokenBudget, estimate_tokens
@@ -40,7 +41,7 @@ class ParserContext(BaseModel):
     available_exits: list[dict[str, str]] = Field(default_factory=list)
     nearby_objects: list[str] = Field(default_factory=list)
     inventory: list[str] = Field(default_factory=list)
-    nearby_npcs: list[str] = Field(default_factory=list)
+    nearby_npcs: list[dict[str, Any]] = Field(default_factory=list)
     status_flags: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -304,7 +305,7 @@ class ActionParserAgent(BaseAgent):
             return ParserContext()
 
         player = self._dict_value(state, "player")
-        npcs = self._dict_value(state, "npcs")
+        npcs = ensure_npcs_state(state)
 
         location_raw = player.get("location")
         location = location_raw if isinstance(location_raw, str) else None
@@ -312,12 +313,10 @@ class ActionParserAgent(BaseAgent):
         items = ensure_items_state(state)
         inventory = inventory_item_ids(items)
 
-        nearby_npcs: list[str] = []
-        for npc_id, npc_state in npcs.items():
-            if not isinstance(npc_id, str) or not isinstance(npc_state, dict):
-                continue
-            if location is not None and npc_state.get("room") == location:
-                nearby_npcs.append(npc_id)
+        nearby_npcs: list[dict[str, Any]] = []
+        if location is not None:
+            for npc_id in nearby_npc_ids_for_room(npcs, location):
+                nearby_npcs.append(parser_npc_projection(npc_id, npcs[npc_id]))
 
         current_room = DEFAULT_WORLD.get_room(location) if location is not None else None
         if current_room is not None:

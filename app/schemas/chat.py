@@ -86,6 +86,14 @@ class ParsedAction(BaseModel):
     total_tokens: Optional[int] = None
 
 
+class NearbyNPC(BaseModel):
+    id: str
+    name: str
+    description: str = ""
+    status: str = "active"
+    disposition: str = "neutral"
+
+
 class ToolExecutionResult(BaseModel):
     success: bool
     applied_tools: list[str] = Field(default_factory=list)
@@ -107,3 +115,4 @@ class ToolExecutionResult(BaseModel):
     moved_to: str | None = None
     available_items: list[dict[str, str]] = Field(default_factory=list)
     inventory_items: list[str] = Field(default_factory=list)
+    nearby_npcs: list[NearbyNPC] = Field(default_factory=list)

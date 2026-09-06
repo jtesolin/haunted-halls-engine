@@ -546,25 +546,27 @@ Implemented behavior includes:
 
 ## UI-1 — Mobile chat layout cleanup
 
-**Status: Short frontend checkpoint before Phase 6C**
+**Status: Complete — merged**
 
-Responsive/mobile polish only: compact mobile header, no mobile horizontal or viewport overflow, reduced mobile layout chrome and padding, preserved sliding sidebar, and preserved desktop behavior. This is a brief UI interruption before returning to Phase 6C and does not change engine or gameplay architecture.
+Responsive/mobile polish only: compact mobile header, no mobile horizontal or viewport overflow, reduced mobile layout chrome and padding, preserved sliding sidebar, and preserved desktop behavior. This did not change engine or gameplay architecture.
 
 ## Phase 6C — NPC Model
 
-**Next active subphase**
+**Status: In progress — Phase 6C1 entity foundation complete**
 
-Expand NPCs into persistent entities with concepts such as:
+Phase 6C1 establishes authoritative persistent NPC entities and scene grounding:
 
 * Stable ID.
-* Name.
+* Player-facing name and concise authoritative description.
 * Current location.
-* State/status.
-* Disposition.
-* Relevant relationships.
-* Goals or behavioral state where needed.
+* Lightweight status and disposition.
+* Aliases and tags for deterministic resolution.
+* Fixed development NPC content in `entry_hall`, `library`, and `crypt` for fresh campaign state only.
+* Legacy `room` records normalized to `location` without backfilling canonical NPCs into established campaigns.
+* Structured nearby-NPC context supplied to the action parser and authoritative nearby-NPC projections supplied by OBSERVE and MOVE results.
+* Narrator instructions that prohibit invented NPC presence, movement, or state changes.
 
-NPCs should eventually be able to move and change state independently of narrator prose.
+Future NPC movement, interaction rules, and state changes remain deterministic gameplay work. NPC behavior must remain independent of narrator prose.
 
 ## Phase 6D — Rule-Based Player Actions
 

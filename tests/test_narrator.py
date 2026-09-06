@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 
 from app.agents.narrator import NarratorAgent, NarratorAgentInput
-from app.schemas.chat import ParsedAction, ToolExecutionResult, ActionType
+from app.schemas.chat import ActionType, NearbyNPC, ParsedAction, ToolExecutionResult
 
 
 def test_narrator_receives_authoritative_tool_result(monkeypatch) -> None:
@@ -39,6 +39,15 @@ def test_narrator_receives_authoritative_tool_result(monkeypatch) -> None:
             current_room_name="Grand Corridor",
             current_room_description="A long corridor lined with faded portraits and creaking floorboards.",
             available_exits=[{"direction": "east", "room_id": "library", "room_name": "Library"}],
+            nearby_npcs=[
+                NearbyNPC(
+                    id="library_ghost",
+                    name="Library Ghost",
+                    description="A pale figure drifts between the shelves.",
+                    status="active",
+                    disposition="neutral",
+                )
+            ],
         ),
     )
 
@@ -48,3 +57,5 @@ def test_narrator_receives_authoritative_tool_result(monkeypatch) -> None:
     tool_message = next(message for message in captured_messages if message["content"].startswith("Tool execution result"))
     assert '"current_location": "grand_corridor"' in tool_message["content"]
     assert '"current_room_name": "Grand Corridor"' in tool_message["content"]
+    assert '"id": "library_ghost"' in tool_message["content"]
+    assert "NPC presence, location, status, and disposition are authoritative game state." in captured_messages[0]["content"]
