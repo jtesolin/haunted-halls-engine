@@ -15,10 +15,6 @@ from app.schemas.chat import NarratorSceneContext, ParsedAction, ToolExecutionRe
 
 class NarratorAgentInput(BaseModel):
     player_message: str
-    # `campaign_state` is a transitional compatibility path for the campaign-creation/title
-    # flow only (Phase 6E2 will ground campaign-opening narration; not addressed here).
-    # Normal chat narration must use `scene_context` instead of raw campaign-state JSON.
-    campaign_state: str | None = None
     scene_context: NarratorSceneContext | None = None
     recent_turns: list[dict[str, str]] = Field(default_factory=list)
     campaign_summary: str | None = None
@@ -59,7 +55,6 @@ class NarratorAgent(BaseAgent):
             ]
 
         messages = self._build_messages(
-            campaign_state=payload.campaign_state,
             scene_context=payload.scene_context,
             recent_turns=payload.recent_turns,
             memory_context=memory_context,
@@ -94,7 +89,6 @@ class NarratorAgent(BaseAgent):
     def _build_messages(
         self,
         *,
-        campaign_state: str | None,
         scene_context: NarratorSceneContext | None,
         recent_turns: list[dict[str, str]],
         memory_context: list[dict[str, str]],
@@ -143,13 +137,6 @@ class NarratorAgent(BaseAgent):
                         "Current scene (authoritative, observable now):\n"
                         f"{scene_context.model_dump_json(exclude_none=True, indent=2)}"
                     ),
-                }
-            )
-        elif campaign_state is not None:
-            messages.append(
-                {
-                    "role": "user",
-                    "content": f"Campaign state:\n{campaign_state}".strip(),
                 }
             )
 

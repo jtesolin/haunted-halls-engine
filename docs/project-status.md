@@ -589,7 +589,7 @@ Combat remains explicitly deferred until the necessary mechanics are designed.
 
 ## Phase 6E — Narrator Grounding
 
-**Status: In progress — Phase 6E1 authoritative scene projection complete**
+**Status: Complete — Phase 6E1 authoritative scene projection and Phase 6E2 grounded campaign initialization complete**
 
 Strengthen the narrator contract so narration reflects authoritative results rather than creating state changes.
 
@@ -619,7 +619,13 @@ Phase 6E1 replaces raw campaign-state exposure to the narrator with a determinis
 * `NarratorAgentInput.campaign_state` remains only as a transitional compatibility path for the campaign-creation/title-generation flow, which still narrates before authoritative campaign state exists; this is not a reintroduction of raw state into normal chat narration.
 * The narrator prompt now states explicit authority precedence: current tool result, current scene context, parsed intent, then memory/summary/recent turns as historical-only context, then player wording (intent only, never proof of success).
 * Regression tests cover scene projection (room/exits/items/inventory/NPCs, deterministic ordering, off-room/absent exclusion), item-state redaction (observable state exposed, capability/hook/unknown properties never exposed), the updated narrator contract (scene context replaces raw state, tool result still authoritative for success/failure), and conflicting historical context (stale prior narration/memory cannot override current NPC/room presence, failed tool results remain authoritative despite player wording).
-* Phase 6E2 — grounding the initial campaign-opening narration against authoritative pre-created state — remains the next milestone; campaign creation still uses its prior transitional behavior until then.
+* Phase 6E2 grounds campaign creation against the same authoritative narrator projection used for normal turns:
+  * `app/game/campaign_state.py` is the single shared `build_fresh_campaign_state()` initializer; both new-campaign creation and `ToolExecutor`'s legacy missing-state fallback reuse it, with no duplicated starter-inventory/world-initialization logic.
+  * Campaign creation now builds the authoritative `initial_state` once, projects it into a `NarratorSceneContext`, generates the opening and title narration from that exact projection, and persists that same `initial_state` via `create_campaign(..., state=...)` — no reroll of starter inventory occurs between opening generation and persistence.
+  * The AI-disabled stub path builds and persists the same authoritative fresh state and derives its deterministic opening from the authoritative Entry Hall projection instead of inventing unrelated scene details; it never calls a model.
+  * `NarratorAgentInput.campaign_state` (the transitional raw-state compatibility path) is removed; the narrator now only ever receives `NarratorSceneContext`, including for campaign-opening/title generation.
+  * The first player action after campaign creation loads the persisted initial state; `random_starting_inventory_items()` is not called again for an already-initialized campaign.
+  * Regression tests cover the shared initializer, authoritative persisted state for both AI-enabled and AI-disabled campaign creation, grounded opening/title narrator contracts (scene context present, no raw `Campaign state:` message), and first-action inventory equivalence (no reroll).
 
 # Future Work
 
@@ -811,6 +817,7 @@ PostgreSQL, vector databases, deployment infrastructure, additional agents, and 
 | Rich NPC model                | Complete (Phase 6C1 foundation) |
 | Rule-based world interactions | Complete (Phase 6D)             |
 | Narrator scene projection     | Complete (Phase 6E1)            |
+| Grounded campaign initialization | Complete (Phase 6E2)          |
 | Director Agent                | Deferred          |
 | Domain MCP servers             | Future            |
 | PostgreSQL local/CI compatibility | Complete       |
@@ -823,7 +830,7 @@ PostgreSQL, vector databases, deployment infrastructure, additional agents, and 
 
 # Next Step
 
-**Phase 6E2 — grounded campaign-opening initialization**, building on Phase 6E1's authoritative narrator scene projection.
+Phase 6E is complete. The next milestone has not yet been planned.
 
 Phase 5 should be considered closed as of engine commit:
 

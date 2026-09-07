@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import time
 from typing import Any, cast
@@ -13,6 +14,7 @@ from app.agents.memory_summarizer import MemorySummarizerAgent, MemorySummarizer
 from app.agents.narrator import NarratorAgent, NarratorAgentInput
 from app.core.config import settings
 from app.db.session import session
+from app.game.campaign_state import build_fresh_campaign_state
 from app.game.narrator_scene import build_narrator_scene_context
 from app.guardrails.input_validation import validate_chat_request
 from app.guardrails.limit_errors import usage_limit_error
@@ -32,7 +34,7 @@ from app.guardrails.token_budget import (
 from app.guardrails.usage_limits import UsageLimits
 from app.memory.services import MemoryService
 from app.schemas.campaign import CampaignCreateRequest, CampaignDetail, CampaignTurn
-from app.schemas.chat import ChatRequest, ChatResponse, ToolExecutionResult
+from app.schemas.chat import ChatRequest, ChatResponse, NarratorSceneContext, ToolExecutionResult
 from app.schemas.events import (
     ActionParseFailedPayload,
     ActionParsedPayload,
@@ -92,14 +94,17 @@ class ChatOrchestrator:
         with session() as db:
             self._validate_campaign_creation(db, owner_user_id)
 
+            initial_state = build_fresh_campaign_state()
+            initial_state_json = json.dumps(initial_state)
+            scene_context = build_narrator_scene_context(initial_state_json)
+
             has_openai_key = bool((settings.OPENAI_API_KEY or "").strip())
             provider_model_enabled = has_openai_key
             ai_enabled = settings.AI_ENABLED or provider_model_enabled
             if not ai_enabled:
-                opening_prompt = self._stub_campaign_opening()
+                opening_prompt = self._stub_campaign_opening(scene_context)
                 campaign_name = self._stub_campaign_title()
             else:
-                campaign_state = "No campaign state yet."
                 recent_turns: list[dict[str, str]] = []
 
                 opening_request = self._build_campaign_opening_request()
@@ -111,7 +116,7 @@ class ChatOrchestrator:
                         turn_id=assistant_turn_id,
                         agent_name=agent_name,
                         model=model,
-                        campaign_state=campaign_state,
+                        scene_context=scene_context,
                         recent_turns=recent_turns,
                         message=opening_request,
                     )
@@ -120,7 +125,7 @@ class ChatOrchestrator:
                         await self.narrator_agent.generate(
                             payload=NarratorAgentInput(
                                 player_message=opening_request,
-                                campaign_state=campaign_state,
+                                scene_context=scene_context,
                                 recent_turns=recent_turns,
                             ),
                             model=model,
@@ -137,7 +142,7 @@ class ChatOrchestrator:
                             turn_id=assistant_turn_id,
                             agent_name=agent_name,
                             model=model,
-                            campaign_state=campaign_state,
+                            scene_context=scene_context,
                             recent_turns=recent_turns,
                             message=title_request,
                         )
@@ -148,7 +153,7 @@ class ChatOrchestrator:
                             await self.narrator_agent.generate(
                                 payload=NarratorAgentInput(
                                     player_message=title_request,
-                                    campaign_state=campaign_state,
+                                    scene_context=scene_context,
                                     recent_turns=recent_turns,
                                 ),
                                 model=model,
@@ -161,6 +166,7 @@ class ChatOrchestrator:
                 owner_user_id=owner_user_id,
                 name=campaign_name,
                 description="AI-created campaign",
+                state=initial_state,
             )
             assistant_turn = db.create_turn(
                 turn_id=assistant_turn_id,
@@ -561,8 +567,10 @@ class ChatOrchestrator:
 
     def _build_campaign_opening_request(self) -> str:
         return (
-            "Start a new haunted halls campaign. Write the opening scene for the player, "
-            "establish the immediate tension, and end with a clear invitation for the player's first action."
+            "Using the authoritative current scene provided, write the opening scene for this "
+            "haunted halls campaign. Establish immediate tension and end with a clear invitation "
+            "for the player's first action. Do not invent contradictory rooms, exits, NPC "
+            "presence, or item state."
         )
 
     def _build_campaign_title_request(self, opening_prompt: str) -> str:
@@ -766,13 +774,13 @@ class ChatOrchestrator:
         turn_id: str,
         agent_name: str,
         model: str,
-        campaign_state: str,
+        scene_context: NarratorSceneContext,
         recent_turns: list[dict[str, str]],
         message: str,
     ) -> str:
         narrator_payload = NarratorAgentInput(
             player_message=message,
-            campaign_state=campaign_state,
+            scene_context=scene_context,
             recent_turns=recent_turns,
         )
         estimated_input_tokens = self._estimate_payload_tokens(narrator_payload)
@@ -847,11 +855,13 @@ class ChatOrchestrator:
             return self._stub_campaign_title()
         return candidate.splitlines()[0][:80]
 
-    def _stub_campaign_opening(self) -> str:
-        return (
-            "A cold draft slips through the cracked archway as the lanterns wake one by one. "
-            "Somewhere deeper in the halls, a bell tolls once and then goes silent. What do you do first?"
+    def _stub_campaign_opening(self, scene_context: NarratorSceneContext) -> str:
+        room = scene_context.current_room
+        room_name = room.name or "the Entry Hall"
+        room_description = room.description or (
+            "A cold draft slips through the cracked archway as the lanterns wake one by one."
         )
+        return f"You stand in the {room_name}. {room_description} What do you do first?"
 
     def _stub_campaign_title(self) -> str:
         return "The Bell Beneath the Hall"
