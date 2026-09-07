@@ -19,6 +19,7 @@ from app.game.npcs import (
     default_npcs_state,
     ensure_npcs_state,
     nearby_npcs_for_room,
+    resolve_npc_ids,
 )
 from app.core.config import settings
 from app.game.world import DEFAULT_WORLD, World
@@ -104,6 +105,25 @@ class ToolExecutor:
         elif action == ActionType.OBSERVE:
             result = self.observe(state)
 
+        elif action == ActionType.TALK:
+            result = self.talk_to_npc(state, target)
+
+        elif action == ActionType.ATTACK:
+            result = self._unsupported_action(
+                state,
+                requested_target=target,
+                error_code="combat_not_supported",
+                summary="Combat is not supported yet.",
+            )
+
+        elif action in {ActionType.USE, ActionType.INTERACT}:
+            result = self._unsupported_action(
+                state,
+                requested_target=target,
+                error_code="interaction_not_supported",
+                summary="Environmental interaction is not supported yet.",
+            )
+
         elif action == ActionType.WAIT:
             amount = parsed_action.parameters.get("amount", 1)
             try:
@@ -149,6 +169,117 @@ class ToolExecutor:
             available_items=available_items_for_room(items, room.id),
             inventory_items=inventory_item_ids(items),
             nearby_npcs=nearby_npcs_for_room(npcs, room.id),
+        )
+
+    def talk_to_npc(self, state: dict[str, Any], requested_target: str | None) -> ToolExecutionResult:
+        player = state.setdefault("player", {})
+        current_location = player.get("location")
+        if not isinstance(current_location, str) or self.world.get_room(current_location) is None:
+            return ToolExecutionResult(
+                success=False,
+                summary="Player location is not set to a valid room.",
+                errors=["invalid_current_location"],
+                error_code="invalid_current_location",
+                requested_target=requested_target,
+            )
+
+        npcs = ensure_npcs_state(state)
+        room_npcs = {
+            npc_id: npc
+            for npc_id, npc in npcs.items()
+            if npc.get("location") == current_location and npc.get("status") != "absent"
+        }
+        scoped_matches = resolve_npc_ids(room_npcs, requested_target, current_location)
+        if len(scoped_matches) > 1:
+            return ToolExecutionResult(
+                success=False,
+                summary=f"'{requested_target or ''}' could match multiple nearby NPCs.",
+                errors=["ambiguous_npc"],
+                error_code="ambiguous_npc",
+                requested_target=requested_target,
+                current_location=current_location,
+                nearby_npcs=nearby_npcs_for_room(npcs, current_location),
+            )
+        if len(scoped_matches) == 1:
+            npc_id = scoped_matches[0]
+            npc = npcs[npc_id]
+            return ToolExecutionResult(
+                success=True,
+                applied_tools=["talk_to_npc"],
+                summary=f"You address the {npc.get('name', npc_id)}.",
+                state_delta={},
+                current_location=current_location,
+                requested_target=requested_target,
+                npc_id=npc_id,
+                npc_name=str(npc.get("name", npc_id)),
+                npc_status=str(npc.get("status", "active")),
+                npc_disposition=str(npc.get("disposition", "neutral")),
+                nearby_npcs=nearby_npcs_for_room(npcs, current_location),
+            )
+
+        global_matches = resolve_npc_ids(npcs, requested_target)
+        if len(global_matches) == 1:
+            npc_id = global_matches[0]
+            npc = npcs[npc_id]
+            if npc.get("location") != current_location or npc.get("status") == "absent":
+                return ToolExecutionResult(
+                    success=False,
+                    summary=f"{npc.get('name', npc_id)} is not here.",
+                    errors=["npc_not_present"],
+                    error_code="npc_not_present",
+                    requested_target=requested_target,
+                    current_location=current_location,
+                    nearby_npcs=nearby_npcs_for_room(npcs, current_location),
+                )
+        if len(global_matches) > 1:
+            return ToolExecutionResult(
+                success=False,
+                summary=f"'{requested_target or ''}' could match multiple NPCs.",
+                errors=["ambiguous_npc"],
+                error_code="ambiguous_npc",
+                requested_target=requested_target,
+                current_location=current_location,
+                nearby_npcs=nearby_npcs_for_room(npcs, current_location),
+            )
+
+        return ToolExecutionResult(
+            success=False,
+            summary=f"No NPC matched '{requested_target or ''}'.",
+            errors=["npc_not_found"],
+            error_code="npc_not_found",
+            requested_target=requested_target,
+            current_location=current_location,
+            nearby_npcs=nearby_npcs_for_room(npcs, current_location),
+        )
+
+    def _unsupported_action(
+        self,
+        state: dict[str, Any],
+        *,
+        requested_target: str | None,
+        error_code: str,
+        summary: str,
+    ) -> ToolExecutionResult:
+        player = state.setdefault("player", {})
+        current_location = player.get("location")
+        if not isinstance(current_location, str) or self.world.get_room(current_location) is None:
+            return ToolExecutionResult(
+                success=False,
+                summary="Player location is not set to a valid room.",
+                errors=["invalid_current_location"],
+                error_code="invalid_current_location",
+                requested_target=requested_target,
+            )
+        return ToolExecutionResult(
+            success=False,
+            applied_tools=[],
+            summary=summary,
+            state_delta={},
+            errors=[error_code],
+            error_code=error_code,
+            requested_target=requested_target,
+            current_location=current_location,
+            nearby_npcs=nearby_npcs_for_room(ensure_npcs_state(state), current_location),
         )
 
     def move_player(self, state: dict[str, Any], requested_target: str) -> ToolExecutionResult:

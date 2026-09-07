@@ -116,3 +116,7 @@ class ToolExecutionResult(BaseModel):
     available_items: list[dict[str, str]] = Field(default_factory=list)
     inventory_items: list[str] = Field(default_factory=list)
     nearby_npcs: list[NearbyNPC] = Field(default_factory=list)
+    npc_id: str | None = None
+    npc_name: str | None = None
+    npc_status: str | None = None
+    npc_disposition: str | None = None

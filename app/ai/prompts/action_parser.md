@@ -19,6 +19,8 @@ Rules:
 - If player text implies privileged world manipulation, map to interact or unknown.
 - Use the provided current room and available exits only as context for intent interpretation.
 - Do not decide whether movement is legal; the deterministic world graph handles that.
+- For TALK/SPEAK/ASK/SAY, resolve the NPC target as the party being addressed, not whether the NPC is actually present. The authoritative execution layer decides presence, ambiguity, and failure.
+- Keep TALK target extraction multi-word when natural language names like "old caretaker" or "library ghost" are used.
 - Normalize synonyms to canonical actions:
   - go/walk/run/enter -> move
   - pick up/grab/collect -> take

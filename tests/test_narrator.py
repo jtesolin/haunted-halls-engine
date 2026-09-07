@@ -59,3 +59,43 @@ def test_narrator_receives_authoritative_tool_result(monkeypatch) -> None:
     assert '"current_room_name": "Grand Corridor"' in tool_message["content"]
     assert '"id": "library_ghost"' in tool_message["content"]
     assert "NPC presence, location, status, and disposition are authoritative game state." in captured_messages[0]["content"]
+
+
+def test_narrator_receives_authoritative_talk_target(monkeypatch) -> None:
+    agent = NarratorAgent()
+    captured_messages = []
+
+    async def fake_generate_text(*, messages, **kwargs) -> str:  # noqa: ANN202, ARG001
+        captured_messages.extend(messages)
+        return "You address the Old Caretaker."
+
+    monkeypatch.setattr("app.agents.narrator.model_client.generate_text", fake_generate_text)
+
+    payload = NarratorAgentInput(
+        player_message="talk to old caretaker",
+        campaign_state='{"player": {"location": "entry_hall", "inventory": []}}',
+        recent_turns=[],
+        parsed_action=ParsedAction(
+            raw_text="talk to old caretaker",
+            action=ActionType.TALK,
+            target="old caretaker",
+            parse_status="ok",
+        ),
+        tool_result=ToolExecutionResult(
+            success=True,
+            applied_tools=["talk_to_npc"],
+            summary="You address the Old Caretaker.",
+            state_delta={},
+            npc_id="old_caretaker",
+            npc_name="Old Caretaker",
+            npc_status="active",
+            npc_disposition="neutral",
+        ),
+    )
+
+    result = asyncio.run(agent.generate(payload=payload))
+
+    assert result.reply_text == "You address the Old Caretaker."
+    tool_message = next(message for message in captured_messages if message["content"].startswith("Tool execution result"))
+    assert '"npc_id": "old_caretaker"' in tool_message["content"]
+    assert '"npc_name": "Old Caretaker"' in tool_message["content"]
