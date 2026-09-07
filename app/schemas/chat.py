@@ -94,6 +94,31 @@ class NearbyNPC(BaseModel):
     disposition: str = "neutral"
 
 
+class NarratorItem(BaseModel):
+    """Narrator-facing item projection: player-observable identity/state only, no internal properties."""
+
+    id: str
+    name: str
+    description: str = ""
+    observable_state: dict[str, Any] = Field(default_factory=dict)
+
+
+class NarratorRoom(BaseModel):
+    id: str | None = None
+    name: str | None = None
+    description: str | None = None
+
+
+class NarratorSceneContext(BaseModel):
+    """Deterministic, narrator-facing projection of the player-observable current scene."""
+
+    current_room: NarratorRoom = Field(default_factory=NarratorRoom)
+    available_exits: list[dict[str, str]] = Field(default_factory=list)
+    nearby_items: list[NarratorItem] = Field(default_factory=list)
+    inventory_items: list[NarratorItem] = Field(default_factory=list)
+    nearby_npcs: list[NearbyNPC] = Field(default_factory=list)
+
+
 class ToolExecutionResult(BaseModel):
     success: bool
     applied_tools: list[str] = Field(default_factory=list)

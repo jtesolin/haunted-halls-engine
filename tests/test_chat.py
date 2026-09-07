@@ -591,7 +591,8 @@ def test_orchestrator_uses_narrator_agent_and_persists_turn(monkeypatch) -> None
         assert messages[0]["role"] == "developer"
 
         assert messages[1]["role"] == "user"
-        assert "Campaign state:" in messages[1]["content"]
+        assert "Current scene" in messages[1]["content"]
+        assert "Campaign state:" not in messages[1]["content"]
         assert any(
             "Tool execution result:" in str(message["content"]) for message in messages
         )

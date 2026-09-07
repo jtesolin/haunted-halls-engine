@@ -10,12 +10,16 @@ from app.ai.model_client import ModelCallResult, model_client
 from app.ai.prompts import narrator_prompt
 from app.guardrails.model_policy import ModelPolicy
 from app.guardrails.token_budget import TokenBudget
-from app.schemas.chat import ParsedAction, ToolExecutionResult
+from app.schemas.chat import NarratorSceneContext, ParsedAction, ToolExecutionResult
 
 
 class NarratorAgentInput(BaseModel):
     player_message: str
-    campaign_state: str
+    # `campaign_state` is a transitional compatibility path for the campaign-creation/title
+    # flow only (Phase 6E2 will ground campaign-opening narration; not addressed here).
+    # Normal chat narration must use `scene_context` instead of raw campaign-state JSON.
+    campaign_state: str | None = None
+    scene_context: NarratorSceneContext | None = None
     recent_turns: list[dict[str, str]] = Field(default_factory=list)
     campaign_summary: str | None = None
     relevant_memories: list[dict[str, str]] = Field(default_factory=list)
@@ -56,6 +60,7 @@ class NarratorAgent(BaseAgent):
 
         messages = self._build_messages(
             campaign_state=payload.campaign_state,
+            scene_context=payload.scene_context,
             recent_turns=payload.recent_turns,
             memory_context=memory_context,
             message=payload.player_message,
@@ -89,7 +94,8 @@ class NarratorAgent(BaseAgent):
     def _build_messages(
         self,
         *,
-        campaign_state: str,
+        campaign_state: str | None,
+        scene_context: NarratorSceneContext | None,
         recent_turns: list[dict[str, str]],
         memory_context: list[dict[str, str]],
         message: str,
@@ -100,10 +106,6 @@ class NarratorAgent(BaseAgent):
             {
                 "role": "developer",
                 "content": narrator_prompt,
-            },
-            {
-                "role": "user",
-                "content": f"Campaign state:\n{campaign_state}".strip(),
             },
         ]
 
@@ -129,6 +131,26 @@ class NarratorAgent(BaseAgent):
                         "content": turn.get("content", ""),
                     },
                 )
+            )
+
+        # Current scene must follow stale memory/recent turns: it is authoritative observable
+        # state, not historical context (6E1 authority contract).
+        if scene_context is not None:
+            messages.append(
+                {
+                    "role": "user",
+                    "content": (
+                        "Current scene (authoritative, observable now):\n"
+                        f"{scene_context.model_dump_json(exclude_none=True, indent=2)}"
+                    ),
+                }
+            )
+        elif campaign_state is not None:
+            messages.append(
+                {
+                    "role": "user",
+                    "content": f"Campaign state:\n{campaign_state}".strip(),
+                }
             )
 
         if parsed_action is not None:
