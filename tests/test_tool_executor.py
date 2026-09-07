@@ -8,6 +8,7 @@ from typing import Any
 import pytest
 
 from app.db.session import session
+from app.game.items import ensure_items_state
 from app.schemas.internal_auth import CANONICAL_GOOGLE_ISSUER
 from app.agents.action_parser import ActionParserAgent
 from app.schemas.chat import ActionType, ParsedAction
@@ -338,7 +339,7 @@ def test_talk_invalid_current_location_fails() -> None:
     assert result.error_code == "invalid_current_location"
 
 
-def test_unsupported_attack_use_and_interact_are_explicit() -> None:
+def test_unsupported_attack_and_unknown_item_interactions_are_explicit() -> None:
     executor = _build_local_executor()
     base_state = json.dumps({
         "player": {"location": "entry_hall", "inventory": []},
@@ -347,8 +348,8 @@ def test_unsupported_attack_use_and_interact_are_explicit() -> None:
 
     for action, target, expected_code in [
         (ActionType.ATTACK, "caretaker", "combat_not_supported"),
-        (ActionType.USE, "door", "interaction_not_supported"),
-        (ActionType.INTERACT, "door", "interaction_not_supported"),
+        (ActionType.USE, "door", "item_not_found"),
+        (ActionType.INTERACT, "door", "item_not_found"),
     ]:
         _, result = executor.execute(
             parsed_action=ParsedAction(
@@ -909,3 +910,166 @@ def test_movement_rejects_non_adjacent_room_without_mcp_bypass() -> None:
     assert result.error_code == "invalid_exit"
     assert state["player"]["location"] == "entry_hall"
     assert client.calls == []
+
+
+def test_item_normalization_merges_canonical_properties_without_backfilling_starters() -> None:
+    state = {
+        "items": {
+            "old_book": {"location": "room:library", "properties": {"is_open": True}},
+            "box_of_matches": {"location": "player:current", "properties": {}},
+        }
+    }
+
+    items = ensure_items_state(state)
+
+    assert items["old_book"]["properties"] == {"openable": True, "is_open": True}
+    assert items["box_of_matches"]["properties"] == {"ignition_source": True}
+    assert "tinderbox" not in items
+
+
+@pytest.mark.parametrize(
+    ("action", "mode", "campaign_state", "property_name", "expected_value"),
+    [
+        (ActionType.INTERACT, "open", '{"player": {"location": "library", "inventory": []}}', "is_open", True),
+        (
+            ActionType.INTERACT,
+            "open",
+            '{"player": {"location": "entry_hall", "inventory": ["old_book"]}, "items": {"old_book": {"location": "player:current", "properties": {}}}}',
+            "is_open",
+            True,
+        ),
+        (
+            ActionType.INTERACT,
+            "close",
+            '{"player": {"location": "library", "inventory": []}, "items": {"old_book": {"location": "room:library", "properties": {"is_open": true}}}}',
+            "is_open",
+            False,
+        ),
+        (
+            ActionType.INTERACT,
+            "extinguish",
+            '{"player": {"location": "dining_room", "inventory": []}, "items": {"candle": {"location": "room:dining_room", "properties": {"lit": true}}}}',
+            "lit",
+            False,
+        ),
+    ],
+)
+def test_interact_item_mutates_accessible_item(
+    action: ActionType,
+    mode: str,
+    campaign_state: str,
+    property_name: str,
+    expected_value: bool,
+) -> None:
+    state, result = _build_local_executor().execute(
+        parsed_action=ParsedAction(raw_text=f"{mode} item", action=action, target="old book" if property_name == "is_open" else "candle", parameters={"interaction_mode": mode}, parse_status="ok"),
+        campaign_state=campaign_state,
+    )
+
+    assert result.success is True
+    assert result.applied_tools == ["interact_item"]
+    assert result.interaction_mode == mode
+    assert result.state_delta["items"][result.item_id]["properties"][property_name]["to"] is expected_value
+    assert state["items"][result.item_id]["properties"][property_name] is expected_value
+
+
+@pytest.mark.parametrize(
+    ("action", "target", "parameters", "campaign_state", "error_code"),
+    [
+        (ActionType.INTERACT, "old book", {"interaction_mode": "open"}, '{"player": {"location": "library"}, "items": {"old_book": {"location": "room:library", "properties": {"is_open": true}}}}', "item_already_open"),
+        (ActionType.INTERACT, "old book", {"interaction_mode": "close"}, '{"player": {"location": "library"}}', "item_already_closed"),
+        (ActionType.INTERACT, "heavy statue", {"interaction_mode": "open"}, '{"player": {"location": "entry_hall"}}', "unsupported_interaction"),
+        (ActionType.INTERACT, "candle", {"interaction_mode": "extinguish"}, '{"player": {"location": "dining_room"}}', "item_already_extinguished"),
+        (ActionType.INTERACT, "old book", {"interaction_mode": "open"}, '{"player": {"location": "entry_hall"}}', "item_not_accessible"),
+        (ActionType.INTERACT, "unknown", {"interaction_mode": "open"}, '{"player": {"location": "library"}}', "item_not_found"),
+        (ActionType.INTERACT, "old book", {"interaction_mode": "open"}, '{"player": {"location": "nowhere"}}', "invalid_current_location"),
+    ],
+)
+def test_interact_item_rejections_do_not_mutate(
+    action: ActionType, target: str, parameters: dict[str, str], campaign_state: str, error_code: str
+) -> None:
+    state, result = _build_local_executor().execute(
+        parsed_action=ParsedAction(raw_text="interact", action=action, target=target, parameters=parameters, parse_status="ok"),
+        campaign_state=campaign_state,
+    )
+
+    assert result.success is False
+    assert result.error_code == error_code
+    assert result.state_delta == {}
+    assert state["player"]["location"]
+
+
+def test_interact_item_rejects_ambiguous_accessible_target() -> None:
+    state, result = _build_local_executor().execute(
+        parsed_action=ParsedAction(raw_text="open book", action=ActionType.INTERACT, target="book", parameters={"interaction_mode": "open"}, parse_status="ok"),
+        campaign_state='{"player": {"location": "library"}, "items": {"old_book": {"location": "room:library", "tags": ["book"], "properties": {}}, "worn_journal": {"location": "player:current", "tags": ["book"], "properties": {}}}}',
+    )
+
+    assert result.success is False
+    assert result.error_code == "ambiguous_item"
+    assert state["items"]["old_book"]["properties"]["is_open"] is False
+
+
+@pytest.mark.parametrize("tool_name", ["matches", "tinderbox"])
+def test_use_ignition_source_lights_candle_and_infers_light(tool_name: str) -> None:
+    state, result = _build_local_executor().execute(
+        parsed_action=ParsedAction(raw_text=f"use {tool_name} on candle", action=ActionType.USE, target="candle", parameters={"with_item": tool_name}, parse_status="ok"),
+        campaign_state=json.dumps({"player": {"location": "dining_room", "inventory": [tool_name]}, "items": {"box_of_matches" if tool_name == "matches" else "tinderbox": {"location": "player:current", "properties": {}}, "candle": {"location": "room:dining_room", "properties": {}}}}),
+    )
+
+    assert result.success is True
+    assert result.interaction_mode == "light"
+    assert result.with_item_id in {"box_of_matches", "tinderbox"}
+    assert state["items"]["candle"]["properties"]["lit"] is True
+
+
+@pytest.mark.parametrize(
+    ("parameters", "campaign_state", "error_code"),
+    [
+        ({"interaction_mode": "light", "with_item": "matches"}, '{"player": {"location": "dining_room"}}', "with_item_not_found"),
+        ({"interaction_mode": "light", "with_item": "matches"}, '{"player": {"location": "dining_room"}, "items": {"box_of_matches": {"location": "room:library", "properties": {}}}}', "with_item_not_in_inventory"),
+        ({"interaction_mode": "light", "with_item": "brass key"}, '{"player": {"location": "dining_room", "inventory": ["brass_key"]}, "items": {"brass_key": {"location": "player:current", "properties": {}}}}', "required_item_missing"),
+        ({"interaction_mode": "light", "with_item": "matches"}, '{"player": {"location": "dining_room", "inventory": ["box_of_matches"]}, "items": {"box_of_matches": {"location": "player:current", "properties": {}}, "candle": {"location": "room:dining_room", "properties": {"lit": true}}}}', "item_already_lit"),
+    ],
+)
+def test_use_light_rejections_do_not_mutate(parameters: dict[str, str], campaign_state: str, error_code: str) -> None:
+    _, result = _build_local_executor().execute(
+        parsed_action=ParsedAction(raw_text="light candle", action=ActionType.USE, target="candle", parameters=parameters, parse_status="ok"),
+        campaign_state=campaign_state,
+    )
+
+    assert result.success is False
+    assert result.error_code == error_code
+    assert result.state_delta == {}
+
+
+def test_use_rejects_ambiguous_inventory_tool_without_mcp_dispatch() -> None:
+    client = RecordingMCPClient()
+    registry = ToolRegistry(mode="hybrid", mcp_client=client)
+    executor = ToolExecutor(registry=registry)
+    state, result = executor.execute(
+        parsed_action=ParsedAction(raw_text="use matches on candle", action=ActionType.USE, target="candle", parameters={"with_item": "matches"}, parse_status="ok"),
+        campaign_state='{"player": {"location": "dining_room"}, "items": {"box_of_matches": {"location": "player:current", "aliases": ["matches"], "properties": {}}, "spare_matches": {"location": "player:current", "aliases": ["matches"], "properties": {}}, "candle": {"location": "room:dining_room", "properties": {}}}}',
+    )
+
+    assert result.success is False
+    assert result.error_code == "ambiguous_with_item"
+    assert state["items"]["candle"]["properties"]["lit"] is False
+    assert client.calls == []
+
+
+def test_interaction_state_delta_survives_database_round_trip() -> None:
+    state, result = _build_local_executor().execute(
+        parsed_action=ParsedAction(raw_text="open old book", action=ActionType.INTERACT, target="old book", parameters={"interaction_mode": "open"}, parse_status="ok"),
+        campaign_state='{"player": {"location": "library", "inventory": []}}',
+    )
+    assert result.state_delta
+
+    with session() as db:
+        owner_id = db.resolve_internal_user(identity_provider="google", provider_issuer=CANONICAL_GOOGLE_ISSUER, provider_subject="phase6d-owner", email="phase6d-owner@example.com", email_verified=True, display_name="Phase 6D Owner", avatar_url="https://example.com/avatar.png").id
+        db.create_campaign("campaign_phase6d", owner_id, "Phase 6D", "Interaction test")
+        db.update_campaign_state("campaign_phase6d", state)
+        persisted = db.get_campaign("campaign_phase6d")
+
+    assert persisted is not None and persisted.state is not None
+    assert json.loads(persisted.state)["items"]["old_book"]["properties"]["is_open"] is True

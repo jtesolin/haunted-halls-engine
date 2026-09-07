@@ -1,5 +1,7 @@
 import asyncio
 
+import pytest
+
 from app.agents.action_parser import ActionParserAgent
 from app.schemas.chat import ActionParserOutput, ActionParserParameters, ActionType
 
@@ -166,6 +168,28 @@ def test_action_parser_deterministic_normalizes_synonyms() -> None:
     assert wait.action == ActionType.WAIT
     assert talk.action == ActionType.TALK
     assert talk.target == "old caretaker"
+
+
+@pytest.mark.parametrize(
+    ("message", "action", "target", "with_item", "interaction_mode"),
+    [
+        ("open the old book", ActionType.INTERACT, "old book", None, "open"),
+        ("close the old book", ActionType.INTERACT, "old book", None, "close"),
+        ("light the candle with the matches", ActionType.USE, "candle", "matches", "light"),
+        ("extinguish the candle", ActionType.INTERACT, "candle", None, "extinguish"),
+        ("use the matches on the candle", ActionType.USE, "candle", "matches", None),
+        ("use the tinderbox with the candle", ActionType.USE, "candle", "tinderbox", None),
+    ],
+)
+def test_action_parser_deterministic_parses_item_interactions(
+    message: str, action: ActionType, target: str, with_item: str | None, interaction_mode: str | None
+) -> None:
+    result = asyncio.run(ActionParserAgent().parse(message=message, campaign_state="No campaign state yet.", recent_turns=[], memory_context=[], deterministic_only=True))
+
+    assert result.action == action
+    assert result.target == target
+    assert result.parameters.get("with_item") == with_item
+    assert result.parameters.get("interaction_mode") == interaction_mode
 
 
 def test_action_parser_deterministic_talk_target_extraction_for_npc_phrases() -> None:

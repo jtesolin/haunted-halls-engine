@@ -570,7 +570,7 @@ Future NPC movement, interaction rules, and state changes remain deterministic g
 
 ## Phase 6D — Rule-Based Player Actions
 
-**Status: Phase 6D1 deterministic TALK and explicit unsupported action semantics implemented**
+**Status: Complete — deterministic player actions and item interactions implemented**
 
 Phase 6D1 introduces deterministically-authoritative TALK handling and explicit rejection semantics for deferred actions:
 
@@ -579,11 +579,13 @@ Phase 6D1 introduces deterministically-authoritative TALK handling and explicit 
 * Successful TALK returns the chosen NPC identity and authorizes narration without mutating NPC state or world state.
 * Rejections are explicit and structured: `invalid_current_location`, `npc_not_found`, `npc_not_present`, and `ambiguous_npc`.
 * ATTACK is explicitly rejected with `combat_not_supported` and no mutation or damage state.
-* USE/INTERACT are explicitly rejected with `interaction_not_supported` until Phase 6D2 environmental interaction rules are implemented.
+* USE/INTERACT deterministically resolve accessible items by ID, name, aliases, and tags; OPEN/CLOSE old books and LIGHT/EXTINGUISH candles are authoritative local state transitions.
+* Ignition requires an inventory-held canonical ignition source (`box_of_matches` or `tinderbox`); no consumable counts, durability, or burn time is modeled.
+* Existing campaign items receive new canonical capabilities while retaining persisted dynamic property values; unselected starter items are not backfilled.
 * Existing deterministic MOVE / TAKE / DROP / OBSERVE / WAIT behavior remains in place and remains the authoritative baseline.
-* Phase 6D2 remains the next implementation milestone for environmental interaction rules and item-object behavior.
+* Phase 6E narrator-context projection is the next implementation milestone.
 
-Combat remains deferred until the necessary mechanics are designed.
+Combat remains explicitly deferred until the necessary mechanics are designed.
 
 ## Phase 6E — Narrator Grounding
 

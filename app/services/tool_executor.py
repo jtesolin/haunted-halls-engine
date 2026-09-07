@@ -117,12 +117,7 @@ class ToolExecutor:
             )
 
         elif action in {ActionType.USE, ActionType.INTERACT}:
-            result = self._unsupported_action(
-                state,
-                requested_target=target,
-                error_code="interaction_not_supported",
-                summary="Environmental interaction is not supported yet.",
-            )
+            result = self.interact_with_item(state, parsed_action)
 
         elif action == ActionType.WAIT:
             amount = parsed_action.parameters.get("amount", 1)
@@ -280,6 +275,122 @@ class ToolExecutor:
             requested_target=requested_target,
             current_location=current_location,
             nearby_npcs=nearby_npcs_for_room(ensure_npcs_state(state), current_location),
+        )
+
+    def interact_with_item(self, state: dict[str, Any], parsed_action: ParsedAction) -> ToolExecutionResult:
+        player = state.setdefault("player", {})
+        current_room = player.get("location")
+        requested_target = parsed_action.target
+        if not isinstance(current_room, str) or self.world.get_room(current_room) is None:
+            return self._interaction_error("Player location is not set to a valid room.", "invalid_current_location", requested_target)
+
+        items = ensure_items_state(state)
+        accessible_items = {
+            item_id: item
+            for item_id, item in items.items()
+            if item.get("location") in {room_location(current_room), PLAYER_INVENTORY_LOCATION}
+        }
+        target_matches = resolve_item_ids(accessible_items, requested_target)
+        if len(target_matches) > 1:
+            return self._interaction_error(f"'{requested_target or ''}' could match multiple accessible items.", "ambiguous_item", requested_target)
+        if not target_matches:
+            global_matches = resolve_item_ids(items, requested_target)
+            if len(global_matches) == 1:
+                return self._interaction_error("That item is not accessible.", "item_not_accessible", requested_target)
+            return self._interaction_error(f"No item matched '{requested_target or ''}'.", "item_not_found", requested_target)
+
+        item_id = target_matches[0]
+        item = items[item_id]
+        properties = item.get("properties")
+        if not isinstance(properties, dict):
+            properties = {}
+            item["properties"] = properties
+        mode = parsed_action.parameters.get("interaction_mode")
+        interaction_mode = mode if isinstance(mode, str) else None
+        with_item_id: str | None = None
+        with_item_name: str | None = None
+
+        if parsed_action.action == ActionType.USE:
+            with_item = parsed_action.parameters.get("with_item")
+            if not isinstance(with_item, str):
+                return self._interaction_error("A usable item is required.", "required_item_missing", requested_target)
+            inventory_items = {
+                candidate_id: candidate
+                for candidate_id, candidate in items.items()
+                if candidate.get("location") == PLAYER_INVENTORY_LOCATION
+            }
+            tool_matches = resolve_item_ids(inventory_items, with_item)
+            if len(tool_matches) > 1:
+                return self._interaction_error("That inventory item is ambiguous.", "ambiguous_with_item", requested_target)
+            if not tool_matches:
+                global_matches = resolve_item_ids(items, with_item)
+                if len(global_matches) == 1:
+                    return self._interaction_error("That item is not in your inventory.", "with_item_not_in_inventory", requested_target)
+                return self._interaction_error("No matching inventory item was found.", "with_item_not_found", requested_target)
+            with_item_id = tool_matches[0]
+            tool = inventory_items[with_item_id]
+            tool_properties = tool.get("properties")
+            if not isinstance(tool_properties, dict) or tool_properties.get("ignition_source") is not True:
+                return self._interaction_error("That item cannot ignite anything.", "required_item_missing", requested_target)
+            with_item_name = tool.get("name") if isinstance(tool.get("name"), str) else with_item_id
+            if interaction_mode is None and properties.get("lightable") is True:
+                interaction_mode = "light"
+
+        if interaction_mode in {"open", "close"}:
+            if properties.get("openable") is not True:
+                return self._interaction_error("That item cannot be opened or closed.", "unsupported_interaction", requested_target)
+            is_open = properties.get("is_open") is True
+            if interaction_mode == "open" and is_open:
+                return self._interaction_error("That item is already open.", "item_already_open", requested_target)
+            if interaction_mode == "close" and not is_open:
+                return self._interaction_error("That item is already closed.", "item_already_closed", requested_target)
+            next_value = interaction_mode == "open"
+            property_name = "is_open"
+        elif interaction_mode in {"light", "extinguish"}:
+            if interaction_mode == "light" and with_item_id is None:
+                return self._interaction_error("An ignition source is required.", "required_item_missing", requested_target)
+            if properties.get("lightable") is not True:
+                return self._interaction_error("That item cannot be lit or extinguished.", "unsupported_interaction", requested_target)
+            lit = properties.get("lit") is True
+            if interaction_mode == "light" and lit:
+                return self._interaction_error("That item is already lit.", "item_already_lit", requested_target)
+            if interaction_mode == "extinguish" and not lit:
+                return self._interaction_error("That item is already extinguished.", "item_already_extinguished", requested_target)
+            next_value = interaction_mode == "light"
+            property_name = "lit"
+        else:
+            return self._interaction_error("That interaction is not supported.", "unsupported_interaction", requested_target)
+
+        previous_value = properties.get(property_name) is True
+        properties[property_name] = next_value
+        item_name = item.get("name") if isinstance(item.get("name"), str) else item_id
+        verbs = {"open": "Opened", "close": "Closed", "light": "Lit", "extinguish": "Extinguished"}
+        return ToolExecutionResult(
+            success=True,
+            applied_tools=["interact_item"],
+            summary=f"{verbs[interaction_mode]} {item_name}.",
+            state_delta={"items": {item_id: {"properties": {property_name: {"from": previous_value, "to": next_value}}}}},
+            requested_target=requested_target,
+            current_location=current_room,
+            item_id=item_id,
+            item_name=item_name,
+            interaction_mode=interaction_mode,
+            with_item_id=with_item_id,
+            with_item_name=with_item_name,
+        )
+
+    def _interaction_error(
+        self,
+        summary: str,
+        error_code: str,
+        requested_target: str | None,
+    ) -> ToolExecutionResult:
+        return ToolExecutionResult(
+            success=False,
+            summary=summary,
+            errors=[error_code],
+            error_code=error_code,
+            requested_target=requested_target,
         )
 
     def move_player(self, state: dict[str, Any], requested_target: str) -> ToolExecutionResult:

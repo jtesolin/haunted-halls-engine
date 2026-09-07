@@ -21,6 +21,9 @@ Rules:
 - Do not decide whether movement is legal; the deterministic world graph handles that.
 - For TALK/SPEAK/ASK/SAY, resolve the NPC target as the party being addressed, not whether the NPC is actually present. The authoritative execution layer decides presence, ambiguity, and failure.
 - Keep TALK target extraction multi-word when natural language names like "old caretaker" or "library ghost" are used.
+- For open/close/extinguish, use `interact` with the item as `target` and set `interaction_mode` to the matching verb.
+- For light, use `use` with the lightable item as `target`, the ignition item as `with_item`, and `interaction_mode` set to `light`.
+- For `use X on Y` and `use X with Y`, set `with_item` to X and `target` to Y. Do not decide whether the combination succeeds.
 - Normalize synonyms to canonical actions:
   - go/walk/run/enter -> move
   - pick up/grab/collect -> take
