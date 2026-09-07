@@ -1,8 +1,8 @@
 # Haunted Halls — Project Status
 
-**Last synchronized (planning memory sync):** September 4, 2026
-**Engine baseline:** `haunted-halls-engine` `main` at commit `f07d7163ceb5954f630b92a9acba716656c34a73`
-**Web baseline:** `haunted-halls` `main` at commit `907bbac1081ae798954c6aa00fdf2c2a8f3a4816`
+**Last synchronized (planning memory sync):** September 7, 2026
+**Engine baseline:** `haunted-halls-engine` `main` at commit `fbe38196565fdfdb9e284c172e5f3206823ee0a3`
+**Web baseline:** `haunted-halls` `main` at commit `c1c5b97b7edb8f207ea81f6bc43ad0bdeca94e2c`
 
 Synchronization metadata meaning:
 
@@ -570,17 +570,20 @@ Future NPC movement, interaction rules, and state changes remain deterministic g
 
 ## Phase 6D — Rule-Based Player Actions
 
-Introduce deterministic validation for core actions such as:
+**Status: Phase 6D1 deterministic TALK and explicit unsupported action semantics implemented**
 
-* Movement.
-* Take/drop.
-* Use/interact.
-* Open/close.
-* Talk.
-* Wait.
-* Basic environmental interaction.
+Phase 6D1 introduces deterministically-authoritative TALK handling and explicit rejection semantics for deferred actions:
 
-Combat should remain minimal or deferred until its required mechanics are understood.
+* Deterministic TALK is now a local player-authority action with room-scoped NPC presence checks.
+* TALK resolves to the authoritative nearby NPC using stable ID, player-facing name, aliases, and tags already established by the Phase 6C resolver.
+* Successful TALK returns the chosen NPC identity and authorizes narration without mutating NPC state or world state.
+* Rejections are explicit and structured: `invalid_current_location`, `npc_not_found`, `npc_not_present`, and `ambiguous_npc`.
+* ATTACK is explicitly rejected with `combat_not_supported` and no mutation or damage state.
+* USE/INTERACT are explicitly rejected with `interaction_not_supported` until Phase 6D2 environmental interaction rules are implemented.
+* Existing deterministic MOVE / TAKE / DROP / OBSERVE / WAIT behavior remains in place and remains the authoritative baseline.
+* Phase 6D2 remains the next implementation milestone for environmental interaction rules and item-object behavior.
+
+Combat remains deferred until the necessary mechanics are designed.
 
 ## Phase 6E — Narrator Grounding
 
