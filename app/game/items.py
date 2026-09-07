@@ -264,11 +264,14 @@ def available_items_for_room(
 
 def narrator_item_projection(item_id: str, item: dict[str, Any]) -> NarratorItem:
     properties = item.get("properties")
-    observable_state: dict[str, Any] = {}
+    observable_state: dict[str, bool] = {}
     if isinstance(properties, dict):
         for key in OBSERVABLE_ITEM_STATE_KEYS:
-            if key in properties:
-                observable_state[key] = properties[key]
+            value = properties.get(key)
+            # Observable state keys are boolean game-state fields; malformed values
+            # (strings/objects/lists) must be omitted rather than coerced or exposed.
+            if isinstance(value, bool):
+                observable_state[key] = value
     return NarratorItem(
         id=item_id,
         name=str(item.get("name", item_id)),

@@ -183,3 +183,51 @@ def test_unknown_arbitrary_properties_are_not_leaked() -> None:
 
     old_book = next(item for item in scene.nearby_items if item.id == "old_book")
     assert "secret_internal_flag" not in old_book.observable_state
+
+
+def test_malformed_observable_state_values_are_omitted() -> None:
+    from app.game.items import narrator_item_projection
+
+    malformed_book = narrator_item_projection(
+        "old_book",
+        {
+            "name": "Old Book",
+            "description": "A mold-speckled book.",
+            "properties": {"is_open": "yes", "openable": True},
+        },
+    )
+    malformed_candle = narrator_item_projection(
+        "candle",
+        {
+            "name": "Candle",
+            "description": "A thin tallow candle.",
+            "properties": {"lit": {"nested": ["a" * 10_000]}, "lightable": True},
+        },
+    )
+    malformed_list = narrator_item_projection(
+        "candle",
+        {
+            "name": "Candle",
+            "description": "A thin tallow candle.",
+            "properties": {"lit": [True, False]},
+        },
+    )
+
+    assert "is_open" not in malformed_book.observable_state
+    assert "lit" not in malformed_candle.observable_state
+    assert "lit" not in malformed_list.observable_state
+
+
+def test_valid_boolean_observable_state_values_still_project() -> None:
+    from app.game.items import narrator_item_projection
+
+    projected = narrator_item_projection(
+        "old_book",
+        {
+            "name": "Old Book",
+            "description": "A mold-speckled book.",
+            "properties": {"is_open": True, "lit": False, "openable": True},
+        },
+    )
+
+    assert projected.observable_state == {"is_open": True, "lit": False}

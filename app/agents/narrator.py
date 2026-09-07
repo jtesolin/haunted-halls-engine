@@ -109,24 +109,6 @@ class NarratorAgent(BaseAgent):
             },
         ]
 
-        if scene_context is not None:
-            messages.append(
-                {
-                    "role": "user",
-                    "content": (
-                        "Current scene (authoritative, observable now):\n"
-                        f"{scene_context.model_dump_json(exclude_none=True, indent=2)}"
-                    ),
-                }
-            )
-        elif campaign_state is not None:
-            messages.append(
-                {
-                    "role": "user",
-                    "content": f"Campaign state:\n{campaign_state}".strip(),
-                }
-            )
-
         if memory_context:
             messages.append(
                 {
@@ -149,6 +131,26 @@ class NarratorAgent(BaseAgent):
                         "content": turn.get("content", ""),
                     },
                 )
+            )
+
+        # Current scene must follow stale memory/recent turns: it is authoritative observable
+        # state, not historical context (6E1 authority contract).
+        if scene_context is not None:
+            messages.append(
+                {
+                    "role": "user",
+                    "content": (
+                        "Current scene (authoritative, observable now):\n"
+                        f"{scene_context.model_dump_json(exclude_none=True, indent=2)}"
+                    ),
+                }
+            )
+        elif campaign_state is not None:
+            messages.append(
+                {
+                    "role": "user",
+                    "content": f"Campaign state:\n{campaign_state}".strip(),
+                }
             )
 
         if parsed_action is not None:

@@ -305,6 +305,54 @@ def test_stale_memory_does_not_override_current_projection(monkeypatch) -> None:
     assert "Old Caretaker" in memory_message["content"]
     # Memory precedes the current scene message ordering-wise but must not be the scene message itself.
     assert memory_message is not scene_message
+    assert captured_messages.index(memory_message) < captured_messages.index(scene_message)
+
+
+def test_stale_context_precedes_authoritative_current_scene(monkeypatch) -> None:
+    agent = NarratorAgent()
+    captured_messages = []
+
+    async def fake_generate_text(*, messages, **kwargs) -> str:  # noqa: ANN202, ARG001
+        captured_messages.extend(messages)
+        return "You are alone in the dining room."
+
+    monkeypatch.setattr("app.agents.narrator.model_client.generate_text", fake_generate_text)
+
+    payload = NarratorAgentInput(
+        player_message="look around",
+        scene_context=NarratorSceneContext(
+            current_room=NarratorRoom(id="dining_room", name="Dining Room", description="A long table under a chandelier."),
+            nearby_npcs=[],
+        ),
+        relevant_memories=[
+            {"role": "user", "content": "The Old Caretaker was in the Entry Hall."},
+        ],
+        recent_turns=[
+            {"role": "assistant", "content": "A ghost waits beside you."},
+        ],
+        parsed_action=ParsedAction(raw_text="look around", action=ActionType.OBSERVE, parse_status="ok"),
+        tool_result=ToolExecutionResult(success=True, applied_tools=["observe"], summary="Empty dining room.", nearby_npcs=[]),
+    )
+
+    asyncio.run(agent.generate(payload=payload))
+
+    memory_message = next(message for message in captured_messages if "Relevant memory" in message["content"])
+    recent_turn_message = next(
+        message for message in captured_messages if message.get("content") == "A ghost waits beside you."
+    )
+    scene_message = next(message for message in captured_messages if "Current scene" in message["content"])
+    intent_message = next(message for message in captured_messages if message["content"].startswith("Parsed player intent"))
+    tool_message = next(message for message in captured_messages if message["content"].startswith("Tool execution result"))
+
+    memory_index = captured_messages.index(memory_message)
+    recent_turn_index = captured_messages.index(recent_turn_message)
+    scene_index = captured_messages.index(scene_message)
+    intent_index = captured_messages.index(intent_message)
+    tool_index = captured_messages.index(tool_message)
+
+    assert memory_index < scene_index
+    assert recent_turn_index < scene_index
+    assert scene_index < intent_index < tool_index
 
 
 def test_failed_tool_result_remains_authoritative_despite_player_wording(monkeypatch) -> None:
