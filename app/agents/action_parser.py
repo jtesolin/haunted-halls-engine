@@ -258,11 +258,23 @@ class ActionParserAgent(BaseAgent):
             parse_status = "ok"
             confidence = 0.72
             target = self._extract_talk_target(lower)
-        elif self._contains_any_phrase(lower, ["use", "open", "pull", "push", "interact"]):
+        elif self._contains_any_phrase(lower, ["open", "close", "extinguish", "interact"]):
+            action = ActionType.INTERACT
+            parse_status = "ok"
+            confidence = 0.7
+            target = self._extract_interaction_target(lower)
+            interaction_mode = self._interaction_mode(lower)
+            return self._parsed_interaction(
+                message, action, target, interaction_mode, None, stealth, confidence, parse_status, notes
+            )
+        elif self._contains_any_phrase(lower, ["light", "use"]):
             action = ActionType.USE
             parse_status = "ok"
             confidence = 0.7
-            target = self._target_after_tokens(lower, ["the", "a", "an", "with"])
+            target, with_item = self._extract_use_items(lower)
+            return self._parsed_interaction(
+                message, action, target, self._interaction_mode(lower), with_item, stealth, confidence, parse_status, notes
+            )
         elif self._contains_any_phrase(lower, ["attack", "hit", "strike", "fight"]):
             action = ActionType.ATTACK
             parse_status = "ok"
@@ -286,6 +298,37 @@ class ActionParserAgent(BaseAgent):
             action=action,
             target=target,
             parameters={},
+            stealth=stealth,
+            confidence=confidence,
+            parse_status=parse_status,
+            parser_notes=notes,
+        )
+
+    def _parsed_interaction(
+        self,
+        message: str,
+        action: ActionType,
+        target: str | None,
+        interaction_mode: str | None,
+        with_item: str | None,
+        stealth: bool,
+        confidence: float,
+        parse_status: ParseStatus,
+        notes: str,
+    ) -> ParsedAction:
+        parameters = {
+            key: value
+            for key, value in {
+                "interaction_mode": interaction_mode,
+                "with_item": with_item,
+            }.items()
+            if value is not None
+        }
+        return ParsedAction(
+            raw_text=message,
+            action=action,
+            target=target,
+            parameters=parameters,
             stealth=stealth,
             confidence=confidence,
             parse_status=parse_status,
@@ -423,6 +466,32 @@ class ActionParserAgent(BaseAgent):
             if suffix:
                 return suffix
         return self._target_after_tokens(text, ["the", "a", "an"])
+
+    def _interaction_mode(self, text: str) -> str | None:
+        for mode in ("open", "close", "light", "extinguish"):
+            if re.search(r"\b" + mode + r"\b", text):
+                return mode
+        return None
+
+    def _extract_interaction_target(self, text: str) -> str | None:
+        mode = self._interaction_mode(text)
+        if mode is None:
+            return self._extract_object_target(text, ["interact"])
+        return self._extract_object_target(text, [mode])
+
+    def _extract_use_items(self, text: str) -> tuple[str | None, str | None]:
+        if self._interaction_mode(text) == "light":
+            target = self._extract_object_target(text, ["light"])
+            match = re.search(r"\b(?:with|using)\s+(?:the\s+)?(.+?)(?:[.!?]|$)", text)
+            return target, match.group(1).strip() if match else None
+
+        match = re.search(
+            r"\buse\s+(?:the\s+)?(.+?)\s+\b(?:on|with)\s+(?:the\s+)?(.+?)(?:[.!?]|$)",
+            text,
+        )
+        if match:
+            return match.group(2).strip(), match.group(1).strip()
+        return self._extract_object_target(text, ["use"]), None
 
     def _contains_any_phrase(self, text: str, phrases: list[str]) -> bool:
         for phrase in phrases:

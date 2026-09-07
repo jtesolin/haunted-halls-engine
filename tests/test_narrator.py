@@ -99,3 +99,27 @@ def test_narrator_receives_authoritative_talk_target(monkeypatch) -> None:
     tool_message = next(message for message in captured_messages if message["content"].startswith("Tool execution result"))
     assert '"npc_id": "old_caretaker"' in tool_message["content"]
     assert '"npc_name": "Old Caretaker"' in tool_message["content"]
+
+
+def test_narrator_receives_authoritative_item_interaction(monkeypatch) -> None:
+    agent = NarratorAgent()
+    captured_messages = []
+
+    async def fake_generate_text(*, messages, **kwargs) -> str:  # noqa: ANN202, ARG001
+        captured_messages.extend(messages)
+        return "The old book opens."
+
+    monkeypatch.setattr("app.agents.narrator.model_client.generate_text", fake_generate_text)
+    payload = NarratorAgentInput(
+        player_message="open the old book",
+        campaign_state='{"player": {"location": "library"}}',
+        parsed_action=ParsedAction(raw_text="open the old book", action=ActionType.INTERACT, target="old book", parameters={"interaction_mode": "open"}, parse_status="ok"),
+        tool_result=ToolExecutionResult(success=True, applied_tools=["interact_item"], summary="Opened Old Book.", state_delta={"items": {"old_book": {"properties": {"is_open": {"from": False, "to": True}}}}}, item_id="old_book", item_name="Old Book", interaction_mode="open"),
+    )
+
+    asyncio.run(agent.generate(payload=payload))
+
+    tool_message = next(message for message in captured_messages if message["content"].startswith("Tool execution result"))
+    assert '"item_id": "old_book"' in tool_message["content"]
+    assert '"interaction_mode": "open"' in tool_message["content"]
+    assert '"is_open"' in tool_message["content"]

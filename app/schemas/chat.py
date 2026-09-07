@@ -111,6 +111,9 @@ class ToolExecutionResult(BaseModel):
     available_exits: list[dict[str, str]] = Field(default_factory=list)
     item_id: str | None = None
     item_name: str | None = None
+    interaction_mode: str | None = None
+    with_item_id: str | None = None
+    with_item_name: str | None = None
     moved_from: str | None = None
     moved_to: str | None = None
     available_items: list[dict[str, str]] = Field(default_factory=list)

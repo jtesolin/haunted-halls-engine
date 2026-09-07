@@ -48,6 +48,7 @@ def build_development_items() -> dict[str, Item]:
             portable=True,
             tags=["book"],
             aliases=["old book", "moldy book"],
+            properties={"openable": True, "is_open": False},
         ),
         Item(
             id="heavy_statue",
@@ -66,6 +67,7 @@ def build_development_items() -> dict[str, Item]:
             portable=True,
             tags=["light"],
             aliases=["tallow candle"],
+            properties={"lightable": True, "lit": False},
         ),
     ]
     return {item.id: item for item in items}
@@ -102,6 +104,7 @@ def build_starting_inventory_pool() -> dict[str, Item]:
             portable=True,
             tags=["light", "supply"],
             aliases=["matches", "box of matches"],
+            properties={"ignition_source": True},
         ),
         Item(
             id="pocket_knife",
@@ -147,6 +150,7 @@ def build_starting_inventory_pool() -> dict[str, Item]:
             portable=True,
             tags=["light", "supply"],
             aliases=["tinderbox"],
+            properties={"ignition_source": True},
         ),
     ]
     return {item.id: item for item in items}
@@ -186,6 +190,20 @@ def ensure_items_state(state: dict[str, Any]) -> dict[str, dict[str, Any]]:
             merged = dict(default_item)
             merged.update(normalized[item_id])
             normalized[item_id] = _normalize_item_state(item_id, merged)
+
+    for item_id, starter_item in STARTING_INVENTORY_POOL.items():
+        if item_id in normalized:
+            persisted_item = normalized[item_id]
+            merged = dict(persisted_item)
+            merged["tags"] = list(dict.fromkeys([*starter_item.tags, *persisted_item["tags"]]))
+            merged["aliases"] = list(dict.fromkeys([*starter_item.aliases, *persisted_item["aliases"]]))
+            normalized[item_id] = _normalize_item_state(item_id, merged)
+
+    for item_id, item in normalized.items():
+        item["properties"] = _merged_canonical_properties(
+            item_id,
+            item["properties"],
+        )
 
     state["items"] = normalized
     _migrate_legacy_inventory(state, normalized)
@@ -293,6 +311,19 @@ def _normalize_item_state(item_id: str, raw_item: dict[str, Any]) -> dict[str, A
         "aliases": [alias for alias in aliases if isinstance(alias, str)] if isinstance(aliases, list) else [],
         "properties": properties if isinstance(properties, dict) else {},
     }
+
+
+def _merged_canonical_properties(
+    item_id: str,
+    persisted_properties: dict[str, Any],
+) -> dict[str, Any]:
+    canonical_item = DEFAULT_ITEMS.get(item_id) or STARTING_INVENTORY_POOL.get(item_id)
+    if canonical_item is None:
+        return dict(persisted_properties)
+
+    properties = dict(canonical_item.properties)
+    properties.update(persisted_properties)
+    return properties
 
 
 def _candidate_identifiers(item_id: str, item: dict[str, Any]) -> set[str]:
