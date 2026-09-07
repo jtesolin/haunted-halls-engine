@@ -136,6 +136,234 @@ def test_tool_executor_returns_structured_dispatch_errors() -> None:
     assert result.errors[2].startswith("reason:MCP call failed for tool: advance_time")
 
 
+def test_talk_to_nearby_npc_success_and_non_mutating() -> None:
+    executor = _build_local_executor()
+    campaign_state = json.dumps({
+        "player": {"location": "entry_hall", "inventory": []},
+        "npcs": {
+            "old_caretaker": {
+                "id": "old_caretaker",
+                "name": "Old Caretaker",
+                "location": "entry_hall",
+                "status": "active",
+                "disposition": "neutral",
+                "aliases": ["caretaker"],
+                "tags": ["human"],
+            }
+        },
+    })
+
+    state, result = executor.execute(
+        parsed_action=ParsedAction(
+            raw_text="talk to old caretaker",
+            action=ActionType.TALK,
+            target="old caretaker",
+            parse_status="ok",
+        ),
+        campaign_state=campaign_state,
+    )
+
+    assert result.success is True
+    assert result.applied_tools == ["talk_to_npc"]
+    assert result.npc_id == "old_caretaker"
+    assert result.npc_name == "Old Caretaker"
+    assert result.state_delta == {}
+    assert state["npcs"]["old_caretaker"]["status"] == "active"
+    assert state["npcs"]["old_caretaker"]["disposition"] == "neutral"
+
+
+def test_talk_resolves_by_id_name_alias() -> None:
+    executor = _build_local_executor()
+    campaign_state = json.dumps({
+        "player": {"location": "entry_hall", "inventory": []},
+        "npcs": {
+            "old_caretaker": {
+                "id": "old_caretaker",
+                "name": "Old Caretaker",
+                "location": "entry_hall",
+                "status": "active",
+                "disposition": "neutral",
+                "aliases": ["caretaker"],
+                "tags": ["human"],
+            }
+        },
+    })
+
+    for target in ["old_caretaker", "Old Caretaker", "caretaker"]:
+        _, result = executor.execute(
+            parsed_action=ParsedAction(
+                raw_text=f"talk to {target}",
+                action=ActionType.TALK,
+                target=target,
+                parse_status="ok",
+            ),
+            campaign_state=campaign_state,
+        )
+        assert result.success is True
+        assert result.npc_id == "old_caretaker"
+
+
+def test_talk_to_off_room_npc_fails_with_not_present() -> None:
+    executor = _build_local_executor()
+    state, result = executor.execute(
+        parsed_action=ParsedAction(
+            raw_text="talk to library ghost",
+            action=ActionType.TALK,
+            target="library ghost",
+            parse_status="ok",
+        ),
+        campaign_state=json.dumps({
+            "player": {"location": "entry_hall", "inventory": []},
+            "npcs": {
+                "library_ghost": {
+                    "id": "library_ghost",
+                    "name": "Library Ghost",
+                    "location": "library",
+                    "status": "active",
+                    "disposition": "neutral",
+                    "aliases": ["ghost"],
+                    "tags": ["undead"],
+                }
+            },
+        }),
+    )
+
+    assert result.success is False
+    assert result.error_code == "npc_not_present"
+    assert state["npcs"]["library_ghost"]["location"] == "library"
+
+
+def test_talk_to_absent_npc_fails_with_not_present() -> None:
+    executor = _build_local_executor()
+    state, result = executor.execute(
+        parsed_action=ParsedAction(
+            raw_text="talk to old caretaker",
+            action=ActionType.TALK,
+            target="old caretaker",
+            parse_status="ok",
+        ),
+        campaign_state=json.dumps({
+            "player": {"location": "entry_hall", "inventory": []},
+            "npcs": {
+                "old_caretaker": {
+                    "id": "old_caretaker",
+                    "name": "Old Caretaker",
+                    "location": "entry_hall",
+                    "status": "absent",
+                    "disposition": "neutral",
+                    "aliases": ["caretaker"],
+                    "tags": ["human"],
+                }
+            },
+        }),
+    )
+
+    assert result.success is False
+    assert result.error_code == "npc_not_present"
+    assert state["npcs"]["old_caretaker"]["status"] == "absent"
+
+
+def test_talk_ambiguous_nearby_npc_fails_without_mutation() -> None:
+    executor = _build_local_executor()
+    state, result = executor.execute(
+        parsed_action=ParsedAction(
+            raw_text="talk to caretaker",
+            action=ActionType.TALK,
+            target="caretaker",
+            parse_status="ok",
+        ),
+        campaign_state=json.dumps({
+            "player": {"location": "entry_hall", "inventory": []},
+            "npcs": {
+                "old_caretaker": {
+                    "id": "old_caretaker",
+                    "name": "Old Caretaker",
+                    "location": "entry_hall",
+                    "status": "active",
+                    "disposition": "neutral",
+                    "aliases": ["caretaker"],
+                    "tags": ["human"],
+                },
+                "dormitory_guard": {
+                    "id": "dormitory_guard",
+                    "name": "Dormitory Guard",
+                    "location": "entry_hall",
+                    "status": "active",
+                    "disposition": "neutral",
+                    "aliases": ["caretaker"],
+                    "tags": ["human"],
+                },
+            },
+        }),
+    )
+
+    assert result.success is False
+    assert result.error_code == "ambiguous_npc"
+    assert state["npcs"]["old_caretaker"]["status"] == "active"
+
+
+def test_talk_unknown_npc_fails_without_mutation() -> None:
+    executor = _build_local_executor()
+    state, result = executor.execute(
+        parsed_action=ParsedAction(
+            raw_text="talk to unknown ghost",
+            action=ActionType.TALK,
+            target="unknown ghost",
+            parse_status="ok",
+        ),
+        campaign_state=json.dumps({
+            "player": {"location": "entry_hall", "inventory": []},
+            "npcs": {"old_caretaker": {"id": "old_caretaker", "name": "Old Caretaker", "location": "entry_hall", "status": "active"}},
+        }),
+    )
+
+    assert result.success is False
+    assert result.error_code == "npc_not_found"
+    assert state["npcs"]["old_caretaker"]["status"] == "active"
+
+
+def test_talk_invalid_current_location_fails() -> None:
+    executor = _build_local_executor()
+    _, result = executor.execute(
+        parsed_action=ParsedAction(
+            raw_text="talk to old caretaker",
+            action=ActionType.TALK,
+            target="old caretaker",
+            parse_status="ok",
+        ),
+        campaign_state=json.dumps({"player": {"location": "nowhere", "inventory": []}}),
+    )
+
+    assert result.success is False
+    assert result.error_code == "invalid_current_location"
+
+
+def test_unsupported_attack_use_and_interact_are_explicit() -> None:
+    executor = _build_local_executor()
+    base_state = json.dumps({
+        "player": {"location": "entry_hall", "inventory": []},
+        "npcs": {"old_caretaker": {"id": "old_caretaker", "name": "Old Caretaker", "location": "entry_hall", "status": "active"}},
+    })
+
+    for action, target, expected_code in [
+        (ActionType.ATTACK, "caretaker", "combat_not_supported"),
+        (ActionType.USE, "door", "interaction_not_supported"),
+        (ActionType.INTERACT, "door", "interaction_not_supported"),
+    ]:
+        _, result = executor.execute(
+            parsed_action=ParsedAction(
+                raw_text=f"{action.value} {target}",
+                action=action,
+                target=target,
+                parse_status="ok",
+            ),
+            campaign_state=base_state,
+        )
+        assert result.success is False
+        assert result.error_code == expected_code
+        assert result.state_delta == {}
+
+
 def test_take_item_success_transfers_authoritative_item() -> None:
     executor = _build_local_executor()
 

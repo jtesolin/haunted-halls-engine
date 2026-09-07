@@ -150,11 +150,61 @@ def test_action_parser_deterministic_normalizes_synonyms() -> None:
             deterministic_only=True,
         )
     )
+    talk = asyncio.run(
+        agent.parse(
+            message="talk to the old caretaker",
+            campaign_state='{"player": {"location": "entry_hall"}}',
+            recent_turns=[],
+            memory_context=[],
+            deterministic_only=True,
+        )
+    )
 
     assert move.action == ActionType.MOVE
     assert take.action == ActionType.TAKE
     assert drop.action == ActionType.DROP
     assert wait.action == ActionType.WAIT
+    assert talk.action == ActionType.TALK
+    assert talk.target == "old caretaker"
+
+
+def test_action_parser_deterministic_talk_target_extraction_for_npc_phrases() -> None:
+    agent = ActionParserAgent()
+
+    talk = asyncio.run(
+        agent.parse(
+            message="talk to the old caretaker",
+            campaign_state='{"player": {"location": "entry_hall"}}',
+            recent_turns=[],
+            memory_context=[],
+            deterministic_only=True,
+        )
+    )
+    speak = asyncio.run(
+        agent.parse(
+            message="speak with the library ghost",
+            campaign_state='{"player": {"location": "library"}}',
+            recent_turns=[],
+            memory_context=[],
+            deterministic_only=True,
+        )
+    )
+    ask = asyncio.run(
+        agent.parse(
+            message="ask the caretaker about the library",
+            campaign_state='{"player": {"location": "entry_hall"}}',
+            recent_turns=[],
+            memory_context=[],
+            deterministic_only=True,
+        )
+    )
+
+    assert talk.action == ActionType.TALK
+    assert talk.target == "old caretaker"
+    assert speak.action == ActionType.TALK
+    assert speak.target == "library ghost"
+    assert ask.action == ActionType.TALK
+    assert ask.target == "caretaker"
 
 
 def test_action_parser_deterministic_privileged_world_requests_stay_non_privileged() -> None:

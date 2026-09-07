@@ -257,7 +257,7 @@ class ActionParserAgent(BaseAgent):
             action = ActionType.TALK
             parse_status = "ok"
             confidence = 0.72
-            target = self._target_after_tokens(lower, ["to", "with", "the"])
+            target = self._extract_talk_target(lower)
         elif self._contains_any_phrase(lower, ["use", "open", "pull", "push", "interact"]):
             action = ActionType.USE
             parse_status = "ok"
@@ -369,6 +369,29 @@ class ActionParserAgent(BaseAgent):
                         continue
                     return candidate
         return None
+
+    def _extract_talk_target(self, text: str) -> str | None:
+        for marker in [
+            "talk to",
+            "talk with",
+            "speak to",
+            "speak with",
+            "ask",
+            "say to",
+            "say",
+        ]:
+            if marker not in text:
+                continue
+            suffix = text.split(marker, 1)[1].strip()
+            for filler in [" about ", " for ", " from ", " to ", " with ", " at ", " of "]:
+                if filler in suffix:
+                    suffix = suffix.split(filler, 1)[0].strip()
+                    break
+            suffix = re.sub(r"^(?:the|a|an)\s+", "", suffix)
+            suffix = re.sub(r"\s+", " ", suffix).strip()
+            if suffix:
+                return suffix
+        return self._target_after_tokens(text, ["to", "with", "the"])
 
     def _extract_movement_target(self, text: str) -> str | None:
         directional_tokens = ["north", "south", "east", "west", "up", "down", "in", "out"]
