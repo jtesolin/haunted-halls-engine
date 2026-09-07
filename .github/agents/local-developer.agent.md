@@ -79,6 +79,17 @@ Do not create another PR.
 
 If review feedback applies only to `haunted-halls-engine`, do not modify `haunted-halls` unless explicitly instructed.
 
+### Review disposition authority
+
+- When an existing PR contains one or more top-level comments whose heading begins with `Review disposition`, treat the most recent such comment as the authoritative review-remediation instruction.
+- Implement only findings classified as `Fix in this PR`.
+- Do not implement findings classified as `Defer`.
+- Do not implement findings classified as `Reject`.
+- Treat the underlying GitHub Copilot review comments as supporting evidence/context, not as the final work queue.
+- Do not independently override the disposition.
+- If the current local code clearly contradicts the disposition, or the disposition appears stale/inapplicable to the latest PR state, stop and ask the user before changing code.
+- If there is no `Review disposition` comment, fall back to the existing behavior: read the unresolved review comments, verify them independently, and only implement findings explicitly approved by the user.
+
 ## GitHub actions prohibited unless explicitly requested
 
 Do not:
