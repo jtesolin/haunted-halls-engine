@@ -112,7 +112,6 @@ class ToolExecutor:
             result = self._unsupported_action(
                 state,
                 requested_target=target,
-                action_name="attack",
                 error_code="combat_not_supported",
                 summary="Combat is not supported yet.",
             )
@@ -121,7 +120,6 @@ class ToolExecutor:
             result = self._unsupported_action(
                 state,
                 requested_target=target,
-                action_name="interact",
                 error_code="interaction_not_supported",
                 summary="Environmental interaction is not supported yet.",
             )
@@ -259,7 +257,6 @@ class ToolExecutor:
         state: dict[str, Any],
         *,
         requested_target: str | None,
-        action_name: str,
         error_code: str,
         summary: str,
     ) -> ToolExecutionResult:
