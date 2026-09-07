@@ -15,7 +15,7 @@ from app.schemas.chat import NarratorSceneContext, ParsedAction, ToolExecutionRe
 
 class NarratorAgentInput(BaseModel):
     player_message: str
-    scene_context: NarratorSceneContext | None = None
+    scene_context: NarratorSceneContext
     recent_turns: list[dict[str, str]] = Field(default_factory=list)
     campaign_summary: str | None = None
     relevant_memories: list[dict[str, str]] = Field(default_factory=list)
@@ -89,7 +89,7 @@ class NarratorAgent(BaseAgent):
     def _build_messages(
         self,
         *,
-        scene_context: NarratorSceneContext | None,
+        scene_context: NarratorSceneContext,
         recent_turns: list[dict[str, str]],
         memory_context: list[dict[str, str]],
         message: str,
@@ -129,16 +129,15 @@ class NarratorAgent(BaseAgent):
 
         # Current scene must follow stale memory/recent turns: it is authoritative observable
         # state, not historical context (6E1 authority contract).
-        if scene_context is not None:
-            messages.append(
-                {
-                    "role": "user",
-                    "content": (
-                        "Current scene (authoritative, observable now):\n"
-                        f"{scene_context.model_dump_json(exclude_none=True, indent=2)}"
-                    ),
-                }
-            )
+        messages.append(
+            {
+                "role": "user",
+                "content": (
+                    "Current scene (authoritative, observable now):\n"
+                    f"{scene_context.model_dump_json(exclude_none=True, indent=2)}"
+                ),
+            }
+        )
 
         if parsed_action is not None:
             messages.append(

@@ -857,7 +857,7 @@ class ChatOrchestrator:
 
     def _stub_campaign_opening(self, scene_context: NarratorSceneContext) -> str:
         room = scene_context.current_room
-        room_name = room.name or "the Entry Hall"
+        room_name = room.name or "Entry Hall"
         room_description = room.description or (
             "A cold draft slips through the cracked archway as the lanterns wake one by one."
         )

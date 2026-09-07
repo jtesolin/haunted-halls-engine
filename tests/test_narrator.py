@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import asyncio
 
+import pytest
+from pydantic import ValidationError
+
 from app.agents.narrator import NarratorAgent, NarratorAgentInput
 from app.ai.prompts import narrator_prompt
 from app.schemas.chat import (
@@ -13,6 +16,11 @@ from app.schemas.chat import (
     ParsedAction,
     ToolExecutionResult,
 )
+
+
+def test_narrator_agent_input_requires_scene_context() -> None:
+    with pytest.raises(ValidationError):
+        NarratorAgentInput(player_message="look around")  # type: ignore[call-arg]
 
 
 def test_narrator_receives_authoritative_tool_result(monkeypatch) -> None:
