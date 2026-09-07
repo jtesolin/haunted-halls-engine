@@ -13,6 +13,7 @@ from app.agents.memory_summarizer import MemorySummarizerAgent, MemorySummarizer
 from app.agents.narrator import NarratorAgent, NarratorAgentInput
 from app.core.config import settings
 from app.db.session import session
+from app.game.narrator_scene import build_narrator_scene_context
 from app.guardrails.input_validation import validate_chat_request
 from app.guardrails.limit_errors import usage_limit_error
 from app.guardrails.model_policy import ModelPolicy
@@ -439,9 +440,10 @@ class ChatOrchestrator:
             if not provider_model_enabled and not ai_enabled:
                 reply = self._stub_reply(request.message)
             else:
+                scene_context = build_narrator_scene_context(campaign_state)
                 narrator_payload = NarratorAgentInput(
                     player_message=request.message,
-                    campaign_state=campaign_state,
+                    scene_context=scene_context,
                     recent_turns=recent_turns,
                     relevant_memories=memory_context,
                     parsed_action=parsed_action,

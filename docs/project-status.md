@@ -589,6 +589,8 @@ Combat remains explicitly deferred until the necessary mechanics are designed.
 
 ## Phase 6E — Narrator Grounding
 
+**Status: In progress — Phase 6E1 authoritative scene projection complete**
+
 Strengthen the narrator contract so narration reflects authoritative results rather than creating state changes.
 
 Conceptually:
@@ -608,6 +610,16 @@ Narrator:
 ```
 
 If the engine rejects an action, narration must describe the rejection rather than silently overriding it.
+
+Phase 6E1 replaces raw campaign-state exposure to the narrator with a deterministic scene projection:
+
+* `app/game/narrator_scene.py` builds a `NarratorSceneContext` from authoritative campaign state: current room (id/name/description), authoritative world-graph exits, room-scoped nearby items, inventory items (projected separately), and room-scoped nearby NPCs (excluding absent/off-room NPCs), all in deterministic order.
+* Narrator-facing item projection (`NarratorItem`) exposes only player-observable identity/description and observable dynamic state (`is_open`, `lit`); internal capability/hook properties (`openable`, `lightable`, `ignition_source`, `opens`, and other arbitrary internal properties, including the brass key's latent `opens: cellar_door` hook) are never exposed.
+* Normal chat narration now sends `NarratorSceneContext` instead of raw `campaign_state` JSON; the existing structured `ToolExecutionResult` continues to be sent unchanged.
+* `NarratorAgentInput.campaign_state` remains only as a transitional compatibility path for the campaign-creation/title-generation flow, which still narrates before authoritative campaign state exists; this is not a reintroduction of raw state into normal chat narration.
+* The narrator prompt now states explicit authority precedence: current tool result, current scene context, parsed intent, then memory/summary/recent turns as historical-only context, then player wording (intent only, never proof of success).
+* Regression tests cover scene projection (room/exits/items/inventory/NPCs, deterministic ordering, off-room/absent exclusion), item-state redaction (observable state exposed, capability/hook/unknown properties never exposed), the updated narrator contract (scene context replaces raw state, tool result still authoritative for success/failure), and conflicting historical context (stale prior narration/memory cannot override current NPC/room presence, failed tool results remain authoritative despite player wording).
+* Phase 6E2 — grounding the initial campaign-opening narration against authoritative pre-created state — remains the next milestone; campaign creation still uses its prior transitional behavior until then.
 
 # Future Work
 
@@ -796,8 +808,9 @@ PostgreSQL, vector databases, deployment infrastructure, additional agents, and 
 | SQLite local persistence      | Complete          |
 | Explicit rooms/world graph    | Complete          |
 | Item entity model             | Complete          |
-| Rich NPC model                | Planned           |
-| Rule-based world interactions | Planned           |
+| Rich NPC model                | Complete (Phase 6C1 foundation) |
+| Rule-based world interactions | Complete (Phase 6D)             |
+| Narrator scene projection     | Complete (Phase 6E1)            |
 | Director Agent                | Deferred          |
 | Domain MCP servers             | Future            |
 | PostgreSQL local/CI compatibility | Complete       |
@@ -810,9 +823,7 @@ PostgreSQL, vector databases, deployment infrastructure, additional agents, and 
 
 # Next Step
 
-**UI-1 — Mobile chat layout cleanup**, then **Phase 6C — NPC Model**
-
-UI-1 is a short responsive/mobile cleanup checkpoint. After it, Phase 6C is the active gameplay implementation phase; Phase 6B is complete and its scope is described above.
+**Phase 6E2 — grounded campaign-opening initialization**, building on Phase 6E1's authoritative narrator scene projection.
 
 Phase 5 should be considered closed as of engine commit:
 

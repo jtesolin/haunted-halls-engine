@@ -5,10 +5,15 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from app.game.world import normalize_identifier
+from app.schemas.chat import NarratorItem
 
 PLAYER_INVENTORY_LOCATION = "player:current"
 
 STARTING_INVENTORY_SIZE = 3
+
+# Observable dynamic item state exposed to the narrator; internal capability/hook
+# properties (e.g. openable, lightable, ignition_source, opens) are never exposed.
+OBSERVABLE_ITEM_STATE_KEYS = ("is_open", "lit")
 
 
 @dataclass(frozen=True)
@@ -255,6 +260,37 @@ def available_items_for_room(
         if isinstance(name, str):
             available.append({"id": item_id, "name": name})
     return available
+
+
+def narrator_item_projection(item_id: str, item: dict[str, Any]) -> NarratorItem:
+    properties = item.get("properties")
+    observable_state: dict[str, Any] = {}
+    if isinstance(properties, dict):
+        for key in OBSERVABLE_ITEM_STATE_KEYS:
+            if key in properties:
+                observable_state[key] = properties[key]
+    return NarratorItem(
+        id=item_id,
+        name=str(item.get("name", item_id)),
+        description=str(item.get("description", "")),
+        observable_state=observable_state,
+    )
+
+
+def nearby_narrator_items_for_room(
+    items: dict[str, dict[str, Any]], room_id: str
+) -> list[NarratorItem]:
+    return [
+        narrator_item_projection(item_id, items[item_id])
+        for item_id in sorted(room_item_ids(items, room_id))
+    ]
+
+
+def inventory_narrator_items(items: dict[str, dict[str, Any]]) -> list[NarratorItem]:
+    return [
+        narrator_item_projection(item_id, items[item_id])
+        for item_id in sorted(inventory_item_ids(items))
+    ]
 
 
 def resolve_item_ids(
