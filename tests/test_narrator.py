@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import asyncio
 
+import pytest
+from pydantic import ValidationError
+
 from app.agents.narrator import NarratorAgent, NarratorAgentInput
 from app.ai.prompts import narrator_prompt
 from app.schemas.chat import (
@@ -13,6 +16,11 @@ from app.schemas.chat import (
     ParsedAction,
     ToolExecutionResult,
 )
+
+
+def test_narrator_agent_input_requires_scene_context() -> None:
+    with pytest.raises(ValidationError):
+        NarratorAgentInput(player_message="look around")  # type: ignore[call-arg]
 
 
 def test_narrator_receives_authoritative_tool_result(monkeypatch) -> None:
@@ -27,7 +35,9 @@ def test_narrator_receives_authoritative_tool_result(monkeypatch) -> None:
 
     payload = NarratorAgentInput(
         player_message="I go north.",
-        campaign_state='{"player": {"location": "grand_corridor", "inventory": []}}',
+        scene_context=NarratorSceneContext(
+            current_room=NarratorRoom(id="grand_corridor", name="Grand Corridor", description="A long corridor."),
+        ),
         recent_turns=[],
         parsed_action=ParsedAction(
             raw_text="I go north.",
@@ -82,7 +92,9 @@ def test_narrator_receives_authoritative_talk_target(monkeypatch) -> None:
 
     payload = NarratorAgentInput(
         player_message="talk to old caretaker",
-        campaign_state='{"player": {"location": "entry_hall", "inventory": []}}',
+        scene_context=NarratorSceneContext(
+            current_room=NarratorRoom(id="entry_hall", name="Entry Hall", description="The entry hall."),
+        ),
         recent_turns=[],
         parsed_action=ParsedAction(
             raw_text="talk to old caretaker",
@@ -121,7 +133,9 @@ def test_narrator_receives_authoritative_item_interaction(monkeypatch) -> None:
     monkeypatch.setattr("app.agents.narrator.model_client.generate_text", fake_generate_text)
     payload = NarratorAgentInput(
         player_message="open the old book",
-        campaign_state='{"player": {"location": "library"}}',
+        scene_context=NarratorSceneContext(
+            current_room=NarratorRoom(id="library", name="Library", description="Tall shelves crowd the walls."),
+        ),
         parsed_action=ParsedAction(raw_text="open the old book", action=ActionType.INTERACT, target="old book", parameters={"interaction_mode": "open"}, parse_status="ok"),
         tool_result=ToolExecutionResult(success=True, applied_tools=["interact_item"], summary="Opened Old Book.", state_delta={"items": {"old_book": {"properties": {"is_open": {"from": False, "to": True}}}}}, item_id="old_book", item_name="Old Book", interaction_mode="open"),
     )

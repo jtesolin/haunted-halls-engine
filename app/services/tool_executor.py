@@ -4,19 +4,17 @@ import copy
 import json
 from typing import Any
 
+from app.game.campaign_state import build_fresh_campaign_state
 from app.game.items import (
     PLAYER_INVENTORY_LOCATION,
     available_items_for_room,
-    default_items_state,
     ensure_items_state,
     inventory_item_ids,
-    random_starting_inventory_items,
     resolve_item_ids,
     room_location,
     sync_inventory_projection,
 )
 from app.game.npcs import (
-    default_npcs_state,
     ensure_npcs_state,
     nearby_npcs_for_room,
     resolve_npc_ids,
@@ -26,19 +24,6 @@ from app.game.world import DEFAULT_WORLD, World
 from app.schemas.chat import ActionType, ParsedAction, ToolExecutionResult
 from app.tools.mcp_client import build_mcp_client
 from app.tools.registry import RegistryTransportError, ToolRegistry
-
-DEFAULT_CAMPAIGN_STATE: dict[str, Any] = {
-    "player": {
-        "location": "entry_hall",
-        "inventory": [],
-    },
-    "items": default_items_state(),
-    "npcs": {},
-    "clock": {
-        "tick": 0,
-    },
-    "facts": [],
-}
 
 
 class ToolExecutor:
@@ -720,7 +705,7 @@ class ToolExecutor:
 
     def _state_from_text(self, campaign_state: str) -> dict[str, Any]:
         if not campaign_state or campaign_state == "No campaign state yet.":
-            return self._build_fresh_campaign_state()
+            return build_fresh_campaign_state()
         try:
             value = json.loads(campaign_state)
             if isinstance(value, dict):
@@ -729,15 +714,7 @@ class ToolExecutor:
                 return value
         except json.JSONDecodeError:
             pass
-        return self._build_fresh_campaign_state()
-
-    def _build_fresh_campaign_state(self) -> dict[str, Any]:
-        state = copy.deepcopy(DEFAULT_CAMPAIGN_STATE)
-        items = ensure_items_state(state)
-        state["npcs"] = default_npcs_state()
-        items.update(random_starting_inventory_items())
-        sync_inventory_projection(state, items)
-        return state
+        return build_fresh_campaign_state()
 
     def _compute_state_delta(self, before: dict[str, Any], after: dict[str, Any]) -> dict[str, Any]:
         delta: dict[str, Any] = {}

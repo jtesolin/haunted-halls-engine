@@ -169,12 +169,177 @@ def test_create_campaign_uses_narrator_for_opening_and_title(monkeypatch) -> Non
     data = response.json()
 
     assert len(prompts) == 2
-    assert "Start a new haunted halls campaign" in prompts[0]
+    assert "write the opening scene for this haunted halls campaign" in prompts[0].lower()
     assert data["name"] == "Whispers in the West Wing"
     assert (
         data["messages"][0]["content"]
         == "The candles hiss awake in the corridor. Where do you step first?"
     )
+
+
+def test_create_campaign_persists_authoritative_entry_hall_state_ai_disabled() -> None:
+    settings.INTERNAL_ENGINE_SERVICE_TOKEN = "test-token"
+    settings.AI_ENABLED = False
+    settings.OPENAI_API_KEY = None
+    client = TestClient(app)
+    headers = _user_scoped_headers(client, "campaign-genesis-ai-disabled")
+
+    response = client.post("/api/campaign", json={}, headers=headers)
+    assert response.status_code == 201
+    campaign_id = response.json()["campaign_id"]
+
+    with session() as db:
+        campaign = db.get_campaign(campaign_id)
+        assert campaign is not None
+        assert campaign.state is not None
+        state = json.loads(campaign.state)
+
+    assert state["player"]["location"] == "entry_hall"
+    assert state["clock"]["tick"] == 0
+    assert "heavy_statue" in state["items"]
+    assert "old_caretaker" in state["npcs"]
+    assert state["player"]["inventory"]
+    for item_id in state["player"]["inventory"]:
+        assert state["items"][item_id]["location"] == "player:current"
+
+
+def test_create_campaign_persists_authoritative_entry_hall_state_ai_enabled(
+    monkeypatch,
+) -> None:
+    settings.INTERNAL_ENGINE_SERVICE_TOKEN = "test-token"
+    settings.AI_ENABLED = True
+    settings.OPENAI_API_KEY = None
+    client = TestClient(app)
+    headers = _user_scoped_headers(client, "campaign-genesis-ai-enabled")
+
+    response = client.post("/api/campaign", json={}, headers=headers)
+    assert response.status_code == 201
+    campaign_id = response.json()["campaign_id"]
+
+    with session() as db:
+        campaign = db.get_campaign(campaign_id)
+        assert campaign is not None
+        assert campaign.state is not None
+        state = json.loads(campaign.state)
+
+    assert state["player"]["location"] == "entry_hall"
+    assert state["clock"]["tick"] == 0
+    assert "heavy_statue" in state["items"]
+    assert "old_caretaker" in state["npcs"]
+    assert state["player"]["inventory"]
+    for item_id in state["player"]["inventory"]:
+        assert state["items"][item_id]["location"] == "player:current"
+
+
+def test_create_campaign_opening_narrator_receives_grounded_scene_context(
+    monkeypatch,
+) -> None:
+    settings.INTERNAL_ENGINE_SERVICE_TOKEN = "test-token"
+    settings.AI_ENABLED = True
+    settings.OPENAI_API_KEY = None
+    captured_message_batches: list[list[dict]] = []
+
+    async def fake_generate_text(*, messages, **kwargs) -> str:
+        captured_message_batches.append(list(messages))
+        if "provide only a short haunted campaign title" in messages[-1]["content"].lower():
+            return "Whispers in the West Wing"
+        return "The candles hiss awake in the corridor. Where do you step first?"
+
+    monkeypatch.setattr(narrator_module.model_client, "generate_text", fake_generate_text)
+    client = TestClient(app)
+    headers = _user_scoped_headers(client, "campaign-opening-scene-context")
+
+    response = client.post("/api/campaign", json={}, headers=headers)
+    assert response.status_code == 201
+
+    opening_messages = captured_message_batches[0]
+    combined_content = "\n".join(str(m["content"]) for m in opening_messages)
+    assert "Campaign state:" not in combined_content
+    assert '"id": "entry_hall"' in combined_content
+    assert '"grand_corridor"' in combined_content
+    assert "Old Caretaker" in combined_content
+    assert "Heavy Statue" in combined_content
+
+    with session() as db:
+        campaign = db.get_campaign(response.json()["campaign_id"])
+        assert campaign is not None
+        assert campaign.state is not None
+        state = json.loads(campaign.state)
+
+    for item_id in state["player"]["inventory"]:
+        item_name = state["items"][item_id].get("name", item_id)
+        assert item_name in combined_content
+
+
+def test_create_campaign_title_uses_same_scene_context_no_raw_state(
+    monkeypatch,
+) -> None:
+    settings.INTERNAL_ENGINE_SERVICE_TOKEN = "test-token"
+    settings.AI_ENABLED = True
+    settings.OPENAI_API_KEY = None
+    captured_message_batches: list[list[dict]] = []
+
+    async def fake_generate_text(*, messages, **kwargs) -> str:
+        captured_message_batches.append(list(messages))
+        if "provide only a short haunted campaign title" in messages[-1]["content"].lower():
+            return "Whispers in the West Wing"
+        return "The candles hiss awake in the corridor. Where do you step first?"
+
+    monkeypatch.setattr(narrator_module.model_client, "generate_text", fake_generate_text)
+    client = TestClient(app)
+    headers = _user_scoped_headers(client, "campaign-title-scene-context")
+
+    response = client.post("/api/campaign", json={}, headers=headers)
+    assert response.status_code == 201
+
+    assert len(captured_message_batches) == 2
+    title_messages = captured_message_batches[1]
+    combined_content = "\n".join(str(m["content"]) for m in title_messages)
+    assert "Campaign state:" not in combined_content
+    assert '"id": "entry_hall"' in combined_content
+
+
+def test_first_action_does_not_reroll_starting_inventory(monkeypatch) -> None:
+    settings.INTERNAL_ENGINE_SERVICE_TOKEN = "test-token"
+    settings.AI_ENABLED = False
+    settings.OPENAI_API_KEY = None
+    client = TestClient(app)
+    headers = _user_scoped_headers(client, "campaign-first-action-no-reroll")
+
+    create_response = client.post("/api/campaign", json={}, headers=headers)
+    assert create_response.status_code == 201
+    campaign_id = create_response.json()["campaign_id"]
+
+    with session() as db:
+        campaign = db.get_campaign(campaign_id)
+        assert campaign is not None
+        assert campaign.state is not None
+        genesis_inventory = sorted(json.loads(campaign.state)["player"]["inventory"])
+
+    def fail_if_random_inventory_called(*args, **kwargs):
+        raise AssertionError(
+            "random_starting_inventory_items should not be called for an already initialized campaign"
+        )
+
+    monkeypatch.setattr(
+        "app.game.campaign_state.random_starting_inventory_items",
+        fail_if_random_inventory_called,
+    )
+
+    chat_response = client.post(
+        "/api/chat",
+        json={"message": "I look around.", "campaign_id": campaign_id},
+        headers=headers,
+    )
+    assert chat_response.status_code == 200
+
+    with session() as db:
+        campaign = db.get_campaign(campaign_id)
+        assert campaign is not None
+        assert campaign.state is not None
+        first_action_inventory = sorted(json.loads(campaign.state)["player"]["inventory"])
+
+    assert first_action_inventory == genesis_inventory
 
 
 def test_delete_campaign_removes_player_campaign() -> None:
