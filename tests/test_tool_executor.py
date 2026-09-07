@@ -974,19 +974,19 @@ def test_interact_item_mutates_accessible_item(
 
 
 @pytest.mark.parametrize(
-    ("action", "target", "parameters", "campaign_state", "error_code"),
+    ("action", "target", "parameters", "campaign_state", "error_code", "expected_location"),
     [
-        (ActionType.INTERACT, "old book", {"interaction_mode": "open"}, '{"player": {"location": "library"}, "items": {"old_book": {"location": "room:library", "properties": {"is_open": true}}}}', "item_already_open"),
-        (ActionType.INTERACT, "old book", {"interaction_mode": "close"}, '{"player": {"location": "library"}}', "item_already_closed"),
-        (ActionType.INTERACT, "heavy statue", {"interaction_mode": "open"}, '{"player": {"location": "entry_hall"}}', "unsupported_interaction"),
-        (ActionType.INTERACT, "candle", {"interaction_mode": "extinguish"}, '{"player": {"location": "dining_room"}}', "item_already_extinguished"),
-        (ActionType.INTERACT, "old book", {"interaction_mode": "open"}, '{"player": {"location": "entry_hall"}}', "item_not_accessible"),
-        (ActionType.INTERACT, "unknown", {"interaction_mode": "open"}, '{"player": {"location": "library"}}', "item_not_found"),
-        (ActionType.INTERACT, "old book", {"interaction_mode": "open"}, '{"player": {"location": "nowhere"}}', "invalid_current_location"),
+        (ActionType.INTERACT, "old book", {"interaction_mode": "open"}, '{"player": {"location": "library"}, "items": {"old_book": {"location": "room:library", "properties": {"is_open": true}}}}', "item_already_open", "library"),
+        (ActionType.INTERACT, "old book", {"interaction_mode": "close"}, '{"player": {"location": "library"}}', "item_already_closed", "library"),
+        (ActionType.INTERACT, "heavy statue", {"interaction_mode": "open"}, '{"player": {"location": "entry_hall"}}', "unsupported_interaction", "entry_hall"),
+        (ActionType.INTERACT, "candle", {"interaction_mode": "extinguish"}, '{"player": {"location": "dining_room"}}', "item_already_extinguished", "dining_room"),
+        (ActionType.INTERACT, "old book", {"interaction_mode": "open"}, '{"player": {"location": "entry_hall"}}', "item_not_accessible", "entry_hall"),
+        (ActionType.INTERACT, "unknown", {"interaction_mode": "open"}, '{"player": {"location": "library"}}', "item_not_found", "library"),
+        (ActionType.INTERACT, "old book", {"interaction_mode": "open"}, '{"player": {"location": "nowhere"}}', "invalid_current_location", "nowhere"),
     ],
 )
 def test_interact_item_rejections_do_not_mutate(
-    action: ActionType, target: str, parameters: dict[str, str], campaign_state: str, error_code: str
+    action: ActionType, target: str, parameters: dict[str, str], campaign_state: str, error_code: str, expected_location: str
 ) -> None:
     state, result = _build_local_executor().execute(
         parsed_action=ParsedAction(raw_text="interact", action=action, target=target, parameters=parameters, parse_status="ok"),
@@ -996,7 +996,7 @@ def test_interact_item_rejections_do_not_mutate(
     assert result.success is False
     assert result.error_code == error_code
     assert result.state_delta == {}
-    assert state["player"]["location"]
+    assert state["player"]["location"] == expected_location
 
 
 def test_interact_item_rejects_ambiguous_accessible_target() -> None:
@@ -1021,6 +1021,28 @@ def test_use_ignition_source_lights_candle_and_infers_light(tool_name: str) -> N
     assert result.interaction_mode == "light"
     assert result.with_item_id in {"box_of_matches", "tinderbox"}
     assert state["items"]["candle"]["properties"]["lit"] is True
+
+
+def test_use_non_light_combination_rejects_as_unsupported_interaction() -> None:
+    _, result = _build_local_executor().execute(
+        parsed_action=ParsedAction(raw_text="use brass key on old book", action=ActionType.USE, target="old book", parameters={"with_item": "brass key"}, parse_status="ok"),
+        campaign_state='{"player": {"location": "library", "inventory": ["brass_key"]}, "items": {"brass_key": {"location": "player:current", "properties": {}}, "old_book": {"location": "room:library", "properties": {}}}}',
+    )
+
+    assert result.success is False
+    assert result.error_code == "unsupported_interaction"
+    assert result.state_delta == {}
+
+
+def test_use_light_on_non_lightable_target_rejects_as_unsupported_interaction() -> None:
+    _, result = _build_local_executor().execute(
+        parsed_action=ParsedAction(raw_text="light old book with brass key", action=ActionType.USE, target="old book", parameters={"interaction_mode": "light", "with_item": "brass key"}, parse_status="ok"),
+        campaign_state='{"player": {"location": "library", "inventory": ["brass_key"]}, "items": {"brass_key": {"location": "player:current", "properties": {}}, "old_book": {"location": "room:library", "properties": {}}}}',
+    )
+
+    assert result.success is False
+    assert result.error_code == "unsupported_interaction"
+    assert result.state_delta == {}
 
 
 @pytest.mark.parametrize(

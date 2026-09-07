@@ -309,6 +309,7 @@ class ToolExecutor:
         interaction_mode = mode if isinstance(mode, str) else None
         with_item_id: str | None = None
         with_item_name: str | None = None
+        with_item_properties: dict[str, Any] | None = None
 
         if parsed_action.action == ActionType.USE:
             with_item = parsed_action.parameters.get("with_item")
@@ -330,8 +331,8 @@ class ToolExecutor:
             with_item_id = tool_matches[0]
             tool = inventory_items[with_item_id]
             tool_properties = tool.get("properties")
-            if not isinstance(tool_properties, dict) or tool_properties.get("ignition_source") is not True:
-                return self._interaction_error("That item cannot ignite anything.", "required_item_missing", requested_target)
+            if isinstance(tool_properties, dict):
+                with_item_properties = tool_properties
             with_item_name = tool.get("name") if isinstance(tool.get("name"), str) else with_item_id
             if interaction_mode is None and properties.get("lightable") is True:
                 interaction_mode = "light"
@@ -347,10 +348,14 @@ class ToolExecutor:
             next_value = interaction_mode == "open"
             property_name = "is_open"
         elif interaction_mode in {"light", "extinguish"}:
-            if interaction_mode == "light" and with_item_id is None:
-                return self._interaction_error("An ignition source is required.", "required_item_missing", requested_target)
             if properties.get("lightable") is not True:
                 return self._interaction_error("That item cannot be lit or extinguished.", "unsupported_interaction", requested_target)
+            if interaction_mode == "light" and with_item_id is None:
+                return self._interaction_error("An ignition source is required.", "required_item_missing", requested_target)
+            if interaction_mode == "light" and (
+                with_item_properties is None or with_item_properties.get("ignition_source") is not True
+            ):
+                return self._interaction_error("That item cannot ignite anything.", "required_item_missing", requested_target)
             lit = properties.get("lit") is True
             if interaction_mode == "light" and lit:
                 return self._interaction_error("That item is already lit.", "item_already_lit", requested_target)
