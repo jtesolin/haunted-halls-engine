@@ -159,7 +159,7 @@ def test_chat_fails_with_500_on_corrupted_persisted_state(caplog: Any) -> None:
         narrator_called["count"] += 1
         raise AssertionError("narrator must not be called after integrity failure")
 
-        caplog.set_level(logging.INFO)
+    caplog.set_level(logging.INFO)
     logging.getLogger("app.orchestration.orchestrator").disabled = False
     with patch(
         "app.orchestration.orchestrator.ChatOrchestrator._generate_narrator_response",
@@ -199,6 +199,97 @@ def test_chat_fails_with_500_on_corrupted_persisted_state(caplog: Any) -> None:
     # The failed request must not have committed a new player/assistant turn or event,
     # and the corrupted persisted state must remain exactly as-injected (not silently
     # replaced by a freshly generated campaign state).
+    assert turns_after == turns_before
+    assert events_after == events_before
+    assert state_after == "{not valid json at all"
+
+
+def test_chat_fails_with_500_on_corrupted_state_even_when_parse_status_ambiguous(
+    caplog: Any,
+) -> None:
+    """Corrupted persisted state must fail before parser/narrator paths, even
+    when the parsed action status is non-`ok` (e.g. `ambiguous`) and would
+    otherwise bypass `ToolExecutor._state_from_text()` entirely."""
+    settings.INTERNAL_ENGINE_SERVICE_TOKEN = "test-token"
+    settings.AI_ENABLED = False
+    settings.OPENAI_API_KEY = None
+    client = TestClient(app)
+    headers = _user_scoped_headers(client, "corrupt-state-ambiguous-user")
+
+    first_response = client.post(
+        "/api/chat",
+        json={"message": "look around"},
+        headers=headers,
+    )
+    assert first_response.status_code == 200
+    campaign_id = first_response.json()["campaign_id"]
+
+    with session() as db:
+        turns_before = db.conn.execute(
+            text("SELECT COUNT(*) FROM turns WHERE campaign_id = :campaign_id"),
+            {"campaign_id": campaign_id},
+        ).scalar_one()
+        events_before = db.conn.execute(
+            text("SELECT COUNT(*) FROM game_events WHERE campaign_id = :campaign_id"),
+            {"campaign_id": campaign_id},
+        ).scalar_one()
+
+    _corrupt_campaign_state(campaign_id, "{not valid json at all")
+
+    narrator_called = {"count": 0}
+
+    async def _fail_if_narrator_called(*args: Any, **kwargs: Any) -> str:
+        narrator_called["count"] += 1
+        raise AssertionError("narrator must not be called after integrity failure")
+
+    async def _ambiguous_parse(*args: Any, **kwargs: Any) -> ParsedAction:
+        return ParsedAction(
+            raw_text="do the thing",
+            action=ActionType.MOVE,
+            target=None,
+            parse_status="ambiguous",
+            parser_notes="ambiguous test action",
+        )
+
+    caplog.set_level(logging.INFO)
+    logging.getLogger("app.orchestration.orchestrator").disabled = False
+    with patch(
+        "app.orchestration.orchestrator.ChatOrchestrator._generate_narrator_response",
+        new=_fail_if_narrator_called,
+    ), patch(
+        "app.agents.action_parser.ActionParserAgent.parse",
+        new=_ambiguous_parse,
+    ):
+        response = client.post(
+            "/api/chat",
+            json={"message": "do the thing", "campaign_id": campaign_id},
+            headers=headers,
+        )
+
+    assert response.status_code == 500
+    assert narrator_called["count"] == 0
+
+    for record in caplog.records:
+        assert "not valid json at all" not in record.getMessage()
+    assert any(
+        "campaign_state_integrity_failure" in record.getMessage()
+        for record in caplog.records
+    )
+
+    with session() as db:
+        turns_after = db.conn.execute(
+            text("SELECT COUNT(*) FROM turns WHERE campaign_id = :campaign_id"),
+            {"campaign_id": campaign_id},
+        ).scalar_one()
+        events_after = db.conn.execute(
+            text("SELECT COUNT(*) FROM game_events WHERE campaign_id = :campaign_id"),
+            {"campaign_id": campaign_id},
+        ).scalar_one()
+        state_after = db.conn.execute(
+            text("SELECT state FROM campaigns WHERE campaign_id = :campaign_id"),
+            {"campaign_id": campaign_id},
+        ).scalar_one()
+
     assert turns_after == turns_before
     assert events_after == events_before
     assert state_after == "{not valid json at all"

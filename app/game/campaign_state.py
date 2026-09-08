@@ -7,6 +7,7 @@ state. Both campaign creation and the legacy missing-state fallback in
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from app.game.items import (
@@ -25,6 +26,29 @@ class InvalidCampaignStateError(Exception):
     message so that malformed/corrupted state is never leaked into logs or
     error responses.
     """
+
+
+def validate_persisted_campaign_state_json(campaign_state: str) -> None:
+    """Raise `InvalidCampaignStateError` for non-empty malformed persisted state.
+
+    This is the single shared strict-decode contract used by every layer
+    (orchestrator, tool executor, narrator scene projection) that consumes
+    persisted campaign state text. The legitimate empty / sentinel
+    "No campaign state yet." value is treated as compatible and does not
+    raise; any other non-object JSON payload is treated as corruption.
+    """
+    if not campaign_state or campaign_state == "No campaign state yet.":
+        return
+    try:
+        value = json.loads(campaign_state)
+    except json.JSONDecodeError as exc:
+        raise InvalidCampaignStateError(
+            "Persisted campaign state could not be decoded as JSON."
+        ) from exc
+    if not isinstance(value, dict):
+        raise InvalidCampaignStateError(
+            "Persisted campaign state did not decode to an object."
+        )
 
 
 def build_fresh_campaign_state() -> dict[str, Any]:

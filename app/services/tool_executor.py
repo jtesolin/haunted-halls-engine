@@ -5,8 +5,8 @@ import json
 from typing import Any
 
 from app.game.campaign_state import (
-    InvalidCampaignStateError,
     build_fresh_campaign_state,
+    validate_persisted_campaign_state_json,
 )
 from app.game.items import (
     PLAYER_INVENTORY_LOCATION,
@@ -709,16 +709,8 @@ class ToolExecutor:
     def _state_from_text(self, campaign_state: str) -> dict[str, Any]:
         if not campaign_state or campaign_state == "No campaign state yet.":
             return build_fresh_campaign_state()
-        try:
-            value = json.loads(campaign_state)
-        except json.JSONDecodeError as exc:
-            raise InvalidCampaignStateError(
-                "Persisted campaign state could not be decoded as JSON."
-            ) from exc
-        if not isinstance(value, dict):
-            raise InvalidCampaignStateError(
-                "Persisted campaign state did not decode to an object."
-            )
+        validate_persisted_campaign_state_json(campaign_state)
+        value = json.loads(campaign_state)
         ensure_items_state(value)
         ensure_npcs_state(value)
         return value
