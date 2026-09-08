@@ -14,7 +14,10 @@ from app.agents.memory_summarizer import MemorySummarizerAgent, MemorySummarizer
 from app.agents.narrator import NarratorAgent, NarratorAgentInput
 from app.core.config import settings
 from app.db.session import session
-from app.game.campaign_state import build_fresh_campaign_state
+from app.game.campaign_state import (
+    InvalidCampaignStateError,
+    build_fresh_campaign_state,
+)
 from app.game.narrator_scene import build_narrator_scene_context
 from app.guardrails.input_validation import validate_chat_request
 from app.guardrails.limit_errors import usage_limit_error
@@ -401,10 +404,23 @@ class ChatOrchestrator:
                 summary="Action parse status was not executable.",
             )
             if parsed_action.parse_status == "ok":
-                updated_state, tool_result = self.tool_executor.execute(
-                    parsed_action=parsed_action,
-                    campaign_state=campaign_state,
-                )
+                try:
+                    updated_state, tool_result = self.tool_executor.execute(
+                        parsed_action=parsed_action,
+                        campaign_state=campaign_state,
+                    )
+                except InvalidCampaignStateError as exc:
+                    logger.error(
+                        "campaign_state_integrity_failure owner_user_id=%s campaign_id=%s turn_id=%s error_type=%s",
+                        owner_user_id,
+                        campaign_id,
+                        player_turn_id,
+                        type(exc).__name__,
+                    )
+                    raise HTTPException(
+                        status_code=500,
+                        detail="Campaign state could not be processed.",
+                    ) from exc
 
                 if tool_result.success:
                     db.add_event(

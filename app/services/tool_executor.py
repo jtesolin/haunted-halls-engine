@@ -4,7 +4,10 @@ import copy
 import json
 from typing import Any
 
-from app.game.campaign_state import build_fresh_campaign_state
+from app.game.campaign_state import (
+    InvalidCampaignStateError,
+    build_fresh_campaign_state,
+)
 from app.game.items import (
     PLAYER_INVENTORY_LOCATION,
     available_items_for_room,
@@ -708,13 +711,17 @@ class ToolExecutor:
             return build_fresh_campaign_state()
         try:
             value = json.loads(campaign_state)
-            if isinstance(value, dict):
-                ensure_items_state(value)
-                ensure_npcs_state(value)
-                return value
-        except json.JSONDecodeError:
-            pass
-        return build_fresh_campaign_state()
+        except json.JSONDecodeError as exc:
+            raise InvalidCampaignStateError(
+                "Persisted campaign state could not be decoded as JSON."
+            ) from exc
+        if not isinstance(value, dict):
+            raise InvalidCampaignStateError(
+                "Persisted campaign state did not decode to an object."
+            )
+        ensure_items_state(value)
+        ensure_npcs_state(value)
+        return value
 
     def _compute_state_delta(self, before: dict[str, Any], after: dict[str, Any]) -> dict[str, Any]:
         delta: dict[str, Any] = {}

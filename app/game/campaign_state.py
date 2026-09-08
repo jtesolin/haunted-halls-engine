@@ -18,6 +18,15 @@ from app.game.items import (
 from app.game.npcs import default_npcs_state
 
 
+class InvalidCampaignStateError(Exception):
+    """Raised when persisted campaign state is present but malformed.
+
+    This deliberately does not include the raw persisted payload in its
+    message so that malformed/corrupted state is never leaked into logs or
+    error responses.
+    """
+
+
 def build_fresh_campaign_state() -> dict[str, Any]:
     """Build the authoritative starting state for a brand new campaign."""
     state: dict[str, Any] = {
