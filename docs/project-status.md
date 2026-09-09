@@ -387,6 +387,40 @@ A dedicated Haunted Halls domain MCP-server ecosystem remains future work and sh
 
 Commit `0219311` closes the remaining reliability gap in structured player-action parsing by replacing permissive free-form JSON parsing with a validated schema and by adding diagnostics for provider/schema failures. The commit changes 13 files across agents, model access, prompts, rules, orchestration, schemas, tool execution, and tests.
 
+## Phase 7A — World Authority Foundation
+
+**Status: Complete**
+
+Phase 7A establishes a separate deterministic privileged world-authority boundary that is intentionally distinct from normal player action execution.
+
+Implemented as part of this milestone:
+
+* A dedicated typed world-action contract in `app/schemas/world.py` covering `move_npc`, `set_npc_status`, `advance_clock`, and `record_fact`.
+* A deterministic `WorldAuthorityExecutor` in `app/services/world_authority.py` that validates canonical IDs and applies copy-on-write state transitions.
+* Structural separation between player authority and privileged world authority: player `ActionType`/`ParsedAction` remain player-scoped, and the player `ToolExecutor` no longer exposes the legacy `spawn_npc` and `record_fact` hooks.
+* Player `WAIT` semantics remain intact and continue to route through the deterministic clock tick path.
+* State transitions include precise `state_delta` payloads, strict bounds checks, successful idempotent no-op handling, and semantic validation that leaves authoritative input state unchanged on failure.
+
+This milestone intentionally defers the future Director Agent, normal chat orchestration integration, world-action proposal flow, and adjacent roadmap work until Phase 7B.
+
+## Phase 7B — Director Agent v1
+
+**Status: Next planned milestone**
+
+Planned implementation path:
+
+* Director-side proposal/validation flow for privileged world actions.
+* Model-backed or deterministic Director action selection, once the world-authority foundation is in place.
+* Integration of world-authority proposals into orchestrator or chat execution only after the lower-level deterministic contract is stable.
+
+Explicit deferrals for this milestone remain in place:
+
+* Director model calls.
+* Director prompts and model policy work.
+* Automatic world actions in normal chat orchestration.
+* Narrator, HTTP, frontend, combat, and broader simulation features.
+* Unrelated roadmap work outside Phase 7A.
+
 ## Authentication and Authorization
 
 **Status: Complete for the deployed public custom-domain BFF and private engine boundary**
