@@ -656,7 +656,6 @@ Phase 6E1 replaces raw campaign-state exposure to the narrator with a determinis
   * `Orchestrator.handle_chat()` validates persisted campaign state immediately after load (before parser/tool/narrator processing) via shared `validate_persisted_campaign_state_json()`, catches `InvalidCampaignStateError`, logs a sanitized operational error (`owner_user_id`, `campaign_id`, `turn_id`, error type — never the raw persisted payload), and raises an HTTP 500 without invoking deterministic tools against replacement state, persisting replacement state, or continuing to narrator generation. The existing DB session transaction rollback-on-exception behavior ensures the failed request leaves no partial player turns/events/state changes committed.
   * Regression tests cover: fresh-state initializer still used only for legitimate missing/sentinel state; valid dict JSON still loads/normalizes; malformed JSON and valid non-object JSON (`[]`, string, number, `null`) raise the focused error without calling `build_fresh_campaign_state()`; pre-parser integrity validation across all parse statuses (including ambiguous/invalid parses); and an end-to-end orchestrator/persistence test proving a corrupted campaign fails the chat request with a sanitized 500, does not invoke the narrator, and leaves no new turns/events/state-replacement committed.
 
-# Active Development
 
 ## Phase 7A — World Authority Foundation
 
