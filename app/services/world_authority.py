@@ -22,10 +22,11 @@ class WorldAuthorityExecutor:
         self.world = world or DEFAULT_WORLD
 
     def execute(self, action: WorldAction | dict[str, Any], state: dict[str, Any]) -> tuple[dict[str, Any], WorldActionResult]:
+        attempted_action = self._attempted_action(action)
         if not isinstance(state, dict):
             return state, self._result(
                 success=False,
-                action="",
+                action=attempted_action,
                 summary="Campaign state is not a dictionary.",
                 error_code="malformed_campaign_state",
                 errors=["malformed_campaign_state"],
@@ -36,7 +37,7 @@ class WorldAuthorityExecutor:
         except ValidationError:
             return state, self._result(
                 success=False,
-                action="",
+                action=attempted_action,
                 summary="World action payload is malformed.",
                 error_code="invalid_world_action",
                 errors=["invalid_world_action"],
@@ -44,7 +45,7 @@ class WorldAuthorityExecutor:
         if action_model is None:
             return state, self._result(
                 success=False,
-                action="",
+                action=attempted_action,
                 summary=(
                     "Unsupported world action payload."
                     if not isinstance(action, dict)
@@ -384,6 +385,12 @@ class WorldAuthorityExecutor:
                 return RecordFactWorldAction.model_validate(action)
             return None
         return action
+
+    @staticmethod
+    def _attempted_action(action: WorldAction | dict[str, Any]) -> str:
+        if isinstance(action, dict) and isinstance(action.get("action"), str):
+            return action["action"]
+        return ""
 
     def _result(
         self,

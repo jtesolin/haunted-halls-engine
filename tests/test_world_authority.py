@@ -108,6 +108,7 @@ def test_world_authority_rejects_invalid_raw_dict_action_without_mutating_origin
     result = executor.execute({"action": "move_npc", "npc_id": 42, "destination_room_id": "grand_corridor"}, state)[1]
 
     assert result.success is False
+    assert result.action == "move_npc"
     assert result.error_code == "invalid_world_action"
     assert state == original
 
@@ -327,5 +328,19 @@ def test_world_authority_accepts_only_action_as_raw_dict_discriminator() -> None
     )
 
     assert result.success is False
+    assert result.action == ""
+    assert result.error_code == "invalid_world_action"
+    assert state == original
+
+
+def test_world_authority_preserves_unsupported_raw_dict_action_discriminator() -> None:
+    executor = WorldAuthorityExecutor()
+    state = build_fresh_campaign_state()
+    original = copy.deepcopy(state)
+
+    _, result = executor.execute({"action": "unsupported_action"}, state)
+
+    assert result.success is False
+    assert result.action == "unsupported_action"
     assert result.error_code == "invalid_world_action"
     assert state == original
