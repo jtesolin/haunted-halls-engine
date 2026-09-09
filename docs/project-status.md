@@ -495,7 +495,7 @@ Extracts durable facts/memories from longer-running play.
 
 Earlier planning included a Director Agent, but the current engine architecture does not require one yet.
 
-The Director should remain deferred until the deterministic world model contains enough meaningful game systems for a Director to control through explicit tools. Phase 7A will establish a deterministic world authority foundation before Phase 7B introduces Director Agent v1.
+The Director should remain deferred until the deterministic world model contains enough meaningful game systems for a Director to control through explicit tools. Phase 7A has established the deterministic world-authority foundation before Phase 7B introduces Director Agent v1.
 
 ## Current Persistence
 
@@ -697,41 +697,6 @@ Phase 6E1 replaces raw campaign-state exposure to the narrator with a determinis
 **Status: Complete**
 
 Durable repository context was hardened before Phase 7 through the stable architecture/invariants companion and canonical review-triage policy. Automated review triage can rely on these repository artifacts and the current implementation issue rather than conversational history. This documentation-only work does not start or implement Phase 7A.
-
-## Phase 7A — World Authority Foundation
-
-**Status: Planned — not started**
-
-Architecture goal:
-
-```text
-Player actions
-    ↓
-Player Authority / Tool Executor
-
-separate from
-
-World/Director actions
-    ↓
-World Authority Executor
-```
-
-Phase 7A should establish a deterministic, typed world-authority surface **before** introducing a Director LLM.
-
-Core principle:
-
-> Player authority and world/director authority are separate capability boundaries. AI may later propose privileged world actions, but deterministic game systems validate and execute them.
-
-At roadmap level, Phase 7A is expected to define a narrow initial set of privileged world actions against existing state concepts (for example NPC relocation/presence changes, controlled clock advancement, and durable world/story facts), with exact action scope to be finalized in the dedicated Phase 7A implementation issue.
-
-Phase 7A must **not** be documented as already implemented.
-
-### Phase 7B — Director Agent v1
-
-**Status: Planned follow-up after Phase 7A**
-
-A typed Director agent may propose only allowed world-authority actions, which deterministic code validates and executes. The Director must never mutate campaign state directly.
-
 # Future Work
 
 ## Director Agent
@@ -740,7 +705,7 @@ A typed Director agent may propose only allowed world-authority actions, which d
 
 Earlier planning included a Director Agent, but the current engine architecture does not require one yet.
 
-The Director should remain deferred until the deterministic world model contains enough meaningful game systems for a Director to control through explicit tools. Phase 7A will establish this deterministic world authority foundation before Phase 7B introduces Director Agent v1.
+The Director should remain deferred until the deterministic world model contains enough meaningful game systems for a Director to control through explicit tools. Phase 7A has established the deterministic world-authority foundation before Phase 7B introduces Director Agent v1.
 
 Potential future Director capabilities:
 

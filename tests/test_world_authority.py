@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import copy
 
+import pytest
+
 from app.game.campaign_state import build_fresh_campaign_state
 from app.schemas.world import (
     AdvanceClockWorldAction,
@@ -138,6 +140,7 @@ def test_world_authority_rejects_malformed_state_without_mutating_original() -> 
 def test_world_authority_rejects_fact_limit_and_duplicate_bounds() -> None:
     executor = WorldAuthorityExecutor()
     state = {"facts": [f"fact-{index}" for index in range(256)]}
+    original = copy.deepcopy(state)
 
     result = executor.execute(RecordFactWorldAction(fact="fact-255"), state)[1]
     assert result.success is True
@@ -146,3 +149,183 @@ def test_world_authority_rejects_fact_limit_and_duplicate_bounds() -> None:
     fail = executor.execute(RecordFactWorldAction(fact="new fact"), state)[1]
     assert fail.success is False
     assert fail.error_code == "facts_limit_reached"
+    assert state == original
+
+
+@pytest.mark.parametrize(
+    ("action", "error_code"),
+    [
+        (MoveNpcWorldAction(npc_id="missing_npc", destination_room_id="grand_corridor"), "npc_not_found"),
+        (MoveNpcWorldAction(npc_id="old_caretaker", destination_room_id="missing_room"), "destination_room_not_found"),
+    ],
+)
+def test_world_authority_move_npc_rejects_missing_entities_without_mutating_state(
+    action: MoveNpcWorldAction,
+    error_code: str,
+) -> None:
+    executor = WorldAuthorityExecutor()
+    state = build_fresh_campaign_state()
+    original = copy.deepcopy(state)
+
+    _, result = executor.execute(action, state)
+
+    assert result.success is False
+    assert result.error_code == error_code
+    assert state == original
+
+
+@pytest.mark.parametrize("action", [
+    MoveNpcWorldAction(npc_id="old_caretaker", destination_room_id="grand_corridor"),
+    SetNpcStatusWorldAction(npc_id="old_caretaker", status="absent"),
+])
+def test_world_authority_rejects_structurally_malformed_npc_entries_without_mutating_state(
+    action: MoveNpcWorldAction | SetNpcStatusWorldAction,
+) -> None:
+    executor = WorldAuthorityExecutor()
+    state = build_fresh_campaign_state()
+    state["npcs"]["old_caretaker"] = "corrupt"
+    original = copy.deepcopy(state)
+
+    _, result = executor.execute(action, state)
+
+    assert result.success is False
+    assert result.error_code == "malformed_npc_state"
+    assert state == original
+
+
+@pytest.mark.parametrize("invalid_location", [None, "missing_room"])
+def test_world_authority_rejects_invalid_npc_locations_without_mutating_state(
+    invalid_location: str | None,
+) -> None:
+    executor = WorldAuthorityExecutor()
+    state = build_fresh_campaign_state()
+    state["npcs"]["old_caretaker"]["location"] = invalid_location
+    original = copy.deepcopy(state)
+
+    _, result = executor.execute(
+        MoveNpcWorldAction(npc_id="old_caretaker", destination_room_id="grand_corridor"),
+        state,
+    )
+
+    assert result.success is False
+    assert result.error_code == "invalid_npc_location"
+    assert state == original
+
+
+def test_world_authority_moves_absent_npc_without_changing_status() -> None:
+    executor = WorldAuthorityExecutor()
+    state = build_fresh_campaign_state()
+    state["npcs"]["old_caretaker"]["status"] = "absent"
+
+    next_state, result = executor.execute(
+        MoveNpcWorldAction(npc_id="old_caretaker", destination_room_id="grand_corridor"),
+        state,
+    )
+
+    assert result.success is True
+    assert next_state["npcs"]["old_caretaker"]["location"] == "grand_corridor"
+    assert next_state["npcs"]["old_caretaker"]["status"] == "absent"
+    assert result.state_delta == {
+        "npcs": {
+            "old_caretaker": {
+                "location": {"from": "entry_hall", "to": "grand_corridor"}
+            }
+        }
+    }
+
+
+def test_world_authority_status_round_trip_preserves_npc_location() -> None:
+    executor = WorldAuthorityExecutor()
+    state = build_fresh_campaign_state()
+    state["npcs"]["old_caretaker"]["location"] = "grand_corridor"
+
+    absent_state, absent_result = executor.execute(
+        SetNpcStatusWorldAction(npc_id="old_caretaker", status="absent"),
+        state,
+    )
+    active_state, active_result = executor.execute(
+        SetNpcStatusWorldAction(npc_id="old_caretaker", status="active"),
+        absent_state,
+    )
+
+    assert absent_result.success is True
+    assert active_result.success is True
+    assert active_state["npcs"]["old_caretaker"]["location"] == "grand_corridor"
+    assert active_state["npcs"]["old_caretaker"]["status"] == "active"
+
+
+@pytest.mark.parametrize("ticks", [0, 11])
+def test_world_authority_rejects_clock_bounds_without_mutating_state(ticks: int) -> None:
+    executor = WorldAuthorityExecutor()
+    state = build_fresh_campaign_state()
+    original = copy.deepcopy(state)
+
+    _, result = executor.execute({"action": "advance_clock", "ticks": ticks}, state)
+
+    assert result.success is False
+    assert result.error_code == "invalid_world_action"
+    assert state == original
+
+
+@pytest.mark.parametrize("fact", ["   ", "x" * 513])
+def test_world_authority_rejects_invalid_facts_without_mutating_state(fact: str) -> None:
+    executor = WorldAuthorityExecutor()
+    state = build_fresh_campaign_state()
+    original = copy.deepcopy(state)
+
+    _, result = executor.execute(RecordFactWorldAction(fact=fact), state)
+
+    assert result.success is False
+    assert result.error_code == "invalid_fact"
+    assert state == original
+
+
+@pytest.mark.parametrize("facts", [None, ["valid", 7]])
+def test_world_authority_rejects_malformed_facts_without_mutating_state(facts: object) -> None:
+    executor = WorldAuthorityExecutor()
+    state = build_fresh_campaign_state()
+    state["facts"] = facts
+    original = copy.deepcopy(state)
+
+    _, result = executor.execute(RecordFactWorldAction(fact="new fact"), state)
+
+    assert result.success is False
+    assert result.error_code == "malformed_facts_state"
+    assert state == original
+
+
+def test_world_authority_enforces_unique_fact_capacity_with_preexisting_duplicates() -> None:
+    executor = WorldAuthorityExecutor()
+    facts = [f"fact-{index}" for index in range(255)] + ["fact-0"]
+    state = {"facts": facts}
+
+    expanded_state, expanded_result = executor.execute(RecordFactWorldAction(fact="fact-255"), state)
+    assert expanded_result.success is True
+    assert expanded_result.changed is True
+    assert len(expanded_state["facts"]) == 257
+    assert len(set(expanded_state["facts"])) == 256
+
+    original = copy.deepcopy(expanded_state)
+    _, limit_result = executor.execute(RecordFactWorldAction(fact="another fact"), expanded_state)
+    assert limit_result.success is False
+    assert limit_result.error_code == "facts_limit_reached"
+    assert expanded_state == original
+
+
+def test_world_authority_accepts_only_action_as_raw_dict_discriminator() -> None:
+    executor = WorldAuthorityExecutor()
+    state = build_fresh_campaign_state()
+    original = copy.deepcopy(state)
+
+    _, result = executor.execute(
+        {
+            "type": "move_npc",
+            "npc_id": "old_caretaker",
+            "destination_room_id": "grand_corridor",
+        },
+        state,
+    )
+
+    assert result.success is False
+    assert result.error_code == "invalid_world_action"
+    assert state == original

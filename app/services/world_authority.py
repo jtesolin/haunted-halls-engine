@@ -87,14 +87,22 @@ class WorldAuthorityExecutor:
                 errors=["malformed_npcs_state"],
             )
 
-        npc = npcs.get(action.npc_id)
-        if not isinstance(npc, dict):
+        if action.npc_id not in npcs:
             return original_state, self._result(
                 success=False,
                 action=WorldActionType.MOVE_NPC,
                 summary=f"NPC '{action.npc_id}' does not exist.",
                 error_code="npc_not_found",
                 errors=["npc_not_found"],
+            )
+        npc = npcs[action.npc_id]
+        if not isinstance(npc, dict):
+            return original_state, self._result(
+                success=False,
+                action=WorldActionType.MOVE_NPC,
+                summary=f"NPC '{action.npc_id}' state is malformed.",
+                error_code="malformed_npc_state",
+                errors=["malformed_npc_state"],
             )
 
         current_location = npc.get("location")
@@ -177,14 +185,22 @@ class WorldAuthorityExecutor:
                 errors=["malformed_npcs_state"],
             )
 
-        npc = npcs.get(action.npc_id)
-        if not isinstance(npc, dict):
+        if action.npc_id not in npcs:
             return original_state, self._result(
                 success=False,
                 action=WorldActionType.SET_NPC_STATUS,
                 summary=f"NPC '{action.npc_id}' does not exist.",
                 error_code="npc_not_found",
                 errors=["npc_not_found"],
+            )
+        npc = npcs[action.npc_id]
+        if not isinstance(npc, dict):
+            return original_state, self._result(
+                success=False,
+                action=WorldActionType.SET_NPC_STATUS,
+                summary=f"NPC '{action.npc_id}' state is malformed.",
+                error_code="malformed_npc_state",
+                errors=["malformed_npc_state"],
             )
 
         current_status = npc.get("status")
@@ -357,7 +373,7 @@ class WorldAuthorityExecutor:
 
     def _coerce_action(self, action: WorldAction | dict[str, Any]) -> WorldAction | None:
         if isinstance(action, dict):
-            action_type = action.get("action") or action.get("type")
+            action_type = action.get("action")
             if action_type == WorldActionType.MOVE_NPC:
                 return MoveNpcWorldAction.model_validate(action)
             if action_type == WorldActionType.SET_NPC_STATUS:
@@ -366,16 +382,6 @@ class WorldAuthorityExecutor:
                 return AdvanceClockWorldAction.model_validate(action)
             if action_type == WorldActionType.RECORD_FACT:
                 return RecordFactWorldAction.model_validate(action)
-            if isinstance(action_type, str):
-                lower = action_type.lower()
-                if lower == "move_npc":
-                    return MoveNpcWorldAction.model_validate({**action, "action": WorldActionType.MOVE_NPC})
-                if lower == "set_npc_status":
-                    return SetNpcStatusWorldAction.model_validate({**action, "action": WorldActionType.SET_NPC_STATUS})
-                if lower == "advance_clock":
-                    return AdvanceClockWorldAction.model_validate({**action, "action": WorldActionType.ADVANCE_CLOCK})
-                if lower == "record_fact":
-                    return RecordFactWorldAction.model_validate({**action, "action": WorldActionType.RECORD_FACT})
             return None
         return action
 
