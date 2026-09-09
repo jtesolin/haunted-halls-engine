@@ -31,6 +31,7 @@
 - After making repository changes, update `docs/project-status.md` when architecture, behavior, roadmap, or phase-progress status changes.
 - Do not change `Last synchronized (planning memory sync)` unless the user explicitly confirms they performed that planning-memory synchronization.
 - Treat project-status maintenance as part of normal completion for substantive repository updates.
+- For cross-repository architecture, status, and review-disposition context, use the canonical `docs/project-status.md`, `docs/architecture.md`, and `docs/review-triage-policy.md`.
 - Use verified commands:
   - `make venv`
   - `make install`
