@@ -1,20 +1,21 @@
 # Haunted Halls — Project Status
 
-**Last synchronized (planning memory sync):** September 7, 2026
-**Engine baseline:** `haunted-halls-engine` `main` at commit `fbe38196565fdfdb9e284c172e5f3206823ee0a3`
-**Web baseline:** `haunted-halls` `main` at commit `c1c5b97b7edb8f207ea81f6bc43ad0bdeca94e2c`
+**Last synchronized (planning memory sync):** September 8, 2026
+**Engine baseline:** `haunted-halls-engine` `main` at commit `70081498aaec87895969865333ea574eba4cd654`
+**Web baseline:** `haunted-halls` `main` at commit `b836691839185ad9b115eda530fbe00df2411ebf`
 
 Synchronization metadata meaning:
 
 - **Last synchronized (planning memory sync)** is the date when ChatGPT intentionally inspected the repositories and reconciled this status document against the implemented code.
 - **Engine baseline** is the engine commit inspected during that synchronization pass.
-- Normal implementation changes, Copilot-generated updates, and ordinary documentation edits do **not** update either field.
-- Update these two fields together only during an explicit synchronization/re-baselining pass.
+- **Web baseline** is the web/frontend commit inspected during that synchronization pass.
+- Normal implementation changes, Copilot-generated updates, and ordinary documentation edits do **not** update these fields.
+- Update these fields together only during an explicit synchronization/re-baselining pass.
 - Expected workflow:
       1. Implementation proceeds normally.
-      2. `Last synchronized (planning memory sync)` and `Engine baseline` remain unchanged.
-      3. During a future explicit synchronization, ChatGPT inspects commits after the recorded baseline.
-      4. After reconciliation, both metadata fields are updated together to the new synchronized state.
+      2. `Last synchronized (planning memory sync)`, `Engine baseline`, and `Web baseline` remain unchanged.
+      3. During a future explicit synchronization, ChatGPT inspects commits after the recorded baselines.
+      4. After reconciliation, all metadata fields are updated together to the new synchronized state.
 
 ## Project Goal
 
@@ -412,7 +413,7 @@ When a repository change affects architecture, behavior, roadmap, or phase progr
 Use this checklist:
 
 - Update **Last synchronized (planning memory sync)** date only when the user explicitly confirms that planning memory was synchronized from git.
-- Update **Engine baseline** commit only during the same intentional synchronization/re-baselining pass that updates **Last synchronized (planning memory sync)**.
+- Update **Engine baseline** and **Web baseline** commits only during the same intentional synchronization/re-baselining pass that updates **Last synchronized (planning memory sync)**.
 - Update phase sections whose completion state changed.
 - Add or revise bullet points under **Completed Work** to reflect shipped behavior.
 - Update architecture diagrams or flow descriptions when boundaries or data flow changed.
@@ -458,7 +459,7 @@ Extracts durable facts/memories from longer-running play.
 
 Earlier planning included a Director Agent, but the current engine architecture does not require one yet.
 
-The Director should remain deferred until the deterministic world model contains enough meaningful game systems for a Director to control through explicit tools.
+The Director should remain deferred until the deterministic world model contains enough meaningful game systems for a Director to control through explicit tools. Phase 7A will establish a deterministic world authority foundation before Phase 7B introduces Director Agent v1.
 
 ## Current Persistence
 
@@ -487,29 +488,29 @@ Testing is part of normal feature implementation rather than a future standalone
 
 Existing test coverage includes areas such as:
 
-* Chat behavior.
-* Action parsing.
-* Model client behavior.
-* Tool execution.
-* Tool registry behavior.
-* Internal service authentication.
-* User-context validation.
-* Campaign authorization.
-* Ownership boundaries.
-
-The Phase 5 parser-hardening commit includes corresponding test changes for the new structured-output and action semantics.
+* Chat behavior and orchestrator flow.
+* Action parsing (typed structured outputs, deterministic fallback, diagnostics).
+* Model client behavior and guardrails.
+* Tool execution and deterministic player actions (MOVE, TAKE, DROP, OBSERVE, WAIT, TALK, USE/INTERACT).
+* Tool registry behavior and MCP client abstraction.
+* Narrator scene projection and grounded campaign initialization.
+* Campaign state integrity and malformed-state failure handling.
+* Internal service authentication and user-context validation.
+* Campaign ownership and domain authorization boundaries.
+* Database migrations (SQLite and PostgreSQL compatibility).
+* Full-stack browser E2E (E2E-1): Chromium Playwright suite in `haunted-halls` exercising the real frontend/BFF → engine → PostgreSQL path with a guarded loopback-only NextAuth test seam and deterministic engine stub replies.
 
 # Active Development
 
 ## Phase 6 — Deterministic World Model and Game Rules
 
-**Status: In progress**
+**Status: Complete**
 
 The infrastructure necessary to build the game now exists.
 
 The main limitation is no longer agent architecture. It is the richness of the deterministic game world.
 
-The goal of Phase 6 is to transition from:
+The goal of Phase 6 was to transition from:
 
 > AI interprets actions and modifies a small generic state object.
 
@@ -550,9 +551,36 @@ Implemented behavior includes:
 
 Responsive/mobile polish only: compact mobile header, no mobile horizontal or viewport overflow, reduced mobile layout chrome and padding, preserved sliding sidebar, and preserved desktop behavior. This did not change engine or gameplay architecture.
 
+## E2E-1 — Authenticated Playwright Full-Stack Test Foundation
+
+**Status: Complete (frontend `haunted-halls` issue #25 / PR #26)**
+
+Authenticated full-stack end-to-end browser test foundation using Playwright Chromium across the real integrated application path:
+
+```text
+Chromium UI
+    ↓
+NextAuth session
+    ↓
+Next.js BFF
+    ↓ internal service auth + user context
+FastAPI Engine
+    ↓
+PostgreSQL
+```
+
+Key architectural properties:
+
+* **Real vs. controlled boundaries**: Exercises the real frontend, Next.js BFF, internal service authentication, trusted internal user resolution/propagation, FastAPI engine, and PostgreSQL database. External dependencies are controlled: Google OAuth UI is replaced by a guarded test seam, and OpenAI is disabled (`AI_ENABLED=false`) for deterministic engine stub responses.
+* **Guarded loopback-only NextAuth test seam**: `lib/e2e-auth.ts` requires both `E2E_AUTH_ENABLED=true` and a loopback `NEXTAUTH_URL` (`http://localhost:*` or `http://127.0.0.1:*`). It fails closed (`E2EAuthConfigurationError`) if enabled on any non-loopback origin, preventing activation in production.
+* **Synthetic identity with engine-owned resolution**: The seam uses a fixed synthetic user (`playwright-e2e@example.com`) and never accepts browser-supplied identities. It resolves a real engine-owned internal user through `POST /internal/auth/users/resolve`, identical to the Google OAuth flow.
+* **Stale session rejection**: E2E-issued JWTs are tagged, and the NextAuth JWT callback re-checks that the guarded seam remains active before reusing them.
+* **Test suite coverage**: Chromium Playwright specs cover unauthenticated auth shell, authenticated initial campaign creation with deterministic Entry Hall opening, chat round trip with input refocus, message/narrator persistence across page reload, multi-campaign lifecycle (creation, isolated switching, deletion), and a mobile viewport smoke test.
+* **CI status check**: Runs in frontend CI as `Frontend / E2E` against an isolated Compose stack (`docker-compose.e2e.yml`).
+
 ## Phase 6C — NPC Model
 
-**Status: In progress — Phase 6C1 entity foundation complete**
+**Status: Complete — Phase 6C1 entity foundation complete**
 
 Phase 6C1 establishes authoritative persistent NPC entities and scene grounding:
 
@@ -583,13 +611,12 @@ Phase 6D1 introduces deterministically-authoritative TALK handling and explicit 
 * Ignition requires an inventory-held canonical ignition source (`box_of_matches` or `tinderbox`); no consumable counts, durability, or burn time is modeled.
 * Existing campaign items receive new canonical capabilities while retaining persisted dynamic property values; unselected starter items are not backfilled.
 * Existing deterministic MOVE / TAKE / DROP / OBSERVE / WAIT behavior remains in place and remains the authoritative baseline.
-* Phase 6E narrator-context projection is the next implementation milestone.
 
 Combat remains explicitly deferred until the necessary mechanics are designed.
 
 ## Phase 6E — Narrator Grounding
 
-**Status: Complete — Phase 6E1 authoritative scene projection and Phase 6E2 grounded campaign initialization complete**
+**Status: Complete — Phase 6E1 authoritative scene projection, Phase 6E2 grounded campaign initialization, and malformed persisted-state integrity hardening complete**
 
 Strengthen the narrator contract so narration reflects authoritative results rather than creating state changes.
 
@@ -626,16 +653,54 @@ Phase 6E1 replaces raw campaign-state exposure to the narrator with a determinis
   * The first player action after campaign creation loads the persisted initial state; `random_starting_inventory_items()` is not called again for an already-initialized campaign.
   * Regression tests cover the shared initializer, authoritative persisted state for both AI-enabled and AI-disabled campaign creation, grounded opening/title narrator contracts (scene context present, no raw `Campaign state:` message), and first-action inventory equivalence (no reroll).
 * Malformed persisted campaign state is now a hard failure rather than a silent reroll: `ToolExecutor._state_from_text()` still calls `build_fresh_campaign_state()` for the legitimate legacy/missing-state sentinel (empty/absent state, or the literal string "No campaign state yet."), but persisted state that is non-empty/non-sentinel and either fails to decode as JSON or decodes to a non-dict top-level value raises `InvalidCampaignStateError` (`app/game/campaign_state.py`) instead of silently regenerating a fresh campaign.
-  * `Orchestrator.handle_chat()` catches this error around tool execution, logs a sanitized operational error (`owner_user_id`, `campaign_id`, `turn_id`, error type — never the raw persisted payload), and raises an HTTP 500 without invoking deterministic tools against replacement state, persisting replacement state, or continuing to narrator generation. The existing DB session transaction rollback-on-exception behavior ensures the failed request leaves no partial player turns/events/state changes committed.
-  * Regression tests cover: fresh-state initializer still used only for legitimate missing/sentinel state; valid dict JSON still loads/normalizes; malformed JSON and valid non-object JSON (`[]`, string, number, `null`) raise the focused error without calling `build_fresh_campaign_state()`; and an end-to-end orchestrator/persistence test proving a corrupted campaign fails the chat request with a sanitized 500, does not invoke the narrator, and leaves no new turns/events/state-replacement committed.
+  * `Orchestrator.handle_chat()` validates persisted campaign state immediately after load (before parser/tool/narrator processing) via shared `validate_persisted_campaign_state_json()`, catches `InvalidCampaignStateError`, logs a sanitized operational error (`owner_user_id`, `campaign_id`, `turn_id`, error type — never the raw persisted payload), and raises an HTTP 500 without invoking deterministic tools against replacement state, persisting replacement state, or continuing to narrator generation. The existing DB session transaction rollback-on-exception behavior ensures the failed request leaves no partial player turns/events/state changes committed.
+  * Regression tests cover: fresh-state initializer still used only for legitimate missing/sentinel state; valid dict JSON still loads/normalizes; malformed JSON and valid non-object JSON (`[]`, string, number, `null`) raise the focused error without calling `build_fresh_campaign_state()`; pre-parser integrity validation across all parse statuses (including ambiguous/invalid parses); and an end-to-end orchestrator/persistence test proving a corrupted campaign fails the chat request with a sanitized 500, does not invoke the narrator, and leaves no new turns/events/state-replacement committed.
+
+# Active Development
+
+## Phase 7A — World Authority Foundation
+
+**Status: Planned — not started**
+
+Architecture goal:
+
+```text
+Player actions
+    ↓
+Player Authority / Tool Executor
+
+separate from
+
+World/Director actions
+    ↓
+World Authority Executor
+```
+
+Phase 7A should establish a deterministic, typed world-authority surface **before** introducing a Director LLM.
+
+Core principle:
+
+> Player authority and world/director authority are separate capability boundaries. AI may later propose privileged world actions, but deterministic game systems validate and execute them.
+
+At roadmap level, Phase 7A is expected to define a narrow initial set of privileged world actions against existing state concepts (for example NPC relocation/presence changes, controlled clock advancement, and durable world/story facts), with exact action scope to be finalized in the dedicated Phase 7A implementation issue.
+
+Phase 7A must **not** be documented as already implemented.
+
+### Phase 7B — Director Agent v1
+
+**Status: Planned follow-up after Phase 7A**
+
+A typed Director agent may propose only allowed world-authority actions, which deterministic code validates and executes. The Director must never mutate campaign state directly.
 
 # Future Work
 
 ## Director Agent
 
-**Deferred until after the world model**
+**Deferred — Phase 7B follow-up after Phase 7A**
 
-A Director Agent becomes valuable when it can manipulate the world through constrained, authoritative tools.
+Earlier planning included a Director Agent, but the current engine architecture does not require one yet.
+
+The Director should remain deferred until the deterministic world model contains enough meaningful game systems for a Director to control through explicit tools. Phase 7A will establish this deterministic world authority foundation before Phase 7B introduces Director Agent v1.
 
 Potential future Director capabilities:
 
@@ -752,6 +817,22 @@ Canonical frontend: `https://haunted-halls.tesolin.us`
 
 D7 remains planned. Detailed subphases will be defined when this work becomes active.
 
+## Explicit Deferrals
+
+The following remain explicitly deferred and are kept out of the immediate Phase 7A milestone unless a later dedicated issue explicitly promotes them:
+
+* Issue #3 request idempotency and retry semantics.
+* Combat mechanics and damage modeling.
+* Doors, locks, key mechanics, and cellar progression.
+* Autonomous NPC simulation beyond the narrow authority actions selected for Phase 7A.
+* Semantic memory redesign and vector database / pgvector integration.
+* Content / engine separation.
+* Generic perception framework.
+* Narrator output validation and retry framework.
+* Cross-browser and visual-regression E2E expansion.
+* Production E2E testing against live Google OAuth or live OpenAI endpoints.
+* Unrelated infrastructure and observability work (D7).
+
 # Architectural Principles
 
 The following should guide subsequent implementation.
@@ -814,25 +895,31 @@ PostgreSQL, vector databases, deployment infrastructure, additional agents, and 
 | Internal user resolution      | Complete          |
 | Campaign ownership/authz      | Complete          |
 | SQLite local persistence      | Complete          |
-| Explicit rooms/world graph    | Complete          |
-| Item entity model             | Complete          |
+| Explicit rooms/world graph    | Complete (Phase 6A) |
+| Item entity model             | Complete (Phase 6B) |
 | Rich NPC model                | Complete (Phase 6C1 foundation) |
-| Rule-based world interactions | Complete (Phase 6D)             |
-| Narrator scene projection     | Complete (Phase 6E1)            |
-| Grounded campaign initialization | Complete (Phase 6E2)          |
-| Director Agent                | Deferred          |
-| Domain MCP servers             | Future            |
+| Rule-based world interactions | Complete (Phase 6D) |
+| Narrator scene projection     | Complete (Phase 6E1) |
+| Grounded campaign initialization | Complete (Phase 6E2) |
+| Malformed campaign state hardening | Complete (issue #2 / PR #33) |
+| Playwright E2E foundation     | Complete (E2E-1)  |
+| World Authority Foundation    | Planned — not started (Phase 7A) |
+| Director Agent                | Deferred (Phase 7B follow-up) |
+| Domain MCP servers            | Future            |
 | PostgreSQL local/CI compatibility | Complete       |
 | Cloud SQL PostgreSQL foundation | Complete         |
 | Vector database / pgvector    | Deferred          |
 | GCP/Terraform foundation       | Complete          |
 | Cloud SQL/Secret Manager       | Complete          |
-| Cloud Run application deployment | Complete |
+| Cloud Run application deployment | Complete        |
 | CI/CD deployment automation   | Complete — D5 engine and frontend CD production verified |
+| Custom domain (tesolin.us)    | Complete (D6)     |
 
 # Next Step
 
-Phase 6E is complete. The next milestone has not yet been planned.
+Phase 6E, malformed campaign state hardening, and E2E-1 are complete.
+
+The next milestone is **Phase 7A — World Authority Foundation** (establishing a deterministic, typed world-authority execution surface before introducing a Director LLM).
 
 Phase 5 should be considered closed as of engine commit:
 
