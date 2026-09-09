@@ -51,6 +51,8 @@ FastAPI Engine
 
 Next.js is the public application boundary. Google OIDC authentication occurs there, while the FastAPI engine is intended to remain private and trusts user identity only when it arrives through an authenticated internal-service request. Campaign ownership is enforced by the engine.
 
+Stable cross-repository architecture and authority invariants are maintained in [architecture.md](architecture.md). The canonical AI-assisted review-disposition policy and comment contract are maintained in [review-triage-policy.md](review-triage-policy.md).
+
 ## Completed Work
 
 ### Phase 1 — Core Application Foundation
@@ -656,6 +658,11 @@ Phase 6E1 replaces raw campaign-state exposure to the narrator with a determinis
   * `Orchestrator.handle_chat()` validates persisted campaign state immediately after load (before parser/tool/narrator processing) via shared `validate_persisted_campaign_state_json()`, catches `InvalidCampaignStateError`, logs a sanitized operational error (`owner_user_id`, `campaign_id`, `turn_id`, error type — never the raw persisted payload), and raises an HTTP 500 without invoking deterministic tools against replacement state, persisting replacement state, or continuing to narrator generation. The existing DB session transaction rollback-on-exception behavior ensures the failed request leaves no partial player turns/events/state changes committed.
   * Regression tests cover: fresh-state initializer still used only for legitimate missing/sentinel state; valid dict JSON still loads/normalizes; malformed JSON and valid non-object JSON (`[]`, string, number, `null`) raise the focused error without calling `build_fresh_campaign_state()`; pre-parser integrity validation across all parse statuses (including ambiguous/invalid parses); and an end-to-end orchestrator/persistence test proving a corrupted campaign fails the chat request with a sanitized 500, does not invoke the narrator, and leaves no new turns/events/state-replacement committed.
 
+## Pre-Phase 7 Context Hardening
+
+**Status: Complete**
+
+Durable repository context was hardened before Phase 7 through the stable architecture/invariants companion and canonical review-triage policy. Automated review triage can rely on these repository artifacts and the current implementation issue rather than conversational history. This documentation-only work does not start or implement Phase 7A.
 
 ## Phase 7A — World Authority Foundation
 
