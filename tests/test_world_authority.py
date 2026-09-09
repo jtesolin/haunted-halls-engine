@@ -86,7 +86,7 @@ def test_world_authority_clock_and_fact_semantics() -> None:
     assert fact_result.success is True
     assert fact_result.changed is True
     assert fact_state["facts"] == ["A notable clue"]
-    assert fact_result.state_delta == {"facts": {"from": [], "to": ["A notable clue"]}}
+    assert fact_result.state_delta == {"facts": {"added": ["A notable clue"]}}
 
     duplicate_state, duplicate_result = executor.execute(
         RecordFactWorldAction(fact="A notable clue"),
@@ -96,6 +96,31 @@ def test_world_authority_clock_and_fact_semantics() -> None:
     assert duplicate_result.changed is False
     assert duplicate_result.state_delta == {}
     assert duplicate_state["facts"] == ["A notable clue"]
+
+
+def test_world_authority_rejects_invalid_raw_dict_action_without_mutating_original() -> None:
+    executor = WorldAuthorityExecutor()
+    state = build_fresh_campaign_state()
+    original = copy.deepcopy(state)
+
+    result = executor.execute({"action": "move_npc", "npc_id": 42, "destination_room_id": "grand_corridor"}, state)[1]
+
+    assert result.success is False
+    assert result.error_code == "invalid_world_action"
+    assert state == original
+
+
+def test_world_authority_rejects_malformed_existing_npc_status_without_mutating_original() -> None:
+    executor = WorldAuthorityExecutor()
+    state = build_fresh_campaign_state()
+    state["npcs"]["old_caretaker"]["status"] = ["broken"]
+    original = copy.deepcopy(state)
+
+    result = executor.execute(SetNpcStatusWorldAction(npc_id="old_caretaker", status="active"), state)[1]
+
+    assert result.success is False
+    assert result.error_code == "invalid_npc_status"
+    assert state == original
 
 
 def test_world_authority_rejects_malformed_state_without_mutating_original() -> None:

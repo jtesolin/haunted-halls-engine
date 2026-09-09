@@ -3,6 +3,8 @@ from __future__ import annotations
 import copy
 from typing import Any
 
+from pydantic import ValidationError
+
 from app.game.world import DEFAULT_WORLD, World
 from app.schemas.world import (
     AdvanceClockWorldAction,
@@ -29,14 +31,27 @@ class WorldAuthorityExecutor:
                 errors=["malformed_campaign_state"],
             )
 
-        action_model = self._coerce_action(action)
+        try:
+            action_model = self._coerce_action(action)
+        except ValidationError:
+            return state, self._result(
+                success=False,
+                action="",
+                summary="World action payload is malformed.",
+                error_code="invalid_world_action",
+                errors=["invalid_world_action"],
+            )
         if action_model is None:
             return state, self._result(
                 success=False,
                 action="",
-                summary="Unsupported world action payload.",
-                error_code="unsupported_world_action",
-                errors=["unsupported_world_action"],
+                summary=(
+                    "Unsupported world action payload."
+                    if not isinstance(action, dict)
+                    else "World action payload is malformed."
+                ),
+                error_code="unsupported_world_action" if not isinstance(action, dict) else "invalid_world_action",
+                errors=["unsupported_world_action" if not isinstance(action, dict) else "invalid_world_action"],
             )
 
         candidate = copy.deepcopy(state)
@@ -173,6 +188,15 @@ class WorldAuthorityExecutor:
             )
 
         current_status = npc.get("status")
+        if not isinstance(current_status, str) or current_status not in {"active", "absent"}:
+            return original_state, self._result(
+                success=False,
+                action=WorldActionType.SET_NPC_STATUS,
+                summary=f"NPC '{action.npc_id}' has an invalid status value.",
+                error_code="invalid_npc_status",
+                errors=["invalid_npc_status"],
+            )
+
         if current_status == action.status:
             return candidate, self._result(
                 success=True,
@@ -312,12 +336,11 @@ class WorldAuthorityExecutor:
             return original_state, self._result(
                 success=False,
                 action=WorldActionType.RECORD_FACT,
-                summary="The fact list has reached the 256-item limit.",
+                summary="The fact list has reached the 256 unique-fact limit.",
                 error_code="facts_limit_reached",
                 errors=["facts_limit_reached"],
             )
 
-        previous_facts = list(facts)
         facts.append(normalized_fact)
         result = self._result(
             success=True,
@@ -326,8 +349,7 @@ class WorldAuthorityExecutor:
             summary=f"Recorded fact '{normalized_fact}'.",
             state_delta={
                 "facts": {
-                    "from": previous_facts,
-                    "to": list(facts),
+                    "added": [normalized_fact],
                 }
             },
         )

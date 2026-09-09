@@ -656,26 +656,9 @@ class ToolExecutor:
             inventory_items=next_inventory,
         )
 
-    def spawn_npc(self, state: dict[str, Any], npc_id: str, room_id: str) -> None:
-        npcs = ensure_npcs_state(state)
-        npcs[npc_id] = {
-            "id": npc_id,
-            "name": " ".join(part.capitalize() for part in npc_id.replace("-", "_").split("_")),
-            "description": "",
-            "location": room_id,
-            "status": "active",
-            "disposition": "neutral",
-            "aliases": [],
-            "tags": [],
-        }
-
     def advance_clock(self, state: dict[str, Any], amount: int) -> None:
         clock = state.setdefault("clock", {})
         clock["tick"] = int(clock.get("tick", 0)) + amount
-
-    def record_fact(self, state: dict[str, Any], fact: str) -> None:
-        facts = state.setdefault("facts", [])
-        facts.append(fact)
 
     def _resolve_item_in_scope(
         self,

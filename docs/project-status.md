@@ -943,7 +943,7 @@ PostgreSQL, vector databases, deployment infrastructure, additional agents, and 
 | Grounded campaign initialization | Complete (Phase 6E2) |
 | Malformed campaign state hardening | Complete (issue #2 / PR #33) |
 | Playwright E2E foundation     | Complete (E2E-1)  |
-| World Authority Foundation    | Planned — not started (Phase 7A) |
+| World Authority Foundation    | Complete (Phase 7A) |
 | Director Agent                | Deferred (Phase 7B follow-up) |
 | Domain MCP servers            | Future            |
 | PostgreSQL local/CI compatibility | Complete       |
@@ -957,9 +957,11 @@ PostgreSQL, vector databases, deployment infrastructure, additional agents, and 
 
 # Next Step
 
-Phase 6E, malformed campaign state hardening, and E2E-1 are complete.
+Phase 7A — World Authority Foundation is complete.
 
-The next milestone is **Phase 7A — World Authority Foundation** (establishing a deterministic, typed world-authority execution surface before introducing a Director LLM).
+The next milestone is **Phase 7B — Director Agent v1**.
+
+Phase 7A established a separate deterministic privileged world-authority boundary with explicit typed world actions for `move_npc`, `set_npc_status`, `advance_clock`, and `record_fact`, plus non-mutating validation and precise state deltas. The Director Agent, normal chat orchestration integration, and other adjacent roadmap work remain intentionally deferred until the deterministic world-authority foundation is stable.
 
 Phase 5 should be considered closed as of engine commit:
 

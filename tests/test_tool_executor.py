@@ -21,21 +21,10 @@ class ParityMCPClient:
         args = arguments.get("args", [])
         state = args[0]
 
-        if name == "create_npc":
-            npc_id = args[1]
-            room_id = args[2]
-            state.setdefault("npcs", {})[npc_id] = {"room": room_id}
-            return {"return": None}
-
         if name == "advance_time":
             ticks = int(args[1])
             clock = state.setdefault("clock", {})
             clock["tick"] = int(clock.get("tick", 0)) + ticks
-            return {"return": None}
-
-        if name == "search_lore":
-            fact = args[1]
-            state.setdefault("facts", []).append(fact)
             return {"return": None}
 
         raise RuntimeError(f"unknown mcp tool: {name}")
@@ -72,9 +61,7 @@ def _build_local_executor() -> ToolExecutor:
     registry.register("move_player", executor.move_player)
     registry.register("take_item", executor.take_item)
     registry.register("drop_item", executor.drop_item)
-    registry.register("spawn_npc", executor.spawn_npc)
     registry.register("advance_clock", executor.advance_clock)
-    registry.register("record_fact", executor.record_fact)
     return executor
 
 
@@ -84,12 +71,8 @@ def _build_hybrid_executor() -> ToolExecutor:
     registry.register("move_player", executor.move_player)
     registry.register("take_item", executor.take_item)
     registry.register("drop_item", executor.drop_item)
-    registry.register("spawn_npc", executor.spawn_npc)
     registry.register("advance_clock", executor.advance_clock)
-    registry.register("record_fact", executor.record_fact)
-    registry.register_mcp("spawn_npc", "create_npc")
     registry.register_mcp("advance_clock", "advance_time")
-    registry.register_mcp("record_fact", "search_lore")
     return executor
 
 
