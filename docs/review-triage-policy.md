@@ -79,7 +79,8 @@ repository, the triage agent must:
    `## Review disposition`.
 9. Treat duplicate, suppressed, or repeated Copilot findings as one
    substantive finding.
-10. Do not edit code, create branches/PRs/forks, delegate coding work, merge, or resolve inline review threads.
+10. Do not edit code, create branches/PRs/forks, delegate coding work, merge, or
+    resolve inline review threads.
 11. Do not automatically create deferred GitHub issues during the initial
     rollout. Describe the follow-up in the disposition and leave issue
     creation for human or ChatGPT confirmation.
