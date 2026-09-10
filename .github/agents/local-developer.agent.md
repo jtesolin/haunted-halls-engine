@@ -33,28 +33,50 @@ For coordinated changes spanning both repos:
 - Do not create a replacement branch unless the user explicitly asks.
 - Do not create a second PR for a branch that already has an open PR.
 - Before creating a PR, determine whether the current branch already has one.
+- For newly authorized implementation work, branch correctness must come from freshly fetched remote state, not from the local `main` branch or the branch that happened to be checked out.
+
+## New implementation branch preparation
+
+When the user explicitly authorizes creating a new implementation branch for this repository:
+
+1. Confirm you are operating in `haunted-halls-engine`.
+2. Verify the working tree is clean and Git state is unambiguous before preparing the branch.
+3. Stop and report the problem instead of guessing if there are uncommitted changes, a detached `HEAD`, fetch failure, unexpected branch state, or another material ambiguity.
+4. Run `git fetch origin --prune` before choosing the branch base.
+5. Resolve the freshly fetched `origin/main` commit SHA and record it as the branch base.
+6. Create the implementation branch directly from that fetched `origin/main` commit. Do not branch from a potentially stale local `main`, an unrelated checked-out feature branch, or cached assumptions about repository state.
+7. Optionally fast-forward a clean local `main` to `origin/main`, but never require local `main` to be current for branch correctness.
+8. Verify the new implementation branch contains the recorded `origin/main` base in its ancestry before editing.
 
 ## Initial implementation workflow
 
 When implementing a new issue or requested change:
 
 1. Inspect the issue/specification and current repository state.
-2. Determine the smallest coherent implementation.
-3. Make the requested changes locally.
-4. Run appropriate validation.
-5. Review the final diff for scope creep.
-6. Commit the changes.
-7. Push the current branch.
-8. If no PR already exists for that branch, create exactly one PR using GitHub MCP.
-9. Write a detailed PR description based on the actual implementation, including:
+2. If the user has explicitly authorized a new branch, follow the new implementation branch preparation workflow before editing.
+3. Determine the smallest coherent implementation.
+4. Make the requested changes locally.
+5. Run appropriate validation.
+6. Review the final diff for scope creep.
+7. Before final validation and initial PR creation, run `git fetch origin --prune` again and compare the implementation branch against the latest `origin/main`.
+8. If `origin/main` advanced after the branch was created, reconcile the still-new/unpublished implementation branch onto current `origin/main` before opening the PR. Prefer a clean rebase for that unpublished/new branch.
+9. Resolve only straightforward conflicts that can be decided from current code, the issue/specification, and durable repository context. If conflict resolution requires product, architecture, or risk judgment, stop and ask the user rather than guessing.
+10. Rerun relevant validation after any rebase or conflict resolution.
+11. Verify the branch is based on current `origin/main` before creating the PR.
+12. Commit the changes.
+13. Push the current branch.
+14. If no PR already exists for that branch, create exactly one PR using GitHub MCP.
+15. Write a detailed PR description based on the actual implementation, including:
    - purpose
    - implementation summary
    - important design decisions
    - validation performed
    - intentionally deferred or out-of-scope work
-10. Stop after the PR has been created.
+16. Stop after the PR has been created.
 
 Do not merge.
+
+The pre-PR freshness and reconciliation rules apply to initial implementation work only. During ordinary review remediation for an already-published PR branch, do not silently rebase, rewrite, or otherwise reconcile the PR branch with `origin/main`; base or conflict reconciliation for a published PR requires explicit user direction.
 
 If coordinated work modifies both repositories:
 - validate each repository independently;
