@@ -295,33 +295,36 @@ class ChatOrchestrator:
                 )
 
             if idempotency_key is not None:
-                claimed_request = db.claim_chat_request_idempotency(
+                claim = db.claim_chat_request_idempotency(
                     owner_user_id=owner_user_id,
                     idempotency_key=idempotency_key,
                     request_fingerprint=request_fingerprint,
                     requested_campaign_id=request.campaign_id,
                     requested_character_id=request.character_id,
                 )
-                if claimed_request is None:
+                if claim.row is None:
                     raise HTTPException(
                         status_code=503,
                         detail="Idempotent request could not be claimed; retry.",
                     )
-                if claimed_request["request_fingerprint"] != request_fingerprint:
+                if claim.row["request_fingerprint"] != request_fingerprint:
                     raise HTTPException(
                         status_code=409,
                         detail="Idempotency-Key was already used for a different request.",
                     )
-                if claimed_request["status"] == "completed":
+                if claim.row["status"] == "completed":
                     return ChatResponse(
-                        reply=claimed_request["reply"],
-                        campaign_id=claimed_request["resolved_campaign_id"],
-                        turn_id=claimed_request["turn_id"],
+                        reply=claim.row["reply"],
+                        campaign_id=claim.row["resolved_campaign_id"],
+                        turn_id=claim.row["turn_id"],
                     )
-                if claimed_request["status"] != "in_progress":
+                if not claim.acquired:
+                    # Another transaction owns this in-progress claim. Only the
+                    # transaction that actually inserted the row may execute;
+                    # everyone else must retry rather than proceed.
                     raise HTTPException(
                         status_code=503,
-                        detail="Idempotent request is not available; retry.",
+                        detail="Idempotent request is already in progress; retry.",
                     )
 
             db.create_campaign(
@@ -645,6 +648,7 @@ class ChatOrchestrator:
                 db.complete_chat_request_idempotency(
                     owner_user_id=owner_user_id,
                     idempotency_key=idempotency_key,
+                    request_fingerprint=request_fingerprint,
                     reply=reply,
                     campaign_id=campaign_id,
                     turn_id=assistant_turn_id,

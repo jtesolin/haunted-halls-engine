@@ -13,6 +13,7 @@ from sqlalchemy.exc import IntegrityError, OperationalError
 from app.core.config import settings
 from app.db.models import (
     CampaignDBModel,
+    ChatRequestIdempotencyClaim,
     CharacterDBModel,
     GameEventDBModel,
     InternalUserDBModel,
@@ -38,6 +39,16 @@ from app.memory.retriever import (
     serialize_embedding,
 )
 from app.schemas.events import GameEventPayload, GameEventType
+
+
+class ChatRequestIdempotencyOwnershipError(RuntimeError):
+    """Raised when a chat request idempotency claim cannot be completed by its owner.
+
+    This indicates the completing caller no longer holds the durable claim it
+    acquired (for example, the row's fingerprint/status changed unexpectedly),
+    so completion must not proceed rather than silently overwrite another
+    request's claim.
+    """
 
 
 class Repository:
@@ -68,7 +79,19 @@ class Repository:
         request_fingerprint: str,
         requested_campaign_id: str | None,
         requested_character_id: str | None,
-    ):
+    ) -> ChatRequestIdempotencyClaim:
+        """Attempt to durably acquire the idempotency claim for this request.
+
+        Returns a :class:`ChatRequestIdempotencyClaim` whose ``acquired`` flag
+        is True only when this call's own INSERT won the unique constraint.
+        Every other outcome (a unique violation because another transaction
+        already owns the row, or a locked-database retry signal) yields
+        ``acquired=False`` alongside whatever row is currently visible (which
+        may be ``None`` if it cannot be safely observed). Callers must never
+        treat a visible ``in_progress`` row as license to execute unless
+        ``acquired`` is True.
+        """
+        acquired = False
         try:
             with self.conn.begin_nested():
                 self.conn.execute(
@@ -82,29 +105,43 @@ class Repository:
                         created_at=self._now_utc_iso(),
                     )
                 )
+            acquired = True
         except IntegrityError:
-            pass
+            acquired = False
         except OperationalError as exc:
             if "database is locked" in str(exc).lower():
-                return None
+                return ChatRequestIdempotencyClaim(acquired=False, row=None)
             raise
-        return self.get_chat_request_idempotency(owner_user_id, idempotency_key)
+        row = self.get_chat_request_idempotency(owner_user_id, idempotency_key)
+        return ChatRequestIdempotencyClaim(acquired=acquired, row=row)
 
     def complete_chat_request_idempotency(
         self,
         *,
         owner_user_id: str,
         idempotency_key: str,
+        request_fingerprint: str,
         reply: str,
         campaign_id: str,
         turn_id: str,
     ) -> None:
-        self.conn.execute(
+        """Mark an owned in-progress claim as completed.
+
+        The UPDATE is conditioned on the claim still being ``in_progress``
+        for this exact owner/key/fingerprint so a caller that lost ownership
+        (or is racing against another completion) can never overwrite
+        another request's claim. Completion must always follow a claim
+        acquired via ``claim_chat_request_idempotency`` with
+        ``acquired=True``.
+        """
+        result = self.conn.execute(
             update(chat_request_idempotency)
             .where(
                 and_(
                     chat_request_idempotency.c.owner_user_id == owner_user_id,
                     chat_request_idempotency.c.idempotency_key == idempotency_key,
+                    chat_request_idempotency.c.request_fingerprint == request_fingerprint,
+                    chat_request_idempotency.c.status == "in_progress",
                 )
             )
             .values(
@@ -115,6 +152,10 @@ class Repository:
                 completed_at=self._now_utc_iso(),
             )
         )
+        if result.rowcount != 1:
+            raise ChatRequestIdempotencyOwnershipError(
+                "chat request idempotency claim was not owned in_progress at completion time"
+            )
 
     def _row_to_internal_user(self, row) -> InternalUserDBModel:
         return InternalUserDBModel(

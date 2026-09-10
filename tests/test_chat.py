@@ -1,6 +1,7 @@
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 import json
+import threading
 from uuid import uuid4
 
 import pytest
@@ -108,20 +109,62 @@ def test_keyed_chat_replays_without_duplicate_side_effects() -> None:
     assert first.status_code == 200
 
     with session() as db:
-        turns_before = db.conn.execute(
-            text("SELECT COUNT(*) FROM turns")
-        ).scalar_one()
+        turns_before = db.conn.execute(text("SELECT COUNT(*) FROM turns")).scalar_one()
         events_before = db.conn.execute(
             text("SELECT COUNT(*) FROM game_events")
         ).scalar_one()
+        model_requests_before = db.conn.execute(
+            text("SELECT COUNT(*) FROM model_requests")
+        ).scalar_one()
+        campaign_state_before = db.conn.execute(
+            text("SELECT state FROM campaigns WHERE campaign_id = :campaign_id"),
+            {"campaign_id": first.json()["campaign_id"]},
+        ).scalar_one()
 
-    second = client.post("/api/chat", json={"message": "I go north."}, headers=headers)
+    async def fail_if_called_parse(**kwargs):  # noqa: ANN003
+        raise AssertionError("Action parser must not run again on completed replay.")
+
+    def fail_if_called_execute(*args, **kwargs):
+        raise AssertionError("Tool executor must not run again on completed replay.")
+
+    async def fail_if_called_generate(*args, **kwargs):
+        raise AssertionError("Narrator must not run again on completed replay.")
+
+    orchestrator_instance = orchestrator_module.orchestrator
+    original_parse = orchestrator_instance.action_parser_agent.parse
+    original_execute = orchestrator_instance.tool_executor.execute
+    original_generate = orchestrator_instance.narrator_agent.generate
+    orchestrator_instance.action_parser_agent.parse = fail_if_called_parse
+    orchestrator_instance.tool_executor.execute = fail_if_called_execute
+    orchestrator_instance.narrator_agent.generate = fail_if_called_generate
+    try:
+        second = client.post(
+            "/api/chat", json={"message": "I go north."}, headers=headers
+        )
+    finally:
+        orchestrator_instance.action_parser_agent.parse = original_parse
+        orchestrator_instance.tool_executor.execute = original_execute
+        orchestrator_instance.narrator_agent.generate = original_generate
+
     assert second.status_code == 200
     assert second.json() == first.json()
 
     with session() as db:
         assert db.conn.execute(text("SELECT COUNT(*) FROM turns")).scalar_one() == turns_before
-        assert db.conn.execute(text("SELECT COUNT(*) FROM game_events")).scalar_one() == events_before
+        assert (
+            db.conn.execute(text("SELECT COUNT(*) FROM game_events")).scalar_one()
+            == events_before
+        )
+        assert (
+            db.conn.execute(text("SELECT COUNT(*) FROM model_requests")).scalar_one()
+            == model_requests_before
+        )
+        campaign_state_after = db.conn.execute(
+            text("SELECT state FROM campaigns WHERE campaign_id = :campaign_id"),
+            {"campaign_id": first.json()["campaign_id"]},
+        ).scalar_one()
+        assert campaign_state_after == campaign_state_before
+
 
 
 def test_keyed_chat_conflicting_request_is_rejected() -> None:
@@ -223,10 +266,12 @@ def test_concurrent_duplicate_has_one_execution_owner(monkeypatch) -> None:
     headers = _user_scoped_headers(client, "idempotent-concurrent")
     headers["Idempotency-Key"] = str(uuid4())
     parser_calls = 0
+    parser_calls_lock = threading.Lock()
 
     async def delayed_parse(**kwargs):  # noqa: ANN003
         nonlocal parser_calls
-        parser_calls += 1
+        with parser_calls_lock:
+            parser_calls += 1
         await asyncio.sleep(0.15)
         return ParsedAction(
             raw_text="hello",
@@ -258,6 +303,65 @@ def test_concurrent_duplicate_has_one_execution_owner(monkeypatch) -> None:
     ]
     if len(successful_responses) == 2:
         assert successful_responses[0].json() == successful_responses[1].json()
+
+
+def test_existing_non_owned_in_progress_claim_never_executes(monkeypatch) -> None:
+    """A claim attempt that loses the insert race must never reach execution.
+
+    This directly exercises the ownership distinction: an ``in_progress`` row
+    already exists (simulating another transaction's active claim), so this
+    call's own claim attempt must observe ``acquired=False`` and short-circuit
+    before parser/tool/narrator execution, regardless of the row's status.
+    """
+    settings.AI_ENABLED = False
+    settings.OPENAI_API_KEY = None
+    client = TestClient(app)
+    owner_user_id = _resolved_internal_user_id(client, "idempotent-non-owner")
+    idempotency_key = str(uuid4())
+    request = ChatRequest(message="hello")
+    fingerprint = orchestrator_module.orchestrator._chat_request_fingerprint(request)
+
+    with session() as db:
+        pre_existing_claim = db.claim_chat_request_idempotency(
+            owner_user_id=owner_user_id,
+            idempotency_key=idempotency_key,
+            request_fingerprint=fingerprint,
+            requested_campaign_id=request.campaign_id,
+            requested_character_id=request.character_id,
+        )
+    assert pre_existing_claim.acquired is True
+    assert pre_existing_claim.row is not None
+    assert pre_existing_claim.row["status"] == "in_progress"
+
+    def fail_if_called(*args, **kwargs):
+        raise AssertionError("Execution must not occur for a non-owned in_progress claim.")
+
+    async def fail_if_called_async(*args, **kwargs):
+        raise AssertionError("Execution must not occur for a non-owned in_progress claim.")
+
+    monkeypatch.setattr(
+        orchestrator_module.orchestrator.action_parser_agent, "parse", fail_if_called_async
+    )
+    monkeypatch.setattr(
+        orchestrator_module.orchestrator.tool_executor, "execute", fail_if_called
+    )
+    monkeypatch.setattr(
+        orchestrator_module.orchestrator.narrator_agent, "generate", fail_if_called_async
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(
+            orchestrator_module.orchestrator.handle_chat(
+                request, owner_user_id=owner_user_id, idempotency_key=idempotency_key
+            )
+        )
+
+    assert exc_info.value.status_code == 503
+
+    with session() as db:
+        row = db.get_chat_request_idempotency(owner_user_id, idempotency_key)
+    assert row is not None
+    assert row["status"] == "in_progress"
 
 
 def test_malformed_idempotency_key_is_rejected_before_execution() -> None:

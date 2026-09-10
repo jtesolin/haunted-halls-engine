@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 import re
-from typing import Optional
+from typing import Any, Optional
 
 
 INTERNAL_USER_ID_REGEX = re.compile(r"^user_[0-9a-f]{32}$")
@@ -83,3 +83,17 @@ class InternalUserDBModel:
     created_at: datetime
     updated_at: datetime
     last_login_at: datetime
+
+
+@dataclass
+class ChatRequestIdempotencyClaim:
+    """Explicit ownership result for a chat-request idempotency claim attempt.
+
+    ``acquired`` is True only for the transaction that actually inserted the
+    durable claim row in this call. Every other caller observing the same
+    key (including one that raced and lost) receives ``acquired=False`` and
+    must not treat an ``in_progress`` row as license to execute.
+    """
+
+    acquired: bool
+    row: Optional[Any]
