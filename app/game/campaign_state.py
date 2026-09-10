@@ -16,7 +16,7 @@ from app.game.items import (
     random_starting_inventory_items,
     sync_inventory_projection,
 )
-from app.game.npcs import default_npcs_state
+from app.game.npcs import default_npcs_state, ensure_npcs_state
 
 
 class InvalidCampaignStateError(Exception):
@@ -49,6 +49,31 @@ def validate_persisted_campaign_state_json(campaign_state: str) -> None:
         raise InvalidCampaignStateError(
             "Persisted campaign state did not decode to an object."
         )
+
+
+def load_authoritative_campaign_state(campaign_state: str) -> dict[str, Any]:
+    """Parse persisted campaign state text into the one canonical
+    authoritative representation.
+
+    This is the single shared decode/normalize contract used by every layer
+    that consumes persisted campaign state text as full authoritative state
+    (currently the player `ToolExecutor` and the Director orchestration
+    step). The legitimate empty / missing-state sentinel value
+    ("No campaign state yet.") produces a freshly initialized campaign via
+    `build_fresh_campaign_state()`. Any other non-empty malformed or
+    non-object JSON payload raises `InvalidCampaignStateError` via
+    `validate_persisted_campaign_state_json()` rather than being silently
+    repaired. Persisted item/NPC state is normalized with
+    `ensure_items_state()` / `ensure_npcs_state()` so every caller reasons
+    over the same shape.
+    """
+    if not campaign_state or campaign_state == "No campaign state yet.":
+        return build_fresh_campaign_state()
+    validate_persisted_campaign_state_json(campaign_state)
+    value: dict[str, Any] = json.loads(campaign_state)
+    ensure_items_state(value)
+    ensure_npcs_state(value)
+    return value
 
 
 def build_fresh_campaign_state() -> dict[str, Any]:

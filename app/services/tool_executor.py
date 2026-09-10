@@ -1,13 +1,9 @@
 from __future__ import annotations
 
 import copy
-import json
 from typing import Any
 
-from app.game.campaign_state import (
-    build_fresh_campaign_state,
-    validate_persisted_campaign_state_json,
-)
+from app.game.campaign_state import load_authoritative_campaign_state
 from app.game.items import (
     PLAYER_INVENTORY_LOCATION,
     available_items_for_room,
@@ -686,13 +682,7 @@ class ToolExecutor:
         return [], False
 
     def _state_from_text(self, campaign_state: str) -> dict[str, Any]:
-        if not campaign_state or campaign_state == "No campaign state yet.":
-            return build_fresh_campaign_state()
-        validate_persisted_campaign_state_json(campaign_state)
-        value = json.loads(campaign_state)
-        ensure_items_state(value)
-        ensure_npcs_state(value)
-        return value
+        return load_authoritative_campaign_state(campaign_state)
 
     def _compute_state_delta(self, before: dict[str, Any], after: dict[str, Any]) -> dict[str, Any]:
         delta: dict[str, Any] = {}

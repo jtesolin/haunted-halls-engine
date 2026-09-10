@@ -23,6 +23,7 @@ from app.db.session import session
 from app.game.campaign_state import (
     InvalidCampaignStateError,
     build_fresh_campaign_state,
+    load_authoritative_campaign_state,
     validate_persisted_campaign_state_json,
 )
 from app.game.narrator_scene import build_narrator_scene_context
@@ -693,14 +694,13 @@ class ChatOrchestrator:
     def _authoritative_state_for_director(self, campaign_state: str) -> dict[str, Any]:
         """Project persisted campaign state text into an authoritative dict.
 
-        Mirrors the genesis/validation contract already used by
-        `ToolExecutor` so the Director always receives real authoritative
-        state, never a raw/unvalidated string.
+        Delegates to the same canonical state-loading contract used by
+        `ToolExecutor` (`load_authoritative_campaign_state`), so the Director
+        always receives the exact same validated/normalized authoritative
+        state -- including item/NPC normalization -- rather than a
+        subtly different parallel representation.
         """
-        if not campaign_state or campaign_state == "No campaign state yet.":
-            return build_fresh_campaign_state()
-        validate_persisted_campaign_state_json(campaign_state)
-        return cast(dict[str, Any], json.loads(campaign_state))
+        return load_authoritative_campaign_state(campaign_state)
 
     async def _run_director_step(
         self,
@@ -723,6 +723,14 @@ class ChatOrchestrator:
         mutates campaign state directly; only `WorldAuthorityExecutor` may
         apply a privileged world-state transition.
         """
+        # A legitimate missing/sentinel campaign state is the *only* case in
+        # which fresh starter state may be materialized here (never for
+        # malformed persisted state, which raises below instead). Track this
+        # up front so the exact state Director evaluates can be made
+        # authoritative for the rest of the turn -- Narrator, memory
+        # maintenance, and any later turn must never observe a different,
+        # independently rerolled starter state.
+        is_uninitialized_state = not campaign_state or campaign_state == "No campaign state yet."
         try:
             director_state = self._authoritative_state_for_director(campaign_state)
             director_input = build_director_input(
@@ -742,6 +750,27 @@ class ChatOrchestrator:
                 status_code=500,
                 detail="Campaign state could not be processed.",
             ) from exc
+
+        if is_uninitialized_state:
+            # The Director just reasoned over freshly materialized starter
+            # state for a first-time/auto-created campaign. Persist that
+            # exact state as authoritative immediately -- via the existing
+            # `game_state_updated` event contract, not a new mechanism -- so
+            # it (not the original sentinel) grounds Narrator and memory for
+            # this turn and is reloaded, rather than rerolled, on any later
+            # turn. This is initialization, not a privileged world action, so
+            # it is never attributed to `world_action_executed`.
+            db.update_campaign_state(campaign_id, director_state)
+            db.add_event(
+                event_id=f"evt_{uuid4().hex}",
+                campaign_id=campaign_id,
+                turn_id=player_turn_id,
+                type="game_state_updated",
+                payload=GameStateUpdatedPayload(state=director_state),
+            )
+            campaign_state = memory_service.build_campaign_state(
+                owner_user_id=owner_user_id, campaign_id=campaign_id
+            )
 
         director_model = ModelPolicy.director_model()
         director_estimated_input_tokens = (
