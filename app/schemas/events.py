@@ -12,6 +12,8 @@ GameEventType = Literal[
     "tool_executed",
     "tool_execution_failed",
     "game_state_updated",
+    "world_action_executed",
+    "world_action_failed",
 ]
 
 
@@ -51,6 +53,30 @@ class GameStateUpdatedPayload(BaseModel):
     state: dict[str, Any]
 
 
+class WorldActionExecutedPayload(BaseModel):
+    """A privileged Director-proposed WorldAction executed successfully.
+
+    Distinct from player `tool_executed` events: this records Director/world
+    authority, not player-authorized deterministic action execution.
+    """
+
+    action: str
+    summary: str
+    changed: bool = False
+    state_delta: dict[str, Any] = Field(default_factory=dict)
+
+
+class WorldActionFailedPayload(BaseModel):
+    """A privileged Director-proposed WorldAction that failed semantically.
+
+    Distinct from player `tool_execution_failed` events.
+    """
+
+    action: str
+    summary: str
+    error_code: str | None = None
+
+
 GameEventPayload: TypeAlias = (
     PlayerMessageReceivedPayload
     | NarratorResponseCreatedPayload
@@ -59,4 +85,6 @@ GameEventPayload: TypeAlias = (
     | ToolExecutedPayload
     | ToolExecutionFailedPayload
     | GameStateUpdatedPayload
+    | WorldActionExecutedPayload
+    | WorldActionFailedPayload
 )

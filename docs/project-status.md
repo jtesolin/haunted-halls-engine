@@ -406,41 +406,53 @@ orchestration integration until the approved Phase 7B sequence.
 
 ## Phase 7B — Director rollout
 
-**Status: 7B1 contract foundation and 7B2 model-backed proposal generation
-implemented; 7B3 remains deferred**
+**Status: Complete (7B1, 7B2, and 7B3)**
 
-Issue #3 now adds the engine-side idempotency boundary for valid
-`Idempotency-Key` chat requests. Keys are scoped to the authenticated user,
-claimed durably before turn execution, and completed responses are replayed
-without rerunning game or model work. Missing keys remain temporarily
-compatible for rolling deployment; Director behavior and 7B3 integration remain
-out of scope.
+Engine issue #3 (idempotent chat turns) shipped ahead of 7B3 and provided the
+stable `Idempotency-Key` claim/replay/completion boundary that 7B3 integrates
+against without weakening its owner/fingerprint/concurrency semantics.
 
-The approved sequence is:
+The rollout was delivered in sequence:
 
-1. **7B1 — Director Contract & Proposal Boundary:** implemented in this
-   engine slice. It provides a bounded authoritative Director input projection
-   and a strict zero-or-one proposal contract that reuses the Phase 7A
-   `WorldAction` vocabulary. The projection is deterministic and non-mutating;
-   malformed authoritative fields fail explicitly.
-2. **7B2 — Model-backed Director Agent:** implemented as bounded structured
-   proposal generation. It uses the Director model policy, a compact prompt,
-   a small output budget, deterministic request estimation, and returns
-   provider usage to its caller. It remains disconnected from normal chat
-   execution and never executes or persists a proposal.
-3. **Issue #3 — Idempotent Chat Turns:** may proceed in parallel with 7B2 in a
-   separate engine worktree/clone. It owns request identity, retries,
-   persistence/concurrency semantics, and BFF/frontend retry propagation.
-4. **7B3 — Director Orchestration Integration:** follows both 7B2 and issue #3.
-   It will invoke the Director in the turn, execute validated proposals through
-   `WorldAuthorityExecutor`, persist resulting state/events, and ground the
-   final narrator projection in the resulting authoritative state.
+1. **7B1 — Director Contract & Proposal Boundary:** a bounded authoritative
+   Director input projection and a strict zero-or-one proposal contract that
+   reuses the Phase 7A `WorldAction` vocabulary. The projection is
+   deterministic and non-mutating; malformed authoritative fields fail
+   explicitly.
+2. **7B2 — Model-backed Director Agent:** bounded structured proposal
+   generation using the Director model policy, a compact prompt, a small
+   output budget, deterministic request estimation, and provider usage
+   returned to its caller.
+3. **Issue #3 — Idempotent Chat Turns:** the engine-side idempotency boundary
+   for valid `Idempotency-Key` chat requests. Keys are scoped to the
+   authenticated user, claimed durably before turn execution, and completed
+   responses are replayed without rerunning game or model work.
+4. **7B3 — Director Orchestration Integration:** the Director is now invoked
+   inside `ChatOrchestrator.handle_chat` immediately after the authoritative
+   player result/state and before narrator scene construction. A validated
+   `decision="act"` proposal executes exactly once through
+   `WorldAuthorityExecutor`; `decision="none"` performs no world mutation.
+   A successful world-state change persists a dedicated `world_action_executed`
+   event (plus `game_state_updated` when state actually changed) and a
+   semantic failure persists a dedicated `world_action_failed` event while
+   leaving authoritative state unchanged. Narrator scene projection and memory
+   maintenance both ground in the resulting final authoritative state, not the
+   pre-Director state. A disabled provider path (no OpenAI key) skips the
+   Director and privileged world execution entirely and preserves prior
+   deterministic/stub chat behavior. Director provider/schema failures
+   (`DirectorProviderError`, `DirectorProposalOutputError`) log sanitized
+   operational context and fail the request safely; the existing chat
+   transaction boundary rolls back player/world state, turns/events, model
+   telemetry, and any in-progress idempotency claim from that failed attempt,
+   so a retry with the same `Idempotency-Key` executes normally.
 
-Web issue `jtesolin/haunted-halls#21` may run independently with this engine
+Web issue `jtesolin/haunted-halls#21` may run independently of this engine
 work, and #22 follows that cleanup. The 7B rollout does not include combat,
-doors/locks/keys, autonomous NPC simulation beyond explicit Director actions,
-generic perception, narrator validation/retry, semantic-memory redesign,
-content/engine separation, broad E2E expansion, or D7 observability work.
+doors/locks/keys, autonomous NPC simulation beyond the one Director proposal
+per player turn, generic perception, narrator validation/retry,
+semantic-memory redesign, content/engine separation, broad E2E expansion, or
+D7 observability work. No new `WorldAction` types (for example `spawn_npc`)
+were introduced in 7B3.
 
 ## Authentication and Authorization
 
@@ -512,15 +524,19 @@ Extracts durable facts/memories from longer-running play.
 
 ### Director Agent
 
-**7B1 contract foundation and 7B2 model-backed proposal generation implemented;
-7B3 integration deferred**
+**Implemented (7B1, 7B2, 7B3)**
 
 The engine exposes a bounded, typed authoritative context and a strict proposal
 contract representing no action or one existing typed `WorldAction`. The
-model-backed Director consumes only that projection, returns a validated
-advisory proposal plus provider usage metadata, and does not mutate or repair
-authoritative state. Proposals are neither executed nor persisted; normal-chat
-integration remains deferred to 7B3 after issue #3.
+model-backed Director consumes only that projection and returns a validated
+advisory proposal plus provider usage metadata; it never mutates or repairs
+authoritative state itself. The Director is invoked inside the normal
+authoritative chat turn after the player's own result/state and before
+narrator scene construction. A `decision="act"` proposal executes exactly once
+through `WorldAuthorityExecutor`, which remains the sole deterministic
+execution boundary for privileged world actions; `decision="none"` performs no
+world mutation. A disabled provider path skips the Director and privileged
+world execution entirely.
 
 ## Current Persistence
 
@@ -726,15 +742,16 @@ Durable repository context was hardened before Phase 7 through the stable archit
 
 ## Director Agent
 
-**7B1 contract and 7B2 model-backed proposal generation implemented — 7B3
-integration deferred**
+**7B1, 7B2, and 7B3 implemented (Phase 7B complete)**
 
 The Director has a bounded authoritative input projection, a strict
-zero-or-one proposal boundary over existing typed world actions, and a
-model-backed advisory proposal generator. Normal-chat orchestration and
-execution remain deferred to 7B3 after issue #3.
+zero-or-one proposal boundary over existing typed world actions, a
+model-backed advisory proposal generator, and normal-chat orchestration
+integration that executes at most one validated proposal per player turn
+through `WorldAuthorityExecutor`.
 
-Potential future Director capabilities:
+Potential future Director capabilities beyond the current one-proposal-per-turn
+boundary:
 
 ```text
 unlock_exit
@@ -851,12 +868,11 @@ D7 remains planned. Detailed subphases will be defined when this work becomes ac
 
 ## Explicit Deferrals
 
-The following remain explicitly deferred and are kept out of the immediate Phase 7A milestone unless a later dedicated issue explicitly promotes them:
+The following remain explicitly deferred and are kept out of the completed Phase 7A/7B milestones unless a later dedicated issue explicitly promotes them:
 
-* Issue #3 request idempotency and retry semantics.
 * Combat mechanics and damage modeling.
 * Doors, locks, key mechanics, and cellar progression.
-* Autonomous NPC simulation beyond the narrow authority actions selected for Phase 7A.
+* Autonomous NPC simulation beyond the explicit one-proposal-per-player-turn Director actions.
 * Semantic memory redesign and vector database / pgvector integration.
 * Content / engine separation.
 * Generic perception framework.
@@ -936,7 +952,7 @@ PostgreSQL, vector databases, deployment infrastructure, additional agents, and 
 | Malformed campaign state hardening | Complete (issue #2 / PR #33) |
 | Playwright E2E foundation     | Complete (E2E-1)  |
 | World Authority Foundation    | Complete (Phase 7A) |
-| Director Agent                | 7B1 contract and 7B2 model-backed proposals implemented; 7B3 integration deferred |
+| Director Agent                | Complete (Phase 7B: 7B1, 7B2, issue #3, 7B3) |
 | Domain MCP servers            | Future            |
 | PostgreSQL local/CI compatibility | Complete       |
 | Cloud SQL PostgreSQL foundation | Complete         |
@@ -949,17 +965,19 @@ PostgreSQL, vector databases, deployment infrastructure, additional agents, and 
 
 # Next Step
 
-Phase 7A — World Authority Foundation, 7B1 — Director Contract & Proposal
-Boundary, and 7B2 — Model-backed Director Agent are implemented.
+Phase 7A — World Authority Foundation and Phase 7B — Director rollout (7B1,
+7B2, issue #3, and 7B3) are complete. The Director now participates in the
+normal authoritative chat turn end-to-end: it is invoked after the player's
+own authoritative result/state, may execute at most one validated proposal
+through the deterministic `WorldAuthorityExecutor`, and both narrator scene
+projection and memory maintenance ground in the resulting final authoritative
+state.
 
-Issue #3 — Idempotent Chat Turns remains the parallel reliability dependency.
-7B3 — Director Orchestration Integration remains sequenced after both 7B2 and
-issue #3.
-
-Phase 7A established the separate deterministic privileged world-authority
-boundary. 7B1 added the bounded context and zero-or-one proposal boundary; 7B2
-adds only model-backed advisory proposal generation. Normal-chat orchestration,
-proposal execution, and persistence remain intentionally deferred to 7B3.
+The next roadmap milestone has not yet been selected. See **Explicit
+Deferrals** above and tracking issue #43 for the backlog of candidate areas
+(for example combat/damage, doors/locks/keys/cellar progression, further
+Director capabilities, semantic-memory redesign, or D7 observability). A
+dedicated issue should scope the next milestone before implementation begins.
 
 Phase 5 should be considered closed as of engine commit:
 
