@@ -35,6 +35,20 @@ For coordinated changes spanning both repos:
 - Before creating a PR, determine whether the current branch already has one.
 - For newly authorized implementation work, branch correctness must come from freshly fetched remote state, not from the local `main` branch or the branch that happened to be checked out.
 
+## Commit messages
+
+Every new commit created by the Haunted Halls Developer must use exactly one of these prefixes:
+
+- `fix` for corrections and bug fixes;
+- `chore` for procedural changes that do not introduce a new feature, including pure refactors and reversions;
+- `debug` for experimental changes primarily intended to gather information;
+- `docs` for documentation-only changes;
+- `feat` for new features.
+
+Use the format `prefix: message`, with the first character of `message` lowercase. Choose the prefix based on the commit's purpose, not its file type; for example, a Markdown change to procedural Git behavior uses `chore`, while a Markdown-only explanatory documentation update uses `docs`. Do not use another prefix unless the user explicitly changes this convention.
+
+The user squash-merges PRs into a single commit on `main`. Apply this convention to intermediate implementation and remediation commits and to an eventual squash-merge commit message or title when asked to prepare or suggest one. Do not amend, rebase, squash, or otherwise rewrite already-published commits solely to make their messages conform. Never merge automatically.
+
 ## New implementation branch preparation
 
 When the user explicitly authorizes creating a new implementation branch for this repository:
@@ -45,8 +59,10 @@ When the user explicitly authorizes creating a new implementation branch for thi
 4. Use an explicit fetch-capture-branch-verify sequence so the branch starts from an immutable fetched SHA:
 
    ```sh
+   set -e
    git fetch origin --prune
    BASE_SHA="$(git rev-parse origin/main)"
+   test -n "$BASE_SHA"
    git switch -c <implementation-branch> "$BASE_SHA"
    test "$(git rev-parse HEAD)" = "$BASE_SHA"
    git merge-base --is-ancestor "$BASE_SHA" HEAD
@@ -69,37 +85,36 @@ When implementing a new issue or requested change:
 6. Review the final diff for scope creep.
 7. Commit the completed and validated implementation locally.
 8. Do not push yet.
-9. Before final validation and initial PR creation, run the deterministic freshness check against the latest remote main:
-
-   ```sh
-   git fetch origin --prune
-   LATEST_MAIN_SHA="$(git rev-parse origin/main)"
-   git merge-base --is-ancestor "$LATEST_MAIN_SHA" HEAD
-   ```
-
-10. If the ancestry check fails for the still-unpublished initial implementation branch, rebase the local commits onto the captured latest main SHA:
+9. Before pushing and initial PR creation, run the deterministic freshness check against the latest remote main. Keep fetch and SHA-resolution failures fail-fast, while treating a failed ancestry check as the signal to rebase the still-unpublished branch:
 
     ```sh
-    git rebase "$LATEST_MAIN_SHA"
+    set -e
+    git fetch origin --prune
+    LATEST_MAIN_SHA="$(git rev-parse origin/main)"
+    test -n "$LATEST_MAIN_SHA"
+    if ! git merge-base --is-ancestor "$LATEST_MAIN_SHA" HEAD; then
+      git rebase "$LATEST_MAIN_SHA"
+    fi
     ```
 
-11. Resolve only straightforward conflicts that can be decided from current code, the issue/specification, and durable repository context. If conflict resolution requires product, architecture, or risk judgment, stop and ask the user rather than guessing.
-12. Rerun relevant validation after any rebase or conflict resolution.
-13. Verify again that the captured latest main SHA is in the implementation branch ancestry before pushing:
+10. If the rebase has conflicts, resolve only straightforward conflicts that can be decided from current code, the issue/specification, and durable repository context. If conflict resolution requires product, architecture, or risk judgment, stop and ask the user rather than guessing.
+11. Rerun relevant validation after any rebase or conflict resolution.
+12. Verify again that the captured latest main SHA is in the implementation branch ancestry before pushing:
 
     ```sh
+    set -e
     git merge-base --is-ancestor "$LATEST_MAIN_SHA" HEAD
     ```
 
-14. Push the current branch only after the final ancestry verification succeeds.
-15. If no PR already exists for that branch, create exactly one PR using GitHub MCP.
-16. Write a detailed PR description based on the actual implementation, including:
+13. Push the current branch only after the final ancestry verification succeeds.
+14. If no PR already exists for that branch, create exactly one PR using GitHub MCP.
+15. Write a detailed PR description based on the actual implementation, including:
    - purpose
    - implementation summary
    - important design decisions
    - validation performed
    - intentionally deferred or out-of-scope work
-17. Stop after the PR has been created.
+16. Stop after the PR has been created.
 
 Do not merge.
 
