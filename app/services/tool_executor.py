@@ -40,12 +40,8 @@ class ToolExecutor:
         registry.register("move_player", self.move_player)
         registry.register("take_item", self.take_item)
         registry.register("drop_item", self.drop_item)
-        registry.register("spawn_npc", self.spawn_npc)
         registry.register("advance_clock", self.advance_clock)
-        registry.register("record_fact", self.record_fact)
-        registry.register_mcp("spawn_npc", "create_npc")
         registry.register_mcp("advance_clock", "advance_time")
-        registry.register_mcp("record_fact", "search_lore")
         return registry
 
     def execute(self, *, parsed_action: ParsedAction, campaign_state: str) -> tuple[dict[str, Any], ToolExecutionResult]:
@@ -660,26 +656,9 @@ class ToolExecutor:
             inventory_items=next_inventory,
         )
 
-    def spawn_npc(self, state: dict[str, Any], npc_id: str, room_id: str) -> None:
-        npcs = ensure_npcs_state(state)
-        npcs[npc_id] = {
-            "id": npc_id,
-            "name": " ".join(part.capitalize() for part in npc_id.replace("-", "_").split("_")),
-            "description": "",
-            "location": room_id,
-            "status": "active",
-            "disposition": "neutral",
-            "aliases": [],
-            "tags": [],
-        }
-
     def advance_clock(self, state: dict[str, Any], amount: int) -> None:
         clock = state.setdefault("clock", {})
         clock["tick"] = int(clock.get("tick", 0)) + amount
-
-    def record_fact(self, state: dict[str, Any], fact: str) -> None:
-        facts = state.setdefault("facts", [])
-        facts.append(fact)
 
     def _resolve_item_in_scope(
         self,
