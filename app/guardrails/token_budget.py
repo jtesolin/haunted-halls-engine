@@ -8,6 +8,7 @@ class TokenBudget:
     ACTION_PARSER_MAX_OUTPUT_TOKENS = 320
     SUMMARIZER_MAX_OUTPUT_TOKENS = 180
     MEMORY_REFLECTION_MAX_OUTPUT_TOKENS = 180
+    DIRECTOR_MAX_OUTPUT_TOKENS = 128
 
     @classmethod
     def narrator_max_output_tokens(cls) -> int:
@@ -24,6 +25,10 @@ class TokenBudget:
     @classmethod
     def memory_reflection_max_output_tokens(cls) -> int:
         return cls.MEMORY_REFLECTION_MAX_OUTPUT_TOKENS
+
+    @classmethod
+    def director_max_output_tokens(cls) -> int:
+        return cls.DIRECTOR_MAX_OUTPUT_TOKENS
 
 
 def estimate_tokens(text: str) -> int:

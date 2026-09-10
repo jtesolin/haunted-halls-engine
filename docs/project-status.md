@@ -406,7 +406,8 @@ orchestration integration until the approved Phase 7B sequence.
 
 ## Phase 7B — Director rollout
 
-**Status: 7B1 contract foundation implemented; 7B2 and 7B3 remain deferred**
+**Status: 7B1 contract foundation and 7B2 model-backed proposal generation
+implemented; 7B3 remains deferred**
 
 The approved sequence is:
 
@@ -415,10 +416,11 @@ The approved sequence is:
    and a strict zero-or-one proposal contract that reuses the Phase 7A
    `WorldAction` vocabulary. The projection is deterministic and non-mutating;
    malformed authoritative fields fail explicitly.
-2. **7B2 — Model-backed Director Agent:** follows 7B1. Add the Director model
-   call, structured-output prompt/model policy and token-budget integration,
-   diagnostics, and focused proposal-generation tests. Keep it disconnected
-   from normal chat execution.
+2. **7B2 — Model-backed Director Agent:** implemented as bounded structured
+   proposal generation. It uses the Director model policy, a compact prompt,
+   a small output budget, deterministic request estimation, and returns
+   provider usage to its caller. It remains disconnected from normal chat
+   execution and never executes or persists a proposal.
 3. **Issue #3 — Idempotent Chat Turns:** may proceed in parallel with 7B2 in a
    separate engine worktree/clone. It owns request identity, retries,
    persistence/concurrency semantics, and BFF/frontend retry propagation.
@@ -503,14 +505,15 @@ Extracts durable facts/memories from longer-running play.
 
 ### Director Agent
 
-**7B1 contract foundation implemented; model-backed behavior deferred to 7B2**
+**7B1 contract foundation and 7B2 model-backed proposal generation implemented;
+7B3 integration deferred**
 
-The engine now exposes a bounded, typed authoritative context for future
-Director proposal selection and a strict proposal contract representing no
-action or one existing typed `WorldAction`. Context construction does not
-mutate or repair authoritative state, and the proposal contract does not
-execute actions. The Director model call, prompts, policy/token-budget work,
-and normal-chat integration remain deferred to 7B2 and 7B3 respectively.
+The engine exposes a bounded, typed authoritative context and a strict proposal
+contract representing no action or one existing typed `WorldAction`. The
+model-backed Director consumes only that projection, returns a validated
+advisory proposal plus provider usage metadata, and does not mutate or repair
+authoritative state. Proposals are neither executed nor persisted; normal-chat
+integration remains deferred to 7B3 after issue #3.
 
 ## Current Persistence
 
@@ -716,12 +719,13 @@ Durable repository context was hardened before Phase 7 through the stable archit
 
 ## Director Agent
 
-**7B1 contract implemented — 7B2 model behavior and 7B3 integration deferred**
+**7B1 contract and 7B2 model-backed proposal generation implemented — 7B3
+integration deferred**
 
-The 7B1 contract provides a bounded authoritative input projection and a
-strict zero-or-one proposal boundary over the existing typed world actions.
-The Director model call and normal chat orchestration remain deferred to 7B2
-and 7B3.
+The Director has a bounded authoritative input projection, a strict
+zero-or-one proposal boundary over existing typed world actions, and a
+model-backed advisory proposal generator. Normal-chat orchestration and
+execution remain deferred to 7B3 after issue #3.
 
 Potential future Director capabilities:
 
@@ -925,7 +929,7 @@ PostgreSQL, vector databases, deployment infrastructure, additional agents, and 
 | Malformed campaign state hardening | Complete (issue #2 / PR #33) |
 | Playwright E2E foundation     | Complete (E2E-1)  |
 | World Authority Foundation    | Complete (Phase 7A) |
-| Director Agent                | 7B1 contract implemented; 7B2 model and 7B3 integration deferred |
+| Director Agent                | 7B1 contract and 7B2 model-backed proposals implemented; 7B3 integration deferred |
 | Domain MCP servers            | Future            |
 | PostgreSQL local/CI compatibility | Complete       |
 | Cloud SQL PostgreSQL foundation | Complete         |
@@ -938,17 +942,17 @@ PostgreSQL, vector databases, deployment infrastructure, additional agents, and 
 
 # Next Step
 
-Phase 7A — World Authority Foundation is complete, and 7B1 — Director
-Contract & Proposal Boundary is implemented.
+Phase 7A — World Authority Foundation, 7B1 — Director Contract & Proposal
+Boundary, and 7B2 — Model-backed Director Agent are implemented.
 
-The next active work is **7B2 — Model-backed Director Agent**. Issue #3 may
-proceed in parallel in a separate engine worktree/clone. 7B3 — Director
-Orchestration Integration remains sequenced after both.
+Issue #3 — Idempotent Chat Turns remains the parallel reliability dependency.
+7B3 — Director Orchestration Integration remains sequenced after both 7B2 and
+issue #3.
 
 Phase 7A established the separate deterministic privileged world-authority
-boundary. 7B1 adds only the bounded context and zero-or-one proposal boundary;
-the Director model call and normal chat orchestration integration remain
-intentionally deferred.
+boundary. 7B1 added the bounded context and zero-or-one proposal boundary; 7B2
+adds only model-backed advisory proposal generation. Normal-chat orchestration,
+proposal execution, and persistence remain intentionally deferred to 7B3.
 
 Phase 5 should be considered closed as of engine commit:
 
