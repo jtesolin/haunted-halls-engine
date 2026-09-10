@@ -21,7 +21,9 @@ def _executor() -> ToolExecutor:
     registry.register("move_player", executor.move_player)
     registry.register("take_item", executor.take_item)
     registry.register("drop_item", executor.drop_item)
+    registry.register("spawn_npc", executor.spawn_npc)
     registry.register("advance_clock", executor.advance_clock)
+    registry.register("record_fact", executor.record_fact)
     return executor
 
 
@@ -130,11 +132,22 @@ def test_fresh_state_gets_development_npcs_and_round_trips() -> None:
     assert reloaded["npcs"]["old_caretaker"]["status"] == "active"
 
 
-def test_player_executor_does_not_expose_world_authority_methods() -> None:
+def test_spawn_npc_creates_normalized_entity() -> None:
     executor = _executor()
+    state = {"npcs": {}}
 
-    assert not hasattr(executor, "spawn_npc")
-    assert not hasattr(executor, "record_fact")
+    executor.spawn_npc(state, "new_watcher", "grand_corridor")
+
+    assert state["npcs"]["new_watcher"] == {
+        "id": "new_watcher",
+        "name": "New Watcher",
+        "description": "",
+        "location": "grand_corridor",
+        "status": "active",
+        "disposition": "neutral",
+        "aliases": [],
+        "tags": [],
+    }
 
 
 def test_observe_and_move_exclude_remote_npcs() -> None:

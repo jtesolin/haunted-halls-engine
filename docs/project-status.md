@@ -387,40 +387,6 @@ A dedicated Haunted Halls domain MCP-server ecosystem remains future work and sh
 
 Commit `0219311` closes the remaining reliability gap in structured player-action parsing by replacing permissive free-form JSON parsing with a validated schema and by adding diagnostics for provider/schema failures. The commit changes 13 files across agents, model access, prompts, rules, orchestration, schemas, tool execution, and tests.
 
-## Phase 7A — World Authority Foundation
-
-**Status: Complete**
-
-Phase 7A establishes a separate deterministic privileged world-authority boundary that is intentionally distinct from normal player action execution.
-
-Implemented as part of this milestone:
-
-* A dedicated typed world-action contract in `app/schemas/world.py` covering `move_npc`, `set_npc_status`, `advance_clock`, and `record_fact`.
-* A deterministic `WorldAuthorityExecutor` in `app/services/world_authority.py` that validates canonical IDs and applies copy-on-write state transitions.
-* Structural separation between player authority and privileged world authority: player `ActionType`/`ParsedAction` remain player-scoped, and the player `ToolExecutor` no longer exposes the legacy `spawn_npc` and `record_fact` hooks.
-* Player `WAIT` semantics remain intact and continue to route through the deterministic clock tick path.
-* State transitions include precise `state_delta` payloads, strict bounds checks, successful idempotent no-op handling, and semantic validation that leaves authoritative input state unchanged on failure.
-
-This milestone intentionally defers the future Director Agent, normal chat orchestration integration, world-action proposal flow, and adjacent roadmap work until Phase 7B.
-
-## Phase 7B — Director Agent v1
-
-**Status: Next planned milestone**
-
-Planned implementation path:
-
-* Director-side proposal/validation flow for privileged world actions.
-* Model-backed or deterministic Director action selection, once the world-authority foundation is in place.
-* Integration of world-authority proposals into orchestrator or chat execution only after the lower-level deterministic contract is stable.
-
-Explicit deferrals for this milestone remain in place:
-
-* Director model calls.
-* Director prompts and model policy work.
-* Automatic world actions in normal chat orchestration.
-* Narrator, HTTP, frontend, combat, and broader simulation features.
-* Unrelated roadmap work outside Phase 7A.
-
 ## Authentication and Authorization
 
 **Status: Complete for the deployed public custom-domain BFF and private engine boundary**
@@ -495,7 +461,7 @@ Extracts durable facts/memories from longer-running play.
 
 Earlier planning included a Director Agent, but the current engine architecture does not require one yet.
 
-The Director should remain deferred until the deterministic world model contains enough meaningful game systems for a Director to control through explicit tools. Phase 7A has established the deterministic world-authority foundation before Phase 7B introduces Director Agent v1.
+The Director should remain deferred until the deterministic world model contains enough meaningful game systems for a Director to control through explicit tools. Phase 7A will establish a deterministic world authority foundation before Phase 7B introduces Director Agent v1.
 
 ## Current Persistence
 
@@ -697,6 +663,41 @@ Phase 6E1 replaces raw campaign-state exposure to the narrator with a determinis
 **Status: Complete**
 
 Durable repository context was hardened before Phase 7 through the stable architecture/invariants companion and canonical review-triage policy. Automated review triage can rely on these repository artifacts and the current implementation issue rather than conversational history. This documentation-only work does not start or implement Phase 7A.
+
+## Phase 7A — World Authority Foundation
+
+**Status: Planned — not started**
+
+Architecture goal:
+
+```text
+Player actions
+    ↓
+Player Authority / Tool Executor
+
+separate from
+
+World/Director actions
+    ↓
+World Authority Executor
+```
+
+Phase 7A should establish a deterministic, typed world-authority surface **before** introducing a Director LLM.
+
+Core principle:
+
+> Player authority and world/director authority are separate capability boundaries. AI may later propose privileged world actions, but deterministic game systems validate and execute them.
+
+At roadmap level, Phase 7A is expected to define a narrow initial set of privileged world actions against existing state concepts (for example NPC relocation/presence changes, controlled clock advancement, and durable world/story facts), with exact action scope to be finalized in the dedicated Phase 7A implementation issue.
+
+Phase 7A must **not** be documented as already implemented.
+
+### Phase 7B — Director Agent v1
+
+**Status: Planned follow-up after Phase 7A**
+
+A typed Director agent may propose only allowed world-authority actions, which deterministic code validates and executes. The Director must never mutate campaign state directly.
+
 # Future Work
 
 ## Director Agent
@@ -705,7 +706,7 @@ Durable repository context was hardened before Phase 7 through the stable archit
 
 Earlier planning included a Director Agent, but the current engine architecture does not require one yet.
 
-The Director should remain deferred until the deterministic world model contains enough meaningful game systems for a Director to control through explicit tools. Phase 7A has established the deterministic world-authority foundation before Phase 7B introduces Director Agent v1.
+The Director should remain deferred until the deterministic world model contains enough meaningful game systems for a Director to control through explicit tools. Phase 7A will establish this deterministic world authority foundation before Phase 7B introduces Director Agent v1.
 
 Potential future Director capabilities:
 
@@ -908,7 +909,7 @@ PostgreSQL, vector databases, deployment infrastructure, additional agents, and 
 | Grounded campaign initialization | Complete (Phase 6E2) |
 | Malformed campaign state hardening | Complete (issue #2 / PR #33) |
 | Playwright E2E foundation     | Complete (E2E-1)  |
-| World Authority Foundation    | Complete (Phase 7A) |
+| World Authority Foundation    | Planned — not started (Phase 7A) |
 | Director Agent                | Deferred (Phase 7B follow-up) |
 | Domain MCP servers            | Future            |
 | PostgreSQL local/CI compatibility | Complete       |
@@ -922,11 +923,9 @@ PostgreSQL, vector databases, deployment infrastructure, additional agents, and 
 
 # Next Step
 
-Phase 7A — World Authority Foundation is complete.
+Phase 6E, malformed campaign state hardening, and E2E-1 are complete.
 
-The next milestone is **Phase 7B — Director Agent v1**.
-
-Phase 7A established a separate deterministic privileged world-authority boundary with explicit typed world actions for `move_npc`, `set_npc_status`, `advance_clock`, and `record_fact`, plus non-mutating validation and precise state deltas. The Director Agent, normal chat orchestration integration, and other adjacent roadmap work remain intentionally deferred until the deterministic world-authority foundation is stable.
+The next milestone is **Phase 7A — World Authority Foundation** (establishing a deterministic, typed world-authority execution surface before introducing a Director LLM).
 
 Phase 5 should be considered closed as of engine commit:
 

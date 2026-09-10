@@ -48,12 +48,7 @@ silently create or repair schema or authoritative state. Persisted corruption
 or invalid authoritative state must fail explicitly rather than silently
 regenerating replacement state.
 
-## World-authority boundary
+## Planned authority boundary
 
-Player `ParsedAction` values and the player `ToolExecutor` remain limited to
-player-authorized deterministic actions. Typed privileged `WorldAction` values
-execute separately through the deterministic `WorldAuthorityExecutor`.
-
-Director autonomy remains a Phase 7B follow-up. A future Director may propose
-only typed world actions through that deterministic boundary; it must never
-mutate campaign state directly.
+Phase 7A is planned, not started. It is expected to establish typed,
+privileged world-authority actions before any Director autonomy is introduced.
