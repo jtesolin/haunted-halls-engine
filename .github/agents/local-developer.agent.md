@@ -42,11 +42,20 @@ When the user explicitly authorizes creating a new implementation branch for thi
 1. Confirm you are operating in `haunted-halls-engine`.
 2. Verify the working tree is clean and Git state is unambiguous before preparing the branch.
 3. Stop and report the problem instead of guessing if there are uncommitted changes, a detached `HEAD`, fetch failure, unexpected branch state, or another material ambiguity.
-4. Run `git fetch origin --prune` before choosing the branch base.
-5. Resolve the freshly fetched `origin/main` commit SHA and record it as the branch base.
-6. Create the implementation branch directly from that fetched `origin/main` commit. Do not branch from a potentially stale local `main`, an unrelated checked-out feature branch, or cached assumptions about repository state.
+4. Use an explicit fetch-capture-branch-verify sequence so the branch starts from an immutable fetched SHA:
+
+   ```sh
+   git fetch origin --prune
+   BASE_SHA="$(git rev-parse origin/main)"
+   git switch -c <implementation-branch> "$BASE_SHA"
+   test "$(git rev-parse HEAD)" = "$BASE_SHA"
+   git merge-base --is-ancestor "$BASE_SHA" HEAD
+   ```
+
+5. Stop and report the failure instead of guessing if any command in that sequence fails.
+6. Do not substitute local `main`, a moving checked-out feature branch, or an uncaptured `origin/main` ref for the recorded `BASE_SHA`.
 7. Optionally fast-forward a clean local `main` to `origin/main`, but never require local `main` to be current for branch correctness.
-8. Verify the new implementation branch contains the recorded `origin/main` base in its ancestry before editing.
+8. Begin editing only after the branch has been created from the captured `BASE_SHA` and the immediate `HEAD` and ancestry checks have passed.
 
 ## Initial implementation workflow
 
@@ -58,25 +67,43 @@ When implementing a new issue or requested change:
 4. Make the requested changes locally.
 5. Run appropriate validation.
 6. Review the final diff for scope creep.
-7. Before final validation and initial PR creation, run `git fetch origin --prune` again and compare the implementation branch against the latest `origin/main`.
-8. If `origin/main` advanced after the branch was created, reconcile the still-new/unpublished implementation branch onto current `origin/main` before opening the PR. Prefer a clean rebase for that unpublished/new branch.
-9. Resolve only straightforward conflicts that can be decided from current code, the issue/specification, and durable repository context. If conflict resolution requires product, architecture, or risk judgment, stop and ask the user rather than guessing.
-10. Rerun relevant validation after any rebase or conflict resolution.
-11. Verify the branch is based on current `origin/main` before creating the PR.
-12. Commit the changes.
-13. Push the current branch.
-14. If no PR already exists for that branch, create exactly one PR using GitHub MCP.
-15. Write a detailed PR description based on the actual implementation, including:
+7. Commit the completed and validated implementation locally.
+8. Do not push yet.
+9. Before final validation and initial PR creation, run the deterministic freshness check against the latest remote main:
+
+   ```sh
+   git fetch origin --prune
+   LATEST_MAIN_SHA="$(git rev-parse origin/main)"
+   git merge-base --is-ancestor "$LATEST_MAIN_SHA" HEAD
+   ```
+
+10. If the ancestry check fails for the still-unpublished initial implementation branch, rebase the local commits onto the captured latest main SHA:
+
+    ```sh
+    git rebase "$LATEST_MAIN_SHA"
+    ```
+
+11. Resolve only straightforward conflicts that can be decided from current code, the issue/specification, and durable repository context. If conflict resolution requires product, architecture, or risk judgment, stop and ask the user rather than guessing.
+12. Rerun relevant validation after any rebase or conflict resolution.
+13. Verify again that the captured latest main SHA is in the implementation branch ancestry before pushing:
+
+    ```sh
+    git merge-base --is-ancestor "$LATEST_MAIN_SHA" HEAD
+    ```
+
+14. Push the current branch only after the final ancestry verification succeeds.
+15. If no PR already exists for that branch, create exactly one PR using GitHub MCP.
+16. Write a detailed PR description based on the actual implementation, including:
    - purpose
    - implementation summary
    - important design decisions
    - validation performed
    - intentionally deferred or out-of-scope work
-16. Stop after the PR has been created.
+17. Stop after the PR has been created.
 
 Do not merge.
 
-The pre-PR freshness and reconciliation rules apply to initial implementation work only. During ordinary review remediation for an already-published PR branch, do not silently rebase, rewrite, or otherwise reconcile the PR branch with `origin/main`; base or conflict reconciliation for a published PR requires explicit user direction.
+The pre-PR freshness and reconciliation rules apply to initial implementation work only. During ordinary review remediation for an already-published PR branch, continue working on the existing PR branch and do not silently rebase, rewrite, or otherwise reconcile the PR branch with `origin/main`; base or conflict reconciliation for a published PR requires explicit user direction.
 
 If coordinated work modifies both repositories:
 - validate each repository independently;
