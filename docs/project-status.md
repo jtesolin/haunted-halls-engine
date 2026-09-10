@@ -454,6 +454,41 @@ semantic-memory redesign, content/engine separation, broad E2E expansion, or
 D7 observability work. No new `WorldAction` types (for example `spawn_npc`)
 were introduced in 7B3.
 
+## Phase 8B — Character Progression Model
+
+**Status: Complete**
+
+Phase 8B (`jtesolin/haunted-halls-engine#54`, tracked by the Phase 8 roadmap
+`jtesolin/haunted-halls-engine#52`) adds a persistent, deterministic
+character-progression domain foundation that can later power Phase 8C
+ability/check resolution, without designing the system around combat.
+
+* `app/game/character_progression.py` normalizes and mutates a
+  `state["player"]["progression"]` namespace with four stable, exploration/
+  narrative-oriented tracks (`investigation`, `resolve`, `rapport`,
+  `occult`), each bounded `0`-`10` with a deterministic zero-point default and
+  no random stats.
+* `ensure_character_progression_state()` is a lazy normalization helper: it
+  safely defaults legacy campaign state with no progression namespace,
+  re-derives the persisted version marker, drops arbitrary/unknown track
+  ids, clamps out-of-range or malformed rank values to safe defaults, and
+  dedupes/filters unlocked-ability ids to non-empty strings, all without
+  regenerating unrelated `items`/`npcs`/`clock`/`facts` state.
+* `grant_progress()` and `unlock_ability()` return structured
+  `ProgressionGrantResult` / `AbilityUnlockResult` outcomes (see
+  `app/schemas/character_progression.py`) reporting success/failure,
+  whether state changed, prior/new points, cap status, and idempotent
+  duplicate-unlock detection. Negative/zero/non-integer grants and unknown
+  track ids are rejected without mutation; duplicate ability unlocks are a
+  successful no-op.
+* No database migration was required; progression persists as part of the
+  existing authoritative campaign-state JSON document, consistent with
+  current persistence architecture.
+* This milestone intentionally does not implement ability/check resolution
+  (Phase 8C), does not touch `ChatOrchestrator`, the Director, or
+  `WorldAuthorityExecutor`, and preserves the existing `CharacterInfo` /
+  `CharacterList` API DTOs in `app/schemas/character.py` unchanged.
+
 ## Authentication and Authorization
 
 **Status: Complete for the deployed public custom-domain BFF and private engine boundary**
