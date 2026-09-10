@@ -10,6 +10,11 @@ from uuid import uuid4
 from fastapi import HTTPException
 
 from app.agents.action_parser import ActionParseProviderError, ActionParserAgent
+from app.agents.director import (
+    DirectorAgent,
+    DirectorProposalOutputError,
+    DirectorProviderError,
+)
 from app.agents.memory_reflection import MemoryReflectionAgent, MemoryReflectionInput
 from app.agents.memory_summarizer import MemorySummarizerAgent, MemorySummarizerInput
 from app.agents.narrator import NarratorAgent, NarratorAgentInput
@@ -18,6 +23,7 @@ from app.db.session import session
 from app.game.campaign_state import (
     InvalidCampaignStateError,
     build_fresh_campaign_state,
+    load_authoritative_campaign_state,
     validate_persisted_campaign_state_json,
 )
 from app.game.narrator_scene import build_narrator_scene_context
@@ -39,7 +45,14 @@ from app.guardrails.token_budget import (
 from app.guardrails.usage_limits import UsageLimits
 from app.memory.services import MemoryService
 from app.schemas.campaign import CampaignCreateRequest, CampaignDetail, CampaignTurn
-from app.schemas.chat import ChatRequest, ChatResponse, NarratorSceneContext, ToolExecutionResult
+from app.schemas.chat import (
+    ChatRequest,
+    ChatResponse,
+    NarratorSceneContext,
+    ParsedAction,
+    ToolExecutionResult,
+)
+from app.schemas.director import WorldActionProposal
 from app.schemas.events import (
     ActionParseFailedPayload,
     ActionParsedPayload,
@@ -48,8 +61,12 @@ from app.schemas.events import (
     PlayerMessageReceivedPayload,
     ToolExecutedPayload,
     ToolExecutionFailedPayload,
+    WorldActionExecutedPayload,
+    WorldActionFailedPayload,
 )
+from app.services.director_context import InvalidDirectorContextError, build_director_input
 from app.services.tool_executor import ToolExecutor
+from app.services.world_authority import WorldAuthorityExecutor
 
 
 logger = logging.getLogger(__name__)
@@ -87,6 +104,8 @@ class ChatOrchestrator:
         self.memory_summarizer_agent = MemorySummarizerAgent()
         self.memory_reflection_agent = MemoryReflectionAgent()
         self.tool_executor = ToolExecutor()
+        self.director_agent = DirectorAgent()
+        self.world_authority_executor = WorldAuthorityExecutor()
 
     async def create_campaign(
         self, _request: CampaignCreateRequest, owner_user_id: str
@@ -528,6 +547,18 @@ class ChatOrchestrator:
                         owner_user_id=owner_user_id, campaign_id=campaign_id
                     )
 
+            if provider_model_enabled:
+                campaign_state = await self._run_director_step(
+                    db=db,
+                    memory_service=memory_service,
+                    owner_user_id=owner_user_id,
+                    campaign_id=campaign_id,
+                    player_turn_id=player_turn_id,
+                    campaign_state=campaign_state,
+                    parsed_action=parsed_action,
+                    tool_result=tool_result,
+                )
+
             if not provider_model_enabled and not ai_enabled:
                 reply = self._stub_reply(request.message)
             else:
@@ -659,6 +690,202 @@ class ChatOrchestrator:
             campaign_id=campaign_id,
             turn_id=assistant_turn_id,
         )
+
+    def _authoritative_state_for_director(self, campaign_state: str) -> dict[str, Any]:
+        """Project persisted campaign state text into an authoritative dict.
+
+        Delegates to the same canonical state-loading contract used by
+        `ToolExecutor` (`load_authoritative_campaign_state`), so the Director
+        always receives the exact same validated/normalized authoritative
+        state -- including item/NPC normalization -- rather than a
+        subtly different parallel representation.
+        """
+        return load_authoritative_campaign_state(campaign_state)
+
+    async def _run_director_step(
+        self,
+        *,
+        db,
+        memory_service: MemoryService,
+        owner_user_id: str,
+        campaign_id: str,
+        player_turn_id: str,
+        campaign_state: str,
+        parsed_action: ParsedAction,
+        tool_result: ToolExecutionResult,
+    ) -> str:
+        """Invoke the Director after the authoritative player result and, for
+        `decision="act"`, execute at most one validated `WorldAction` through
+        `WorldAuthorityExecutor`.
+
+        Returns the authoritative campaign-state text to use for final
+        narrator grounding and memory maintenance. The Director never
+        mutates campaign state directly; only `WorldAuthorityExecutor` may
+        apply a privileged world-state transition.
+        """
+        # A legitimate missing/sentinel campaign state is the *only* case in
+        # which fresh starter state may be materialized here (never for
+        # malformed persisted state, which raises below instead). Track this
+        # up front so the exact state Director evaluates can be made
+        # authoritative for the rest of the turn -- Narrator, memory
+        # maintenance, and any later turn must never observe a different,
+        # independently rerolled starter state.
+        is_uninitialized_state = not campaign_state or campaign_state == "No campaign state yet."
+        try:
+            director_state = self._authoritative_state_for_director(campaign_state)
+            director_input = build_director_input(
+                director_state,
+                parsed_action=parsed_action,
+                tool_result=tool_result,
+            )
+        except (InvalidCampaignStateError, InvalidDirectorContextError) as exc:
+            logger.error(
+                "director_context_invalid owner_user_id=%s campaign_id=%s turn_id=%s error_type=%s",
+                owner_user_id,
+                campaign_id,
+                player_turn_id,
+                type(exc).__name__,
+            )
+            raise HTTPException(
+                status_code=500,
+                detail="Campaign state could not be processed.",
+            ) from exc
+
+        if is_uninitialized_state:
+            # The Director just reasoned over freshly materialized starter
+            # state for a first-time/auto-created campaign. Persist that
+            # exact state as authoritative immediately -- via the existing
+            # `game_state_updated` event contract, not a new mechanism -- so
+            # it (not the original sentinel) grounds Narrator and memory for
+            # this turn and is reloaded, rather than rerolled, on any later
+            # turn. This is initialization, not a privileged world action, so
+            # it is never attributed to `world_action_executed`.
+            db.update_campaign_state(campaign_id, director_state)
+            db.add_event(
+                event_id=f"evt_{uuid4().hex}",
+                campaign_id=campaign_id,
+                turn_id=player_turn_id,
+                type="game_state_updated",
+                payload=GameStateUpdatedPayload(state=director_state),
+            )
+            campaign_state = memory_service.build_campaign_state(
+                owner_user_id=owner_user_id, campaign_id=campaign_id
+            )
+
+        director_model = ModelPolicy.director_model()
+        director_estimated_input_tokens = (
+            self.director_agent.estimate_provider_input_tokens(director_input=director_input)
+        )
+        self._check_model_call_budget(
+            db,
+            owner_user_id,
+            director_estimated_input_tokens,
+            TokenBudget.director_max_output_tokens(),
+        )
+
+        director_start_time = time.perf_counter()
+        try:
+            director_result = await self.director_agent.propose(
+                director_input=director_input,
+                model=director_model,
+            )
+        except (DirectorProviderError, DirectorProposalOutputError) as exc:
+            director_latency_ms = int((time.perf_counter() - director_start_time) * 1000)
+            logger.error(
+                "director_provider_failed owner_user_id=%s campaign_id=%s turn_id=%s model=%s latency_ms=%s error_type=%s",
+                owner_user_id,
+                campaign_id,
+                player_turn_id,
+                director_model,
+                director_latency_ms,
+                type(exc).__name__,
+                exc_info=True,
+            )
+            db.log_model_request(
+                request_id=f"req_{uuid4().hex}",
+                owner_user_id=owner_user_id,
+                campaign_id=campaign_id,
+                turn_id=player_turn_id,
+                agent_name=self.director_agent.name,
+                model=director_model,
+                estimated_input_tokens=director_estimated_input_tokens,
+                estimated_output_tokens=TokenBudget.director_max_output_tokens(),
+                actual_input_tokens=None,
+                actual_output_tokens=None,
+                latency_ms=director_latency_ms,
+                success=False,
+                failure_reason=str(exc),
+            )
+            raise HTTPException(status_code=502, detail="Director service failed.") from exc
+
+        director_latency_ms = int((time.perf_counter() - director_start_time) * 1000)
+        usage = director_result.usage
+        db.log_model_request(
+            request_id=f"req_{uuid4().hex}",
+            owner_user_id=owner_user_id,
+            campaign_id=campaign_id,
+            turn_id=player_turn_id,
+            agent_name=self.director_agent.name,
+            model=director_model,
+            estimated_input_tokens=director_estimated_input_tokens,
+            estimated_output_tokens=TokenBudget.director_max_output_tokens(),
+            actual_input_tokens=usage.input_tokens if usage else None,
+            cached_input_tokens=usage.cached_input_tokens if usage else None,
+            cache_write_input_tokens=usage.cache_write_input_tokens if usage else None,
+            actual_output_tokens=usage.output_tokens if usage else None,
+            reasoning_output_tokens=usage.reasoning_output_tokens if usage else None,
+            actual_total_tokens=usage.total_tokens if usage else None,
+            latency_ms=director_latency_ms,
+            success=True,
+        )
+
+        proposal = director_result.proposal
+        if not isinstance(proposal, WorldActionProposal):
+            return campaign_state
+
+        updated_world_state, world_action_result = self.world_authority_executor.execute(
+            proposal.world_action, director_state
+        )
+
+        if world_action_result.success:
+            db.add_event(
+                event_id=f"evt_{uuid4().hex}",
+                campaign_id=campaign_id,
+                turn_id=player_turn_id,
+                type="world_action_executed",
+                payload=WorldActionExecutedPayload(
+                    action=world_action_result.action,
+                    summary=world_action_result.summary,
+                    changed=world_action_result.changed,
+                    state_delta=world_action_result.state_delta,
+                ),
+            )
+            if world_action_result.changed:
+                db.update_campaign_state(campaign_id, updated_world_state)
+                db.add_event(
+                    event_id=f"evt_{uuid4().hex}",
+                    campaign_id=campaign_id,
+                    turn_id=player_turn_id,
+                    type="game_state_updated",
+                    payload=GameStateUpdatedPayload(state=updated_world_state),
+                )
+                campaign_state = memory_service.build_campaign_state(
+                    owner_user_id=owner_user_id, campaign_id=campaign_id
+                )
+        else:
+            db.add_event(
+                event_id=f"evt_{uuid4().hex}",
+                campaign_id=campaign_id,
+                turn_id=player_turn_id,
+                type="world_action_failed",
+                payload=WorldActionFailedPayload(
+                    action=world_action_result.action,
+                    summary=world_action_result.summary,
+                    error_code=world_action_result.error_code,
+                ),
+            )
+
+        return campaign_state
 
     def _chat_request_fingerprint(self, request: ChatRequest) -> str:
         canonical_request = json.dumps(

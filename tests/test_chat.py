@@ -11,6 +11,7 @@ from sqlalchemy import text
 
 from app.agents import action_parser as action_parser_module
 from app.agents import narrator as narrator_module
+from app.agents.director import DirectorAgentResult
 from app.api.dependencies import INTERNAL_USER_ID_HEADER_NAME
 from app.core.config import settings
 from app.db.session import session
@@ -26,7 +27,17 @@ from app.schemas.chat import (
     ParsedAction,
     ToolExecutionResult,
 )
+from app.schemas.director import NoActionProposal
 from app.schemas.internal_auth import CANONICAL_GOOGLE_ISSUER
+
+
+async def _fake_no_action_director_propose(*, director_input, model=None):  # noqa: ANN001, ARG001, ANN202
+    """Shared Director stub: no-action decision, no world-state mutation.
+
+    Used by pre-existing orchestrator tests that only exercise the
+    player/narrator/memory pipeline and are not themselves Director tests.
+    """
+    return DirectorAgentResult(proposal=NoActionProposal(), usage=None)
 
 
 def _user_scoped_headers(
@@ -716,6 +727,11 @@ def test_chat_request_count_tracks_user_turns_only(monkeypatch) -> None:
         "generate_text",
         fake_generate_text,
     )
+    monkeypatch.setattr(
+        orchestrator_module.orchestrator.director_agent,
+        "propose",
+        _fake_no_action_director_propose,
+    )
 
     response = client.post(
         "/api/chat",
@@ -1059,6 +1075,11 @@ def test_orchestrator_uses_narrator_agent_and_persists_turn(monkeypatch) -> None
     )
     monkeypatch.setattr(
         narrator_module.model_client, "generate_text", fake_generate_text
+    )
+    monkeypatch.setattr(
+        orchestrator_module.orchestrator.director_agent,
+        "propose",
+        _fake_no_action_director_propose,
     )
 
     response = asyncio.run(
@@ -1501,6 +1522,11 @@ def test_orchestrator_uses_public_action_parser_estimator(monkeypatch) -> None:
     monkeypatch.setattr(
         narrator_module.model_client, "generate_text", fake_generate_text
     )
+    monkeypatch.setattr(
+        orchestrator_module.orchestrator.director_agent,
+        "propose",
+        _fake_no_action_director_propose,
+    )
 
     original_estimator = orchestrator_module.orchestrator.action_parser_agent.estimate_provider_input_tokens
     monkeypatch.setattr(
@@ -1683,6 +1709,11 @@ def test_orchestrator_writes_campaign_summary_and_reflection_memory(
     monkeypatch.setattr(
         narrator_module.model_client, "generate_text", fake_generate_text
     )
+    monkeypatch.setattr(
+        orchestrator_module.orchestrator.director_agent,
+        "propose",
+        _fake_no_action_director_propose,
+    )
 
     response = asyncio.run(
         orchestrator_module.orchestrator.handle_chat(
@@ -1747,6 +1778,11 @@ def test_orchestrator_logs_memory_agent_usage(monkeypatch) -> None:
     monkeypatch.setattr(
         narrator_module.model_client, "generate_text", fake_generate_text
     )
+    monkeypatch.setattr(
+        orchestrator_module.orchestrator.director_agent,
+        "propose",
+        _fake_no_action_director_propose,
+    )
 
     response = asyncio.run(
         orchestrator_module.orchestrator.handle_chat(
@@ -1808,6 +1844,11 @@ def test_orchestrator_uses_policy_models_per_agent(monkeypatch) -> None:
     )
     monkeypatch.setattr(
         narrator_module.model_client, "generate_text", fake_generate_text
+    )
+    monkeypatch.setattr(
+        orchestrator_module.orchestrator.director_agent,
+        "propose",
+        _fake_no_action_director_propose,
     )
 
     asyncio.run(

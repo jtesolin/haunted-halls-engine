@@ -66,7 +66,7 @@ def test_state_from_text_valid_dict_json_loads_and_normalizes() -> None:
 def test_state_from_text_malformed_or_non_object_raises(malformed_payload: str) -> None:
     executor = _build_executor()
     with patch(
-        "app.services.tool_executor.build_fresh_campaign_state",
+        "app.game.campaign_state.build_fresh_campaign_state",
         side_effect=AssertionError("build_fresh_campaign_state must not be called"),
     ):
         with pytest.raises(InvalidCampaignStateError):
@@ -76,7 +76,7 @@ def test_state_from_text_malformed_or_non_object_raises(malformed_payload: str) 
 def test_state_from_text_malformed_does_not_call_fresh_state_via_execute() -> None:
     executor = _build_executor()
     with patch(
-        "app.services.tool_executor.build_fresh_campaign_state",
+        "app.game.campaign_state.build_fresh_campaign_state",
         side_effect=AssertionError("build_fresh_campaign_state must not be called"),
     ):
         with pytest.raises(InvalidCampaignStateError):
