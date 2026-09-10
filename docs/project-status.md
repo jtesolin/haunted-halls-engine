@@ -409,6 +409,13 @@ orchestration integration until the approved Phase 7B sequence.
 **Status: 7B1 contract foundation and 7B2 model-backed proposal generation
 implemented; 7B3 remains deferred**
 
+Issue #3 now adds the engine-side idempotency boundary for valid
+`Idempotency-Key` chat requests. Keys are scoped to the authenticated user,
+claimed durably before turn execution, and completed responses are replayed
+without rerunning game or model work. Missing keys remain temporarily
+compatible for rolling deployment; Director behavior and 7B3 integration remain
+out of scope.
+
 The approved sequence is:
 
 1. **7B1 — Director Contract & Proposal Boundary:** implemented in this

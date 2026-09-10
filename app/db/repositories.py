@@ -8,7 +8,7 @@ from uuid import uuid4
 
 from sqlalchemy import and_, case, delete, func, insert, select, update
 from sqlalchemy.engine import Connection
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, OperationalError
 
 from app.core.config import settings
 from app.db.models import (
@@ -22,6 +22,7 @@ from app.db.models import (
 )
 from app.db.schema import (
     campaigns,
+    chat_request_idempotency,
     characters,
     game_events,
     internal_users,
@@ -45,6 +46,75 @@ class Repository:
 
     def _now_utc_iso(self) -> str:
         return datetime.now(timezone.utc).isoformat()
+
+    def get_chat_request_idempotency(
+        self, owner_user_id: str, idempotency_key: str
+    ):
+        row = self.conn.execute(
+            select(chat_request_idempotency).where(
+                and_(
+                    chat_request_idempotency.c.owner_user_id == owner_user_id,
+                    chat_request_idempotency.c.idempotency_key == idempotency_key,
+                )
+            )
+        ).mappings().first()
+        return row
+
+    def claim_chat_request_idempotency(
+        self,
+        *,
+        owner_user_id: str,
+        idempotency_key: str,
+        request_fingerprint: str,
+        requested_campaign_id: str | None,
+        requested_character_id: str | None,
+    ):
+        try:
+            with self.conn.begin_nested():
+                self.conn.execute(
+                    insert(chat_request_idempotency).values(
+                        owner_user_id=owner_user_id,
+                        idempotency_key=idempotency_key,
+                        request_fingerprint=request_fingerprint,
+                        requested_campaign_id=requested_campaign_id,
+                        requested_character_id=requested_character_id,
+                        status="in_progress",
+                        created_at=self._now_utc_iso(),
+                    )
+                )
+        except IntegrityError:
+            pass
+        except OperationalError as exc:
+            if "database is locked" in str(exc).lower():
+                return None
+            raise
+        return self.get_chat_request_idempotency(owner_user_id, idempotency_key)
+
+    def complete_chat_request_idempotency(
+        self,
+        *,
+        owner_user_id: str,
+        idempotency_key: str,
+        reply: str,
+        campaign_id: str,
+        turn_id: str,
+    ) -> None:
+        self.conn.execute(
+            update(chat_request_idempotency)
+            .where(
+                and_(
+                    chat_request_idempotency.c.owner_user_id == owner_user_id,
+                    chat_request_idempotency.c.idempotency_key == idempotency_key,
+                )
+            )
+            .values(
+                status="completed",
+                resolved_campaign_id=campaign_id,
+                turn_id=turn_id,
+                reply=reply,
+                completed_at=self._now_utc_iso(),
+            )
+        )
 
     def _row_to_internal_user(self, row) -> InternalUserDBModel:
         return InternalUserDBModel(

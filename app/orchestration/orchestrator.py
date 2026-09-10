@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import time
@@ -202,8 +203,9 @@ class ChatOrchestrator:
         )
 
     async def handle_chat(
-        self, request: ChatRequest, owner_user_id: str
+        self, request: ChatRequest, owner_user_id: str, idempotency_key: str | None = None
     ) -> ChatResponse:
+        request_fingerprint = self._chat_request_fingerprint(request)
         campaign_id = request.campaign_id or f"campaign_{uuid4().hex}"
         player_turn_id = f"turn_{uuid4().hex}"
         assistant_turn_id = f"turn_{uuid4().hex}"
@@ -211,6 +213,23 @@ class ChatOrchestrator:
         model = ModelPolicy.narrator_model()
 
         with session() as db:
+            if idempotency_key is not None:
+                existing_request = db.get_chat_request_idempotency(
+                    owner_user_id, idempotency_key
+                )
+                if existing_request is not None:
+                    if existing_request["request_fingerprint"] != request_fingerprint:
+                        raise HTTPException(
+                            status_code=409,
+                            detail="Idempotency-Key was already used for a different request.",
+                        )
+                    if existing_request["status"] == "completed":
+                        return ChatResponse(
+                            reply=existing_request["reply"],
+                            campaign_id=existing_request["resolved_campaign_id"],
+                            turn_id=existing_request["turn_id"],
+                        )
+
             validate_chat_request(db, request, owner_user_id)
             validate_campaign_turn_limit(db, owner_user_id, campaign_id)
 
@@ -257,6 +276,53 @@ class ChatOrchestrator:
             )
 
             validate_daily_request_limit(db, owner_user_id)
+            parser_estimated_input_tokens = 0
+            if parser_model_enabled:
+                parser_estimated_input_tokens = (
+                    self.action_parser_agent.estimate_provider_input_tokens(
+                        message=request.message,
+                        campaign_state=campaign_state,
+                        recent_turns=recent_turns,
+                        memory_context=memory_context,
+                    )
+                )
+                self._check_model_call_budget(
+                    db,
+                    owner_user_id,
+                    parser_estimated_input_tokens,
+                    TokenBudget.action_parser_max_output_tokens(),
+                    provider_model_enabled=True,
+                )
+
+            if idempotency_key is not None:
+                claimed_request = db.claim_chat_request_idempotency(
+                    owner_user_id=owner_user_id,
+                    idempotency_key=idempotency_key,
+                    request_fingerprint=request_fingerprint,
+                    requested_campaign_id=request.campaign_id,
+                    requested_character_id=request.character_id,
+                )
+                if claimed_request is None:
+                    raise HTTPException(
+                        status_code=503,
+                        detail="Idempotent request could not be claimed; retry.",
+                    )
+                if claimed_request["request_fingerprint"] != request_fingerprint:
+                    raise HTTPException(
+                        status_code=409,
+                        detail="Idempotency-Key was already used for a different request.",
+                    )
+                if claimed_request["status"] == "completed":
+                    return ChatResponse(
+                        reply=claimed_request["reply"],
+                        campaign_id=claimed_request["resolved_campaign_id"],
+                        turn_id=claimed_request["turn_id"],
+                    )
+                if claimed_request["status"] != "in_progress":
+                    raise HTTPException(
+                        status_code=503,
+                        detail="Idempotent request is not available; retry.",
+                    )
 
             db.create_campaign(
                 campaign_id=campaign_id,
@@ -281,21 +347,6 @@ class ChatOrchestrator:
             parser_start_time = time.perf_counter()
             try:
                 if parser_model_enabled:
-                    parser_estimated_input_tokens = (
-                        self.action_parser_agent.estimate_provider_input_tokens(
-                            message=request.message,
-                            campaign_state=campaign_state,
-                            recent_turns=recent_turns,
-                            memory_context=memory_context,
-                        )
-                    )
-                    self._check_model_call_budget(
-                        db,
-                        owner_user_id,
-                        parser_estimated_input_tokens,
-                        TokenBudget.action_parser_max_output_tokens(),
-                        provider_model_enabled=parser_model_enabled,
-                    )
                     parsed_action = await self.action_parser_agent.parse(
                         message=request.message,
                         campaign_state=campaign_state,
@@ -590,11 +641,32 @@ class ChatOrchestrator:
                 request_message=request.message,
             )
 
+            if idempotency_key is not None:
+                db.complete_chat_request_idempotency(
+                    owner_user_id=owner_user_id,
+                    idempotency_key=idempotency_key,
+                    reply=reply,
+                    campaign_id=campaign_id,
+                    turn_id=assistant_turn_id,
+                )
+
         return ChatResponse(
             reply=reply,
             campaign_id=campaign_id,
             turn_id=assistant_turn_id,
         )
+
+    def _chat_request_fingerprint(self, request: ChatRequest) -> str:
+        canonical_request = json.dumps(
+            {
+                "message": request.message,
+                "campaign_id": request.campaign_id,
+                "character_id": request.character_id,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        return hashlib.sha256(canonical_request).hexdigest()
 
     def _build_campaign_opening_request(self) -> str:
         return (

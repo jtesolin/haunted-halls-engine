@@ -1,5 +1,7 @@
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
 import json
+from uuid import uuid4
 
 import pytest
 from fastapi import HTTPException
@@ -20,6 +22,7 @@ from app.schemas.chat import (
     ActionParserParameters,
     ActionType,
     ChatRequest,
+    ParsedAction,
     ToolExecutionResult,
 )
 from app.schemas.internal_auth import CANONICAL_GOOGLE_ISSUER
@@ -92,6 +95,185 @@ def test_chat_echoes_message() -> None:
     assert data["reply"] == "AI narrator replies (stub): hello"
     assert data["campaign_id"].startswith("campaign_")
     assert data["turn_id"].startswith("turn_")
+
+
+def test_keyed_chat_replays_without_duplicate_side_effects() -> None:
+    settings.AI_ENABLED = False
+    settings.OPENAI_API_KEY = None
+    client = TestClient(app)
+    headers = _user_scoped_headers(client, "idempotent-replay")
+    headers["Idempotency-Key"] = str(uuid4())
+
+    first = client.post("/api/chat", json={"message": "I go north."}, headers=headers)
+    assert first.status_code == 200
+
+    with session() as db:
+        turns_before = db.conn.execute(
+            text("SELECT COUNT(*) FROM turns")
+        ).scalar_one()
+        events_before = db.conn.execute(
+            text("SELECT COUNT(*) FROM game_events")
+        ).scalar_one()
+
+    second = client.post("/api/chat", json={"message": "I go north."}, headers=headers)
+    assert second.status_code == 200
+    assert second.json() == first.json()
+
+    with session() as db:
+        assert db.conn.execute(text("SELECT COUNT(*) FROM turns")).scalar_one() == turns_before
+        assert db.conn.execute(text("SELECT COUNT(*) FROM game_events")).scalar_one() == events_before
+
+
+def test_keyed_chat_conflicting_request_is_rejected() -> None:
+    settings.AI_ENABLED = False
+    settings.OPENAI_API_KEY = None
+    client = TestClient(app)
+    headers = _user_scoped_headers(client, "idempotent-conflict")
+    headers["Idempotency-Key"] = str(uuid4())
+
+    first = client.post("/api/chat", json={"message": "hello"}, headers=headers)
+    assert first.status_code == 200
+    second = client.post("/api/chat", json={"message": "different"}, headers=headers)
+    assert second.status_code == 409
+
+
+def test_identical_text_with_different_keys_executes_twice() -> None:
+    settings.AI_ENABLED = False
+    settings.OPENAI_API_KEY = None
+    client = TestClient(app)
+    headers = _user_scoped_headers(client, "idempotent-distinct-keys")
+    first_headers = {**headers, "Idempotency-Key": str(uuid4())}
+    second_headers = {**headers, "Idempotency-Key": str(uuid4())}
+
+    first = client.post("/api/chat", json={"message": "hello"}, headers=first_headers)
+    second = client.post("/api/chat", json={"message": "hello"}, headers=second_headers)
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert first.json()["turn_id"] != second.json()["turn_id"]
+
+
+def test_completed_replay_bypasses_later_limit(monkeypatch) -> None:
+    settings.AI_ENABLED = False
+    settings.OPENAI_API_KEY = None
+    client = TestClient(app)
+    headers = _user_scoped_headers(client, "idempotent-limit-replay")
+    headers["Idempotency-Key"] = str(uuid4())
+    first = client.post("/api/chat", json={"message": "hello"}, headers=headers)
+    assert first.status_code == 200
+
+    def reject(db, owner_user_id):
+        raise HTTPException(status_code=429, detail="temporarily limited")
+
+    monkeypatch.setattr(orchestrator_module, "validate_daily_request_limit", reject)
+    replay = client.post("/api/chat", json={"message": "hello"}, headers=headers)
+
+    assert replay.status_code == 200
+    assert replay.json() == first.json()
+
+
+def test_same_key_is_scoped_to_authenticated_user() -> None:
+    settings.AI_ENABLED = False
+    settings.OPENAI_API_KEY = None
+    client = TestClient(app)
+    headers_a = _user_scoped_headers(client, "idempotent-user-a")
+    headers_b = _user_scoped_headers(client, "idempotent-user-b")
+    shared_key = str(uuid4())
+    headers_a["Idempotency-Key"] = shared_key
+    headers_b["Idempotency-Key"] = shared_key
+
+    response_a = client.post("/api/chat", json={"message": "hello"}, headers=headers_a)
+    response_b = client.post("/api/chat", json={"message": "hello"}, headers=headers_b)
+
+    assert response_a.status_code == 200
+    assert response_b.status_code == 200
+    assert response_a.json()["campaign_id"] != response_b.json()["campaign_id"]
+
+
+def test_pre_execution_rejection_does_not_consume_key(monkeypatch) -> None:
+    settings.AI_ENABLED = False
+    settings.OPENAI_API_KEY = None
+    client = TestClient(app)
+    headers = _user_scoped_headers(client, "idempotent-limit-retry")
+    headers["Idempotency-Key"] = str(uuid4())
+    original_validator = orchestrator_module.validate_daily_request_limit
+
+    def reject_once(db, owner_user_id):
+        monkeypatch.setattr(
+            orchestrator_module,
+            "validate_daily_request_limit",
+            original_validator,
+        )
+        raise HTTPException(status_code=429, detail="temporarily limited")
+
+    monkeypatch.setattr(
+        orchestrator_module, "validate_daily_request_limit", reject_once
+    )
+    rejected = client.post("/api/chat", json={"message": "hello"}, headers=headers)
+    assert rejected.status_code == 429
+
+    accepted = client.post("/api/chat", json={"message": "hello"}, headers=headers)
+    assert accepted.status_code == 200
+
+
+def test_concurrent_duplicate_has_one_execution_owner(monkeypatch) -> None:
+    settings.AI_ENABLED = False
+    settings.OPENAI_API_KEY = None
+    client = TestClient(app)
+    headers = _user_scoped_headers(client, "idempotent-concurrent")
+    headers["Idempotency-Key"] = str(uuid4())
+    parser_calls = 0
+
+    async def delayed_parse(**kwargs):  # noqa: ANN003
+        nonlocal parser_calls
+        parser_calls += 1
+        await asyncio.sleep(0.15)
+        return ParsedAction(
+            raw_text="hello",
+            action=ActionType.OBSERVE,
+            confidence=1.0,
+            parse_status="ok",
+        )
+
+    monkeypatch.setattr(
+        orchestrator_module.orchestrator.action_parser_agent,
+        "parse",
+        delayed_parse,
+    )
+
+    def send_request():
+        return TestClient(app).post(
+            "/api/chat", json={"message": "hello"}, headers=headers
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        first, second = executor.map(lambda _: send_request(), range(2))
+
+    statuses = {first.status_code, second.status_code}
+    assert statuses <= {200, 503}
+    assert 200 in statuses
+    assert parser_calls == 1
+    successful_responses = [
+        response for response in (first, second) if response.status_code == 200
+    ]
+    if len(successful_responses) == 2:
+        assert successful_responses[0].json() == successful_responses[1].json()
+
+
+def test_malformed_idempotency_key_is_rejected_before_execution() -> None:
+    settings.AI_ENABLED = False
+    settings.OPENAI_API_KEY = None
+    client = TestClient(app)
+    headers = _user_scoped_headers(client, "idempotent-malformed")
+    headers["Idempotency-Key"] = "not-a-uuid"
+
+    response = client.post("/api/chat", json={"message": "hello"}, headers=headers)
+    assert response.status_code == 400
+
+    with session() as db:
+        assert db.count_owner_campaigns(
+            _resolved_internal_user_id(client, "idempotent-malformed")
+        ) == 0
 
 
 def test_chat_requires_authorization() -> None:
