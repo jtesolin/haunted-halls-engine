@@ -56,13 +56,19 @@ def build_director_input(
     for npc_id in sorted(npc_ids):
         npc = npcs[npc_id]
         if not isinstance(npc, dict):
-            raise InvalidDirectorContextError("Authoritative NPC entry is malformed.")
+            raise InvalidDirectorContextError(
+                f"Authoritative NPC '{npc_id}' entry is malformed."
+            )
         location = npc.get("location")
         status = npc.get("status")
         if not isinstance(location, str) or world.get_room(location) is None:
-            raise InvalidDirectorContextError("Authoritative NPC location is invalid.")
+            raise InvalidDirectorContextError(
+                f"Authoritative NPC '{npc_id}' location is invalid."
+            )
         if status not in {"active", "absent"}:
-            raise InvalidDirectorContextError("Authoritative NPC status is invalid.")
+            raise InvalidDirectorContextError(
+                f"Authoritative NPC '{npc_id}' status is invalid."
+            )
         destinations = [
             exit_data["room_id"]
             for exit_data in world.available_exits(location)
