@@ -9,6 +9,14 @@ from app.schemas.world import (
     WorldActionResult,
     WorldActionType,
 )
+from app.schemas.director import (
+    DirectorInput,
+    DirectorNPCContext,
+    DirectorPlayerActionContext,
+    DirectorProposal,
+    NoActionProposal,
+    WorldActionProposal,
+)
 
 __all__ = [
     "AdvanceClockWorldAction",
@@ -18,4 +26,10 @@ __all__ = [
     "WorldAction",
     "WorldActionResult",
     "WorldActionType",
+    "DirectorInput",
+    "DirectorNPCContext",
+    "DirectorPlayerActionContext",
+    "DirectorProposal",
+    "NoActionProposal",
+    "WorldActionProposal",
 ]

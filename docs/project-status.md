@@ -401,25 +401,37 @@ Implemented as part of this milestone:
 * Player `WAIT` semantics remain intact and continue to route through the deterministic clock tick path.
 * State transitions include precise `state_delta` payloads, strict bounds checks, successful idempotent no-op handling, and semantic validation that leaves authoritative input state unchanged on failure.
 
-This milestone intentionally defers the future Director Agent, normal chat orchestration integration, world-action proposal flow, and adjacent roadmap work until Phase 7B.
+This milestone intentionally deferred Director model behavior and normal chat
+orchestration integration until the approved Phase 7B sequence.
 
-## Phase 7B — Director Agent v1
+## Phase 7B — Director rollout
 
-**Status: Next planned milestone**
+**Status: 7B1 contract foundation implemented; 7B2 and 7B3 remain deferred**
 
-Planned implementation path:
+The approved sequence is:
 
-* Director-side proposal/validation flow for privileged world actions.
-* Model-backed or deterministic Director action selection, once the world-authority foundation is in place.
-* Integration of world-authority proposals into orchestrator or chat execution only after the lower-level deterministic contract is stable.
+1. **7B1 — Director Contract & Proposal Boundary:** implemented in this
+   engine slice. It provides a bounded authoritative Director input projection
+   and a strict zero-or-one proposal contract that reuses the Phase 7A
+   `WorldAction` vocabulary. The projection is deterministic and non-mutating;
+   malformed authoritative fields fail explicitly.
+2. **7B2 — Model-backed Director Agent:** follows 7B1. Add the Director model
+   call, structured-output prompt/model policy and token-budget integration,
+   diagnostics, and focused proposal-generation tests. Keep it disconnected
+   from normal chat execution.
+3. **Issue #3 — Idempotent Chat Turns:** may proceed in parallel with 7B2 in a
+   separate engine worktree/clone. It owns request identity, retries,
+   persistence/concurrency semantics, and BFF/frontend retry propagation.
+4. **7B3 — Director Orchestration Integration:** follows both 7B2 and issue #3.
+   It will invoke the Director in the turn, execute validated proposals through
+   `WorldAuthorityExecutor`, persist resulting state/events, and ground the
+   final narrator projection in the resulting authoritative state.
 
-Explicit deferrals for this milestone remain in place:
-
-* Director model calls.
-* Director prompts and model policy work.
-* Automatic world actions in normal chat orchestration.
-* Narrator, HTTP, frontend, combat, and broader simulation features.
-* Unrelated roadmap work outside Phase 7A.
+Web issue `jtesolin/haunted-halls#21` may run independently with this engine
+work, and #22 follows that cleanup. The 7B rollout does not include combat,
+doors/locks/keys, autonomous NPC simulation beyond explicit Director actions,
+generic perception, narrator validation/retry, semantic-memory redesign,
+content/engine separation, broad E2E expansion, or D7 observability work.
 
 ## Authentication and Authorization
 
@@ -491,11 +503,14 @@ Extracts durable facts/memories from longer-running play.
 
 ### Director Agent
 
-**Not currently implemented**
+**7B1 contract foundation implemented; model-backed behavior deferred to 7B2**
 
-Earlier planning included a Director Agent, but the current engine architecture does not require one yet.
-
-The Director should remain deferred until the deterministic world model contains enough meaningful game systems for a Director to control through explicit tools. Phase 7A has established the deterministic world-authority foundation before Phase 7B introduces Director Agent v1.
+The engine now exposes a bounded, typed authoritative context for future
+Director proposal selection and a strict proposal contract representing no
+action or one existing typed `WorldAction`. Context construction does not
+mutate or repair authoritative state, and the proposal contract does not
+execute actions. The Director model call, prompts, policy/token-budget work,
+and normal-chat integration remain deferred to 7B2 and 7B3 respectively.
 
 ## Current Persistence
 
@@ -701,11 +716,12 @@ Durable repository context was hardened before Phase 7 through the stable archit
 
 ## Director Agent
 
-**Deferred — Phase 7B follow-up after Phase 7A**
+**7B1 contract implemented — 7B2 model behavior and 7B3 integration deferred**
 
-Earlier planning included a Director Agent, but the current engine architecture does not require one yet.
-
-The Director should remain deferred until the deterministic world model contains enough meaningful game systems for a Director to control through explicit tools. Phase 7A has established the deterministic world-authority foundation before Phase 7B introduces Director Agent v1.
+The 7B1 contract provides a bounded authoritative input projection and a
+strict zero-or-one proposal boundary over the existing typed world actions.
+The Director model call and normal chat orchestration remain deferred to 7B2
+and 7B3.
 
 Potential future Director capabilities:
 
@@ -909,7 +925,7 @@ PostgreSQL, vector databases, deployment infrastructure, additional agents, and 
 | Malformed campaign state hardening | Complete (issue #2 / PR #33) |
 | Playwright E2E foundation     | Complete (E2E-1)  |
 | World Authority Foundation    | Complete (Phase 7A) |
-| Director Agent                | Deferred (Phase 7B follow-up) |
+| Director Agent                | 7B1 contract implemented; 7B2 model and 7B3 integration deferred |
 | Domain MCP servers            | Future            |
 | PostgreSQL local/CI compatibility | Complete       |
 | Cloud SQL PostgreSQL foundation | Complete         |
@@ -922,11 +938,17 @@ PostgreSQL, vector databases, deployment infrastructure, additional agents, and 
 
 # Next Step
 
-Phase 7A — World Authority Foundation is complete.
+Phase 7A — World Authority Foundation is complete, and 7B1 — Director
+Contract & Proposal Boundary is implemented.
 
-The next milestone is **Phase 7B — Director Agent v1**.
+The next active work is **7B2 — Model-backed Director Agent**. Issue #3 may
+proceed in parallel in a separate engine worktree/clone. 7B3 — Director
+Orchestration Integration remains sequenced after both.
 
-Phase 7A established a separate deterministic privileged world-authority boundary with explicit typed world actions for `move_npc`, `set_npc_status`, `advance_clock`, and `record_fact`, plus non-mutating validation and precise state deltas. The Director Agent, normal chat orchestration integration, and other adjacent roadmap work remain intentionally deferred until the deterministic world-authority foundation is stable.
+Phase 7A established the separate deterministic privileged world-authority
+boundary. 7B1 adds only the bounded context and zero-or-one proposal boundary;
+the Director model call and normal chat orchestration integration remain
+intentionally deferred.
 
 Phase 5 should be considered closed as of engine commit:
 
