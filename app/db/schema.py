@@ -112,3 +112,21 @@ memories = Table(
     String("kind", nullable=False), Text("content", nullable=False), Text("embedding_json", nullable=False),
     Float("importance", nullable=False), String("source_event_id"), Text("created_at", nullable=False),
 )
+
+chat_request_idempotency = Table(
+    "chat_request_idempotency",
+    metadata,
+    Integer("id", primary_key=True, autoincrement=True),
+    String("owner_user_id", ForeignKey("internal_users.user_id", ondelete="RESTRICT"), nullable=False),
+    String("idempotency_key", nullable=False),
+    String("request_fingerprint", nullable=False),
+    String("requested_campaign_id"),
+    String("requested_character_id"),
+    String("status", nullable=False),
+    String("resolved_campaign_id"),
+    String("turn_id"),
+    Text("reply"),
+    Text("created_at", nullable=False),
+    Text("completed_at"),
+    UniqueConstraint("owner_user_id", "idempotency_key", name="uq_chat_request_idempotency_owner_key"),
+)
