@@ -35,6 +35,17 @@ class DirectorDeterministicGrader(DeterministicGrader):
         # truthy under bool()). Validation is deterministic/idempotent, so
         # re-running it here for scenarios that already passed through the
         # runner is safe.
+        #
+        # A target guard must come FIRST: a Narrator scenario handed to this
+        # grader would otherwise pass validate_scenario_contract() (it is a
+        # valid Narrator scenario) and then have its actual_output
+        # misinterpreted as a Director proposal, producing a false-green
+        # result.
+        if scenario.target != ScenarioTarget.DIRECTOR:
+            raise ValueError(
+                f"DirectorDeterministicGrader requires target={ScenarioTarget.DIRECTOR!r}, "
+                f"got {scenario.target!r}"
+            )
         validate_scenario_contract(scenario)
         actual_output = scenario.actual_output
         if actual_output is None:
@@ -178,7 +189,15 @@ class NarratorDeterministicGrader(DeterministicGrader):
         # See DirectorDeterministicGrader.grade(): this is also part of the
         # public grader boundary and must independently enforce the shared
         # scenario contract (target-specific input validation, deterministic
-        # expectation validation, and Narrator ignored-field detection).
+        # expectation validation, and Narrator ignored-field detection),
+        # AFTER a target guard that rejects a Director scenario handed to
+        # this grader before its actual_output is misinterpreted as
+        # Narrator reply text.
+        if scenario.target != ScenarioTarget.NARRATOR:
+            raise ValueError(
+                f"NarratorDeterministicGrader requires target={ScenarioTarget.NARRATOR!r}, "
+                f"got {scenario.target!r}"
+            )
         validate_scenario_contract(scenario)
         actual_output = scenario.actual_output
         if actual_output is None:

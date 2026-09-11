@@ -2920,3 +2920,129 @@ def test_checked_in_absent_npc_scenario_accepts_valid_bounded_move_proposal() ->
     assert result.passed is True
     assert result.score == 1.0
     assert result.max_score == 1.0
+
+
+# --- Item 1: grader target identity guard -----------------------------------
+
+
+def test_director_grader_class_rejects_narrator_scenario() -> None:
+    narrator_scenario = Scenario(
+        scenario_id="target-guard-narrator-into-director-class",
+        description="d",
+        target=ScenarioTarget.NARRATOR,
+        authoritative_input=_NARRATOR_FIXTURE,
+        actual_output={"reply_text": "A safe description."},
+    )
+    with pytest.raises(ValueError, match="DirectorDeterministicGrader requires target"):
+        DirectorDeterministicGrader().grade(narrator_scenario)
+
+
+def test_director_grader_function_rejects_narrator_scenario() -> None:
+    narrator_scenario = Scenario(
+        scenario_id="target-guard-narrator-into-director-fn",
+        description="d",
+        target=ScenarioTarget.NARRATOR,
+        authoritative_input=_NARRATOR_FIXTURE,
+        actual_output={"reply_text": "A safe description."},
+    )
+    with pytest.raises(ValueError, match="DirectorDeterministicGrader requires target"):
+        grade_director_output(narrator_scenario)
+
+
+def test_narrator_grader_class_rejects_director_scenario() -> None:
+    director_scenario = Scenario(
+        scenario_id="target-guard-director-into-narrator-class",
+        description="d",
+        target=ScenarioTarget.DIRECTOR,
+        authoritative_input=_DIRECTOR_FIXTURE,
+        deterministic_expectations={"require_none": True},
+        actual_output={"decision": "none"},
+    )
+    with pytest.raises(ValueError, match="NarratorDeterministicGrader requires target"):
+        NarratorDeterministicGrader().grade(director_scenario)
+
+
+def test_narrator_grader_function_rejects_director_scenario() -> None:
+    director_scenario = Scenario(
+        scenario_id="target-guard-director-into-narrator-fn",
+        description="d",
+        target=ScenarioTarget.DIRECTOR,
+        authoritative_input=_DIRECTOR_FIXTURE,
+        deterministic_expectations={"require_none": True},
+        actual_output={"decision": "none"},
+    )
+    with pytest.raises(ValueError, match="NarratorDeterministicGrader requires target"):
+        grade_narrator_output(director_scenario)
+
+
+def test_same_target_direct_grader_calls_still_work() -> None:
+    """The target guard must not reject the correct same-target calls."""
+
+    director_scenario = Scenario(
+        scenario_id="target-guard-valid-director",
+        description="d",
+        target=ScenarioTarget.DIRECTOR,
+        authoritative_input=_DIRECTOR_FIXTURE,
+        deterministic_expectations={"require_none": True},
+        actual_output={"decision": "none"},
+    )
+    director_results = DirectorDeterministicGrader().grade(director_scenario)
+    assert director_results and all(result.passed for result in director_results)
+    assert all(result.passed for result in grade_director_output(director_scenario))
+
+    narrator_scenario = Scenario(
+        scenario_id="target-guard-valid-narrator",
+        description="d",
+        target=ScenarioTarget.NARRATOR,
+        authoritative_input=_NARRATOR_FIXTURE,
+        actual_output={"reply_text": "A safe description."},
+    )
+    narrator_results = NarratorDeterministicGrader().grade(narrator_scenario)
+    assert narrator_results and all(result.passed for result in narrator_results)
+    assert all(result.passed for result in grade_narrator_output(narrator_scenario))
+
+
+# --- Item 2: bounded set_npc_status reference coverage ----------------------
+
+
+def test_set_npc_status_with_bounded_npc_passes() -> None:
+    scenario = Scenario(
+        scenario_id="set-npc-status-bounded-npc",
+        description="d",
+        target=ScenarioTarget.DIRECTOR,
+        authoritative_input=_DIRECTOR_FIXTURE,
+        actual_output={
+            "decision": "act",
+            "world_action": {
+                "action": "set_npc_status",
+                "npc_id": "eval_npc_a",
+                "status": "absent",
+            },
+        },
+    )
+    results = {result.name: result for result in grade_scenario(scenario)}
+    assert results["proposal_contract"].passed is True
+    assert results["allowed_world_action_vocab"].passed is True
+    assert results["entity_in_bounded_context"].passed is True
+    assert all(result.passed for result in results.values())
+
+
+def test_set_npc_status_with_unknown_npc_fails_bounded_context() -> None:
+    scenario = Scenario(
+        scenario_id="set-npc-status-unknown-npc",
+        description="d",
+        target=ScenarioTarget.DIRECTOR,
+        authoritative_input=_DIRECTOR_FIXTURE,
+        actual_output={
+            "decision": "act",
+            "world_action": {
+                "action": "set_npc_status",
+                "npc_id": "eval_unknown_npc",
+                "status": "absent",
+            },
+        },
+    )
+    results = {result.name: result for result in grade_scenario(scenario)}
+    assert results["proposal_contract"].passed is True
+    assert results["entity_in_bounded_context"].passed is False
+    assert any(not result.passed for result in results.values())
