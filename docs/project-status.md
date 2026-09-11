@@ -454,6 +454,82 @@ semantic-memory redesign, content/engine separation, broad E2E expansion, or
 D7 observability work. No new `WorldAction` types (for example `spawn_npc`)
 were introduced in 7B3.
 
+## Phase 8 — Narrative Progression & Character Systems
+
+**Status: Active. 8A (Story / Quest Model) implemented as a domain
+foundation; tracked by #52.**
+
+### 8A — Story / Quest Model
+
+A deterministic story/quest domain foundation lives in `app/game/story.py`
+and `app/schemas/story.py`. The governing invariant: player prose is never
+evidence of quest progression. Progression is driven only by a small typed
+`StorySignal` vocabulary (`room_entered`, `npc_spoken_to`, `item_acquired`,
+`fact_recorded`) derived from already-authoritative Phase 6/7 outcomes, never
+from `ParsedAction.raw_text` or model output.
+
+Static quest/objective definitions are immutable content data, kept separate
+from mutable per-campaign progress. `ensure_story_state()` provides/normalizes
+the `story` progress namespace in authoritative campaign state, safely
+resetting any single quest whose persisted progress is malformed or
+internally inconsistent to that quest's fresh starting progress without
+touching other campaign-state namespaces or granting unearned completion.
+`apply_story_signal()` deterministically advances at most one currently
+active, in-order objective per matching signal, completes a quest once its
+final objective completes, is idempotent for signals that match an
+already-completed objective, and returns a typed `StoryProgressionResult`
+(never a bare boolean) that also distinguishes not-applicable signals from
+malformed/unrecognized ones. It does not persist events itself.
+
+Each progression trigger condition (`signal_type`, `match_value`) is
+unique across the static story definition collection, enabling payload-level
+replay idempotence without event identity; richer repeated or shared triggers
+require future authoritative event identity/consumption semantics.
+
+One development quest, "The Library's Whisper", proves the model using only
+existing canonical content: enter the `library`, speak to `library_ghost`,
+then acquire the `old_book`.
+
+8A intentionally does not wire story evaluation into
+`ChatOrchestrator.handle_chat()` or expand the Director contract; that
+integration is deferred to a later Phase 8 milestone.
+
+## Phase 8B — Character Progression Model
+
+**Status: Complete**
+
+Phase 8B (`jtesolin/haunted-halls-engine#54`, tracked by the Phase 8 roadmap
+`jtesolin/haunted-halls-engine#52`) adds a persistent, deterministic
+character-progression domain foundation that can later power Phase 8C
+ability/check resolution, without designing the system around combat.
+
+* `app/game/character_progression.py` normalizes and mutates a
+  `state["player"]["progression"]` namespace with four stable, exploration/
+  narrative-oriented tracks (`investigation`, `resolve`, `rapport`,
+  `occult`), each bounded `0`-`10` with a deterministic zero-point default and
+  no random stats.
+* `ensure_character_progression_state()` is a lazy normalization helper: it
+  safely defaults legacy campaign state with no progression namespace,
+  re-derives the persisted version marker, drops arbitrary/unknown track
+  ids, resets out-of-range or malformed rank values to the safe zero-point
+  default rather than granting elevated ranks, and
+  dedupes/filters unlocked-ability ids to non-empty strings, all without
+  regenerating unrelated `items`/`npcs`/`clock`/`facts` state.
+* `grant_progress()` and `unlock_ability()` return structured
+  `ProgressionGrantResult` / `AbilityUnlockResult` outcomes (see
+  `app/schemas/character_progression.py`) reporting success/failure,
+  whether a domain mutation occurred, prior/new points, cap status, and
+  idempotent duplicate-unlock detection. Invalid grants, unknown track ids,
+  and invalid ability ids are rejected without mutation; duplicate ability
+  unlocks are a successful no-op.
+* No database migration was required; progression persists as part of the
+  existing authoritative campaign-state JSON document, consistent with
+  current persistence architecture.
+* This milestone intentionally does not implement ability/check resolution
+  (Phase 8C), does not touch `ChatOrchestrator`, the Director, or
+  `WorldAuthorityExecutor`, and preserves the existing `CharacterInfo` /
+  `CharacterList` API DTOs in `app/schemas/character.py` unchanged.
+
 ## Authentication and Authorization
 
 **Status: Complete for the deployed public custom-domain BFF and private engine boundary**
