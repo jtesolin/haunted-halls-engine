@@ -5,42 +5,45 @@ from typing import Any
 
 from evals.schemas import ScenarioResult
 
-# Defensive guard: keys that must never carry raw provider/model response text
-# into a serialized report, even if a grader accidentally attaches one.
-# `actual_output` and `fixture_output` are excluded structurally below via
-# `exclude=` on `model_dump`; these are extra nested-key names that
-# historically carried raw reply text in grader details, plus the same
-# response-bearing keys `_extract_reply_text` understands (`reply_text`,
-# `text`, `output`, `reply`), since `GraderResult.details` is intentionally
-# generic and a grader could attach any of them. `fixture_output` and
-# `actual_output` are repeated here as well because `details` is a bare
-# `dict[str, Any]` and nothing prevents a grader from copying either field
-# into it under its own name.
-_RAW_OUTPUT_KEYS = frozenset(
+# Report serialization uses an explicit SAFE allowlist for GraderResult.details
+# rather than a blacklist. `GraderResult.details` is an arbitrary
+# `dict[str, Any]`; a future/custom grader could otherwise attach raw
+# provider/model response content under any unrecognized key (for example
+# `provider_response`, `response_body`, `error`, or `payload`) and have it
+# flow straight into a stable JSON report. Only bounded, known-safe
+# diagnostic fields are ever copied into the serialized report; every other
+# key/value pair in `details` (known or unknown) is dropped.
+_SAFE_DETAIL_KEYS = frozenset(
     {
-        "actual_output",
-        "fixture_output",
-        "actual",
-        "raw_response",
-        "raw_output",
-        "reply_text",
-        "text",
-        "output",
-        "reply",
+        "length",
+        "actual_length",
+        "expected",
+        "forbidden",
+        "decision",
+        "actual_decision",
+        "expected_decision",
+        "action",
+        "allowed",
+        "npc_id",
+        "destination",
+        "legal_destinations",
+        "reason",
+        "error_type",
+        "error_count",
+        "error_locations",
     }
 )
 
 
-def _strip_raw_output_fields(value: Any) -> Any:
-    if isinstance(value, dict):
-        return {
-            key: _strip_raw_output_fields(inner)
-            for key, inner in value.items()
-            if key not in _RAW_OUTPUT_KEYS
-        }
-    if isinstance(value, list):
-        return [_strip_raw_output_fields(item) for item in value]
-    return value
+def _safe_grader_details(details: dict[str, Any]) -> dict[str, Any]:
+    return {key: value for key, value in details.items() if key in _SAFE_DETAIL_KEYS}
+
+
+def _safe_grader_result(grader_result: dict[str, Any]) -> dict[str, Any]:
+    safe = dict(grader_result)
+    if "details" in safe and isinstance(safe["details"], dict):
+        safe["details"] = _safe_grader_details(safe["details"])
+    return safe
 
 
 def summarize_results(results: Sequence[ScenarioResult]) -> dict[str, Any]:
@@ -49,18 +52,22 @@ def summarize_results(results: Sequence[ScenarioResult]) -> dict[str, Any]:
     failed = total - passed
     score_total = sum(result.score or 0.0 for result in results)
     max_total = sum(result.max_score or 0.0 for result in results)
+
+    serialized_results = []
+    for result in results:
+        dumped = result.model_dump(mode="json", exclude={"actual_output", "fixture_output"})
+        dumped["grader_results"] = [
+            _safe_grader_result(grader_result) for grader_result in dumped.get("grader_results", [])
+        ]
+        serialized_results.append(dumped)
+
     return {
         "total_scenarios": total,
         "passed": passed,
         "failed": failed,
         "pass_rate": 0.0 if total == 0 else passed / total,
         "score": 0.0 if max_total == 0 else score_total / max_total,
-        "results": [
-            _strip_raw_output_fields(
-                result.model_dump(mode="json", exclude={"actual_output", "fixture_output"})
-            )
-            for result in results
-        ],
+        "results": serialized_results,
     }
 
 

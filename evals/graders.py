@@ -33,7 +33,7 @@ class DirectorDeterministicGrader(DeterministicGrader):
                     passed=False,
                     score=0.0,
                     max_score=1.0,
-                    details={"error": "No director output was produced."},
+                    details={"reason": "no_director_output_produced"},
                 )
             ]
 

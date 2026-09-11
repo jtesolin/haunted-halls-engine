@@ -3,20 +3,23 @@ from __future__ import annotations
 import copy
 import asyncio
 import json
+import sys
+import traceback
 
 import pytest
 from pydantic import ValidationError
-from sqlalchemy import func, select
+from sqlalchemy import select
 
 from app.agents.narrator import NarratorAgentInput
 from app.db.schema import campaigns, game_events, model_requests, turns
-from app.db.session import get_engine
+from app.db.session import get_engine, session
 from app.schemas.director import DirectorInput
 
 from evals.graders import grade_scenario
 from evals.report import summarize_results
 from evals.runner import EvalRunner, run_scenarios
 from evals.runner import LiveEvalError, _run_live_scenario, _run_live_scenarios
+import evals.runner as runner_module
 from evals.scenarios import filter_scenarios, load_scenarios
 from evals.schemas import GraderResult, Scenario, ScenarioResult, ScenarioTarget
 
@@ -594,6 +597,12 @@ def test_mocked_live_director_failure_is_sanitized(monkeypatch) -> None:
     with pytest.raises(LiveEvalError) as exc_info:
         asyncio.run(_run_live_scenario(scenario))
     assert secret_marker not in str(exc_info.value)
+    assert exc_info.value.__cause__ is None
+    assert secret_marker not in "".join(
+        traceback.format_exception(
+            type(exc_info.value), exc_info.value, exc_info.value.__traceback__
+        )
+    )
 
 
 _NARRATOR_FIXTURE = {
@@ -709,6 +718,12 @@ def test_mocked_live_narrator_failure_is_sanitized(monkeypatch) -> None:
     with pytest.raises(LiveEvalError) as exc_info:
         asyncio.run(_run_live_scenario(scenario))
     assert secret_marker not in str(exc_info.value)
+    assert exc_info.value.__cause__ is None
+    assert secret_marker not in "".join(
+        traceback.format_exception(
+            type(exc_info.value), exc_info.value, exc_info.value.__traceback__
+        )
+    )
 
 
 def test_mocked_live_batch_runs_multiple_scenarios_in_one_event_loop(monkeypatch) -> None:
@@ -852,6 +867,36 @@ def test_report_strips_response_bearing_detail_keys_recursively() -> None:
     assert "safe term" in serialized
 
 
+def test_report_allowlists_grader_details_dropping_unknown_keys() -> None:
+    """`GraderResult.details` is an arbitrary `dict[str, Any]`; a grader
+    could attach a raw provider/model response body under any unrecognized
+    key. The report boundary must use an explicit allowlist so unknown keys
+    are dropped by default, rather than relying on an ever-expanding
+    blacklist of specific known-bad key names."""
+
+    marker = "UNIQUE_RAW_PROVIDER_RESPONSE_MARKER_5K2P"
+    result = ScenarioResult(
+        scenario_id="report-allowlist-unknown-key",
+        description="Unknown grader detail keys must not survive report serialization.",
+        target=ScenarioTarget.NARRATOR,
+        grader_results=[
+            GraderResult(
+                name="fake-grader",
+                passed=True,
+                details={"provider_response": marker, "length": 42},
+            )
+        ],
+        passed=True,
+        score=1.0,
+        max_score=1.0,
+    )
+    summary = summarize_results([result])
+    details = summary["results"][0]["grader_results"][0]["details"]
+    assert marker not in json.dumps(summary)
+    assert "provider_response" not in details
+    assert details["length"] == 42
+
+
 def test_report_summary_has_stable_json_fields() -> None:
     scenario = Scenario(
         scenario_id="report-stable-fields",
@@ -949,28 +994,83 @@ def test_offline_results_have_empty_model_metadata() -> None:
     assert result.model_metadata == {}
 
 
-def _persistence_row_counts() -> dict[str, int]:
+def _persistence_row_snapshot() -> dict[str, list[dict[str, object]]]:
+    """Snapshot full row content (not just counts) for every eval-relevant
+    table, sorted by primary key, so update-in-place is detected as reliably
+    as row creation/deletion."""
+
     engine = get_engine()
     with engine.connect() as connection:
-        return {
-            "campaigns": connection.execute(select(func.count()).select_from(campaigns)).scalar_one(),
-            "turns": connection.execute(select(func.count()).select_from(turns)).scalar_one(),
-            "game_events": connection.execute(select(func.count()).select_from(game_events)).scalar_one(),
-            "model_requests": connection.execute(
-                select(func.count()).select_from(model_requests)
-            ).scalar_one(),
-        }
+        snapshot: dict[str, list[dict[str, object]]] = {}
+        for name, table, order_column in (
+            ("campaigns", campaigns, campaigns.c.id),
+            ("turns", turns, turns.c.id),
+            ("game_events", game_events, game_events.c.id),
+            ("model_requests", model_requests, model_requests.c.id),
+        ):
+            rows = connection.execute(select(table).order_by(order_column)).mappings().all()
+            snapshot[name] = [dict(row) for row in rows]
+        return snapshot
+
+
+def _seed_persistence_rows() -> None:
+    """Seed one representative row per eval-relevant table so nonmutation
+    tests can detect an in-place update, not just row creation/deletion:
+    counts alone stay equal even if an existing row's content is silently
+    rewritten."""
+
+    with session() as db:
+        user = db.resolve_internal_user(
+            identity_provider="google",
+            provider_issuer="https://accounts.google.com",
+            provider_subject="eval-nonmutation-user",
+            email="eval-nonmutation@example.com",
+            email_verified=True,
+            display_name=None,
+            avatar_url=None,
+        )
+        db.create_campaign(
+            campaign_id="eval_nonmutation_campaign",
+            owner_user_id=user.id,
+            name="Eval nonmutation campaign",
+        )
+        db.create_turn(
+            campaign_id="eval_nonmutation_campaign",
+            turn_id="eval_nonmutation_turn",
+            role="user",
+            content="seeded content that must remain untouched",
+        )
+        db.add_event(
+            event_id="eval_nonmutation_event",
+            campaign_id="eval_nonmutation_campaign",
+            turn_id="eval_nonmutation_turn",
+            type="player_message_received",
+        )
+        db.log_model_request(
+            request_id="eval_nonmutation_request",
+            owner_user_id=user.id,
+            campaign_id="eval_nonmutation_campaign",
+            turn_id="eval_nonmutation_turn",
+            agent_name="narrator",
+            model="seeded-model",
+            estimated_input_tokens=1,
+            success=True,
+        )
 
 
 def test_offline_eval_execution_does_not_mutate_campaign_or_telemetry_persistence() -> None:
     """Issue #55 requires proof that eval execution does not mutate campaign
     or database state. Running the whole checked-in offline corpus must not
-    create/update any campaign, turn, game-event, or model-request row."""
+    create, delete, or update (in place) any campaign, turn, game-event, or
+    model-request row. A pre-seeded representative row per table makes the
+    update-in-place case meaningful, since an empty table trivially proves
+    only creation/deletion protection."""
 
-    before = _persistence_row_counts()
+    _seed_persistence_rows()
+    before = _persistence_row_snapshot()
     results = run_scenarios(load_scenarios())
     assert len(results) == 8
-    after = _persistence_row_counts()
+    after = _persistence_row_snapshot()
     assert after == before
 
 
@@ -978,7 +1078,8 @@ def test_mocked_live_eval_execution_does_not_mutate_campaign_or_telemetry_persis
     monkeypatch,
 ) -> None:
     """The live harness invokes the real Director/Narrator agent
-    abstractions; even a mocked live run must not touch persistence."""
+    abstractions; even a mocked live run must not touch persistence,
+    including in-place updates to a pre-seeded row."""
 
     class FakeProposal:
         def model_dump(self):
@@ -1003,10 +1104,11 @@ def test_mocked_live_eval_execution_does_not_mutate_campaign_or_telemetry_persis
         authoritative_input=_DIRECTOR_FIXTURE,
     )
 
-    before = _persistence_row_counts()
+    _seed_persistence_rows()
+    before = _persistence_row_snapshot()
     output, model_metadata = asyncio.run(_run_live_scenario(scenario))
     EvalRunner().run(scenario, actual_output=output, model_metadata=model_metadata)
-    after = _persistence_row_counts()
+    after = _persistence_row_snapshot()
     assert after == before
 
 
@@ -1020,26 +1122,70 @@ def test_readme_documented_scenarios_and_tags_exist_in_corpus() -> None:
     )
 
 
-_PRODUCTION_WORLD_IDENTIFIERS = (
-    "entry_hall",
-    "grand_corridor",
-    "library_ghost",
-    "old_caretaker",
-    "brass_key",
-    "\"library\"",
-)
+def _assert_eval_namespaced(value: str, *, where: str) -> None:
+    assert value.startswith("eval_"), f"{where} must use the synthetic eval_ namespace, got {value!r}"
+
+
+def _assert_director_input_is_synthetic(authoritative_input: dict, *, scenario_id: str) -> None:
+    _assert_eval_namespaced(
+        authoritative_input["current_player_room_id"],
+        where=f"{scenario_id}.authoritative_input.current_player_room_id",
+    )
+    for npc in authoritative_input.get("npcs", []):
+        _assert_eval_namespaced(npc["npc_id"], where=f"{scenario_id}.npcs[].npc_id")
+        _assert_eval_namespaced(npc["location_id"], where=f"{scenario_id}.npcs[].location_id")
+        for destination in npc.get("one_hop_destination_room_ids", []):
+            _assert_eval_namespaced(
+                destination, where=f"{scenario_id}.npcs[].one_hop_destination_room_ids[]"
+            )
+
+
+def _assert_narrator_input_is_synthetic(authoritative_input: dict, *, scenario_id: str) -> None:
+    scene_context = authoritative_input.get("scene_context", {})
+    current_room = scene_context.get("current_room")
+    if current_room is not None:
+        _assert_eval_namespaced(
+            current_room["id"], where=f"{scenario_id}.scene_context.current_room.id"
+        )
+    for npc in scene_context.get("nearby_npcs", []):
+        _assert_eval_namespaced(npc["id"], where=f"{scenario_id}.scene_context.nearby_npcs[].id")
+    for item in scene_context.get("nearby_items", []):
+        _assert_eval_namespaced(item["id"], where=f"{scenario_id}.scene_context.nearby_items[].id")
+
+
+def _assert_director_world_action_is_synthetic(fixture_output, *, scenario_id: str) -> None:
+    if not isinstance(fixture_output, dict) or fixture_output.get("decision") != "act":
+        return
+    world_action = fixture_output.get("world_action", {})
+    npc_id = world_action.get("npc_id")
+    if npc_id is not None:
+        _assert_eval_namespaced(npc_id, where=f"{scenario_id}.fixture_output.world_action.npc_id")
+    destination_room_id = world_action.get("destination_room_id")
+    if destination_room_id is not None:
+        _assert_eval_namespaced(
+            destination_room_id,
+            where=f"{scenario_id}.fixture_output.world_action.destination_room_id",
+        )
 
 
 def test_checked_in_corpus_uses_synthetic_identifiers_not_production_world_ids() -> None:
-    """Issue #55 excludes production identifiers from eval fixtures. The
-    checked-in corpus must reference fixture-local synthetic IDs (for
-    example eval_foyer/eval_npc_a) rather than shipped campaign content, and
-    must still validate against the real production schemas."""
+    """Issue #55 excludes production identifiers from eval fixtures. Rather
+    than checking the corpus against an inherently incomplete blacklist of
+    specific production strings, structurally walk every checked-in
+    scenario's known entity-ID-bearing fields (room/NPC/item IDs, one-hop
+    destinations, and any proposed move's NPC/destination) and require the
+    synthetic eval_ namespace, without importing or coupling to any
+    production world/NPC/item registry."""
 
-    for path in sorted((_evals_scenarios_dir()).glob("*.json")):
-        raw_text = path.read_text(encoding="utf-8")
-        for identifier in _PRODUCTION_WORLD_IDENTIFIERS:
-            assert identifier not in raw_text, f"{path.name} references production identifier {identifier!r}"
+    for scenario in load_scenarios():
+        authoritative_input = scenario.authoritative_input
+        if scenario.target == ScenarioTarget.DIRECTOR:
+            _assert_director_input_is_synthetic(authoritative_input, scenario_id=scenario.scenario_id)
+            _assert_director_world_action_is_synthetic(
+                scenario.fixture_output, scenario_id=scenario.scenario_id
+            )
+        else:
+            _assert_narrator_input_is_synthetic(authoritative_input, scenario_id=scenario.scenario_id)
 
     # Production schema validation must still succeed against the synthetic
     # corpus (already exercised by load_scenarios() at import/collection
@@ -1051,9 +1197,74 @@ def test_checked_in_corpus_uses_synthetic_identifiers_not_production_world_ids()
             NarratorAgentInput.model_validate(scenario.authoritative_input)
 
 
-def _evals_scenarios_dir():
-    from pathlib import Path
+def _run_main_with_argv(monkeypatch, argv: list[str]) -> int:
+    monkeypatch.setattr(sys, "argv", ["evals.runner", *argv])
+    return runner_module.main()
 
-    import evals.scenarios as scenarios_module
 
-    return Path(scenarios_module.__file__).resolve().parent
+def test_cli_main_offline_json_scenario_id_filter_succeeds(monkeypatch, capsys) -> None:
+    exit_code = _run_main_with_argv(
+        monkeypatch, ["--scenario-id", "director-baseline-noop", "--json"]
+    )
+    assert exit_code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["total_scenarios"] == 1
+    assert payload["results"][0]["scenario_id"] == "director-baseline-noop"
+
+
+def test_cli_main_offline_json_tag_filter_succeeds(monkeypatch, capsys) -> None:
+    exit_code = _run_main_with_argv(monkeypatch, ["--tag", "movement", "--json"])
+    assert exit_code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["total_scenarios"] >= 1
+    assert all("movement" in result["tags"] for result in payload["results"])
+
+
+def test_cli_main_offline_json_agent_filter_succeeds(monkeypatch, capsys) -> None:
+    exit_code = _run_main_with_argv(monkeypatch, ["--agent", "narrator", "--json"])
+    assert exit_code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["total_scenarios"] >= 1
+    assert all(result["target"] == "narrator" for result in payload["results"])
+
+
+def test_cli_main_no_match_raises_system_exit(monkeypatch) -> None:
+    monkeypatch.setattr(sys, "argv", ["evals.runner", "--scenario-id", "does-not-exist"])
+    with pytest.raises(SystemExit):
+        runner_module.main()
+
+
+def test_cli_main_offline_grader_failure_returns_exit_code_1(monkeypatch, capsys) -> None:
+    """main() must surface a failing offline scenario as exit code 1, not
+    silently succeed."""
+
+    failing_scenario = Scenario(
+        scenario_id="cli-forced-failure",
+        description="Deliberately violates its own deterministic expectations.",
+        target=ScenarioTarget.DIRECTOR,
+        authoritative_input=_DIRECTOR_FIXTURE,
+        deterministic_expectations={"require_none": True},
+        fixture_output={"decision": "act", "world_action": {"action": "advance_clock", "ticks": 1}},
+    )
+    monkeypatch.setattr(runner_module, "load_scenarios", lambda: [failing_scenario])
+    exit_code = _run_main_with_argv(monkeypatch, ["--json"])
+    assert exit_code == 1
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["failed"] == 1
+
+
+def test_cli_main_live_without_credentials_fails_closed(monkeypatch, capsys) -> None:
+    """--live without configured credentials must fail closed with a
+    sanitized stderr message and exit code 2, never a raw traceback and
+    never a real provider call."""
+
+    monkeypatch.setattr(runner_module.settings, "AI_ENABLED", False)
+    monkeypatch.setattr(runner_module.settings, "OPENAI_API_KEY", "")
+    exit_code = _run_main_with_argv(
+        monkeypatch, ["--scenario-id", "director-baseline-noop", "--live"]
+    )
+    assert exit_code == 2
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "live eval failed" in captured.err
+    assert "Traceback" not in captured.err

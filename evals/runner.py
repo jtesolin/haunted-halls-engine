@@ -157,9 +157,14 @@ async def _run_live_scenario(scenario: Scenario) -> tuple[Any, dict[str, Any]]:
         try:
             result = await DirectorAgent().propose(director_input=director_input, model=selected_model)
         except Exception as exc:
+            # `from None` deliberately severs the exception chain: the raw
+            # provider/agent exception (and any response body/prompt content
+            # it carries) must never be retained as __cause__/__context__
+            # where a caller's traceback logging could expose it. Only the
+            # sanitized category message crosses this boundary.
             raise LiveEvalError(
                 f"director agent execution failed ({type(exc).__name__})"
-            ) from exc
+            ) from None
         metadata: dict[str, Any] = {"target_agent": "director", "model": selected_model}
         usage = _usage_metadata(getattr(result, "usage", None))
         if usage is not None:
@@ -172,9 +177,12 @@ async def _run_live_scenario(scenario: Scenario) -> tuple[Any, dict[str, Any]]:
         try:
             output = await NarratorAgent().generate(payload=narrator_input, model=selected_model)
         except Exception as exc:
+            # See the Director branch above: `from None` prevents the raw
+            # provider/agent exception from being retained as __cause__ so
+            # traceback logging cannot expose provider response content.
             raise LiveEvalError(
                 f"narrator agent execution failed ({type(exc).__name__})"
-            ) from exc
+            ) from None
         metadata = {"target_agent": "narrator", "model": selected_model}
         usage = _usage_metadata(
             ModelUsage(
