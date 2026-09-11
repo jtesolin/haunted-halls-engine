@@ -179,6 +179,86 @@ def test_malformed_narrator_authoritative_input_is_rejected_at_load(tmp_path) ->
         load_scenarios(tmp_path)
 
 
+def _write_scenario_file(tmp_path, scenario_id: str, target: str, expectations: dict) -> None:
+    payload = {
+        "scenario_id": scenario_id,
+        "description": "Deterministic expectation contract validation fixture.",
+        "target": target,
+        "authoritative_input": _DIRECTOR_FIXTURE if target == "director" else {
+            "player_message": "look around",
+            "scene_context": {
+                "current_room": {"id": "eval_foyer", "name": "Evaluation Foyer", "description": "d"},
+                "nearby_npcs": [],
+            },
+        },
+        "deterministic_expectations": expectations,
+    }
+    (tmp_path / f"{scenario_id}.json").write_text(json.dumps(payload), encoding="utf-8")
+
+
+def test_valid_director_deterministic_expectations_load(tmp_path) -> None:
+    _write_scenario_file(tmp_path, "director-valid-expectations", "director", {"require_none": True})
+    scenarios = load_scenarios(tmp_path)
+    assert scenarios[0].deterministic_expectations == {"require_none": True}
+
+
+def test_valid_narrator_deterministic_expectations_load(tmp_path) -> None:
+    _write_scenario_file(
+        tmp_path,
+        "narrator-valid-expectations",
+        "narrator",
+        {"contains": ["evaluation lantern"], "must_not_contain": ["forbidden"]},
+    )
+    scenarios = load_scenarios(tmp_path)
+    assert scenarios[0].deterministic_expectations["contains"] == ["evaluation lantern"]
+
+
+def test_unknown_director_expectation_key_is_rejected_at_load(tmp_path) -> None:
+    _write_scenario_file(
+        tmp_path, "director-unknown-expectation", "director", {"require_success": True}
+    )
+    with pytest.raises(ValueError, match="unsupported Director deterministic_expectations"):
+        load_scenarios(tmp_path)
+
+
+def test_unknown_narrator_expectation_key_is_rejected_at_load(tmp_path) -> None:
+    """A typo such as must_not_include must never silently pass through the
+    grader unchecked; it must fail scenario loading."""
+
+    _write_scenario_file(
+        tmp_path, "narrator-unknown-expectation", "narrator", {"must_not_include": ["ghost"]}
+    )
+    with pytest.raises(ValueError, match="unsupported Narrator deterministic_expectations"):
+        load_scenarios(tmp_path)
+
+
+def test_director_require_none_string_value_is_rejected_at_load(tmp_path) -> None:
+    _write_scenario_file(
+        tmp_path, "director-require-none-string", "director", {"require_none": "true"}
+    )
+    with pytest.raises(ValueError, match="require_none must be a bool"):
+        load_scenarios(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "expectations",
+    [
+        {"contains": True},
+        {"contains": 42},
+        {"contains": {"nested": "dict"}},
+        {"contains": [1, 2]},
+        {"contains": ""},
+        {"contains": []},
+        {"contains": ["ok", ""]},
+        {"must_not_contain": False},
+    ],
+)
+def test_malformed_narrator_expectation_values_are_rejected_at_load(tmp_path, expectations) -> None:
+    _write_scenario_file(tmp_path, "narrator-malformed-expectation", "narrator", expectations)
+    with pytest.raises(ValueError):
+        load_scenarios(tmp_path)
+
+
 
 def test_narrator_grounding_checks_are_fixture_specific() -> None:
     scenario = Scenario(
@@ -975,6 +1055,147 @@ def test_report_sanitizes_model_metadata_dropping_unknown_fields() -> None:
     assert marker not in render_report([result])
 
 
+class _NonSerializableMarker:
+    """A deliberately non-JSON-serializable object standing in for whatever
+    arbitrary content a caller might attach under an unrecognized key."""
+
+    def __repr__(self) -> str:
+        return "<NonSerializableMarker>"
+
+
+def test_report_drops_non_serializable_object_under_unknown_grader_detail_key() -> None:
+    """Sanitization must happen BEFORE any JSON-mode encoding of the
+    ScenarioResult. An unknown grader-detail key can hold an arbitrary
+    non-JSON-serializable object; summarize_results() must not raise, must
+    drop the unknown field, and must still produce output json.dumps() can
+    encode."""
+
+    result = ScenarioResult(
+        scenario_id="report-non-serializable-detail",
+        description="A non-serializable object under an unknown key must not crash the report.",
+        target=ScenarioTarget.NARRATOR,
+        grader_results=[
+            GraderResult(
+                name="fake-grader",
+                passed=True,
+                details={"unknown_object_field": _NonSerializableMarker(), "length": 7},
+            )
+        ],
+        passed=True,
+        score=1.0,
+        max_score=1.0,
+    )
+
+    summary = summarize_results([result])
+    details = summary["results"][0]["grader_results"][0]["details"]
+    assert "unknown_object_field" not in details
+    assert details["length"] == 7
+    assert json.dumps(summary)  # must not raise
+
+
+def test_report_drops_non_serializable_object_under_unknown_model_metadata_key() -> None:
+    """The equivalent regression for model_metadata: an unknown field
+    holding a non-JSON-serializable object must be dropped rather than
+    crashing report serialization."""
+
+    result = ScenarioResult(
+        scenario_id="report-non-serializable-metadata",
+        description="A non-serializable object under an unknown model_metadata key must not crash the report.",
+        target=ScenarioTarget.DIRECTOR,
+        passed=True,
+        score=1.0,
+        max_score=1.0,
+        model_metadata={
+            "target_agent": "director",
+            "model": "gpt-test",
+            "unknown_object_field": _NonSerializableMarker(),
+        },
+    )
+
+    summary = summarize_results([result])
+    metadata = summary["results"][0]["model_metadata"]
+    assert "unknown_object_field" not in metadata
+    assert metadata["target_agent"] == "director"
+    assert metadata["model"] == "gpt-test"
+    assert json.dumps(summary)  # must not raise
+
+
+@pytest.mark.parametrize(
+    "model_metadata",
+    [
+        {"target_agent": []},
+        {"target_agent": {}},
+        {"model": []},
+        {"usage": []},
+        {"usage": {"total_tokens": object()}},
+        {"usage": {"total_tokens": True}},
+    ],
+)
+def test_report_sanitizes_malformed_model_metadata_types_without_raising(model_metadata) -> None:
+    """`_safe_model_metadata()` must fail closed (drop the malformed field)
+    rather than raise, for values whose TYPE is wrong even though the key
+    name is recognized (e.g. target_agent as a list is unhashable and would
+    otherwise crash a naive `in frozenset` membership check; a bool must
+    never be accepted as a numeric token count)."""
+
+    result = ScenarioResult(
+        scenario_id="report-malformed-model-metadata",
+        description="Malformed model_metadata value types must not crash report serialization.",
+        target=ScenarioTarget.DIRECTOR,
+        passed=True,
+        score=1.0,
+        max_score=1.0,
+        model_metadata=model_metadata,
+    )
+
+    summary = summarize_results([result])
+    assert summary["results"][0]["model_metadata"] == {}
+    assert json.dumps(summary)  # must not raise
+
+
+def test_render_report_names_failed_graders_for_a_failing_scenario() -> None:
+    """Issue #55 requires the human-readable report to identify which
+    scenario AND which grader/check failed, not just a bare status/score."""
+
+    scenario = Scenario(
+        scenario_id="report-failed-grader-names",
+        description="A scenario that fails both proposal_contract and require_none.",
+        target=ScenarioTarget.DIRECTOR,
+        authoritative_input=_DIRECTOR_FIXTURE,
+        deterministic_expectations={"require_none": True},
+        actual_output={"decision": "act", "world_action": {"action": "spawn_npc", "npc_id": "eval_x"}},
+    )
+    result = EvalRunner().run(scenario)
+    assert result.passed is False
+    failed_names = {gr.name for gr in result.grader_results if not gr.passed}
+    assert failed_names  # sanity: this scenario is expected to have failing graders
+
+    report_text = render_report([result])
+    assert "FAIL" in report_text
+    assert "failed:" in report_text
+    for name in failed_names:
+        assert name in report_text
+
+
+def test_render_report_passing_scenario_stays_concise_without_a_failed_line() -> None:
+    scenario = Scenario(
+        scenario_id="report-passing-concise",
+        description="A passing scenario must not print a failed-graders line.",
+        target=ScenarioTarget.DIRECTOR,
+        authoritative_input=_DIRECTOR_FIXTURE,
+        deterministic_expectations={"require_none": True},
+        actual_output={"decision": "none"},
+    )
+    result = EvalRunner().run(scenario)
+    assert result.passed is True
+
+    report_text = render_report([result])
+    assert "PASS" in report_text
+    scenario_lines = [line for line in report_text.splitlines() if "report-passing-concise" in line]
+    assert scenario_lines == ["- report-passing-concise: PASS (100.00%)"]
+    assert not any(line.strip().startswith("failed:") for line in scenario_lines)
+
+
 def test_report_summary_has_stable_json_fields() -> None:
     scenario = Scenario(
         scenario_id="report-stable-fields",
@@ -1268,6 +1489,39 @@ def _assert_narrator_input_is_synthetic(authoritative_input: dict, *, scenario_i
             if value is not None:
                 _assert_eval_namespaced(value, where=f"{scenario_id}.tool_result.{field_name}")
 
+        # ToolExecutionResult.available_exits reuses the same production
+        # {"direction", "room_id", "room_name"} shape as
+        # World.available_exits(); the destination room ID is "room_id".
+        for exit_entry in tool_result.get("available_exits", []):
+            destination_room_id = exit_entry.get("room_id") if isinstance(exit_entry, dict) else None
+            if destination_room_id is not None:
+                _assert_eval_namespaced(
+                    destination_room_id, where=f"{scenario_id}.tool_result.available_exits[].room_id"
+                )
+
+        # ToolExecutionResult.available_items reuses
+        # app.game.items.available_items_for_room()'s {"id", "name"} shape.
+        for item_entry in tool_result.get("available_items", []):
+            item_id = item_entry.get("id") if isinstance(item_entry, dict) else None
+            if item_id is not None:
+                _assert_eval_namespaced(
+                    item_id, where=f"{scenario_id}.tool_result.available_items[].id"
+                )
+
+        # Unlike NarratorSceneContext.inventory_items (list[NarratorItem]),
+        # ToolExecutionResult.inventory_items is a bare list[str] of item IDs
+        # directly (see app.game.items.inventory_item_ids()).
+        for item_id in tool_result.get("inventory_items", []):
+            if isinstance(item_id, str):
+                _assert_eval_namespaced(
+                    item_id, where=f"{scenario_id}.tool_result.inventory_items[]"
+                )
+
+        for npc in tool_result.get("nearby_npcs", []):
+            npc_id = npc.get("id") if isinstance(npc, dict) else None
+            if npc_id is not None:
+                _assert_eval_namespaced(npc_id, where=f"{scenario_id}.tool_result.nearby_npcs[].id")
+
 
 def _assert_director_world_action_is_synthetic(fixture_output, *, scenario_id: str) -> None:
     if not isinstance(fixture_output, dict) or fixture_output.get("decision") != "act":
@@ -1353,6 +1607,55 @@ def test_narrator_inventory_items_non_eval_id_is_rejected() -> None:
     NarratorAgentInput.model_validate(fixture)
     with pytest.raises(AssertionError):
         _assert_narrator_input_is_synthetic(fixture, scenario_id="non-eval-inventory-item")
+
+
+_NARRATOR_TOOL_RESULT_COLLECTIONS_FIXTURE = {
+    "player_message": "look around and check my pack",
+    "scene_context": {
+        "current_room": {"id": "eval_foyer", "name": "Evaluation Foyer", "description": "A dusty synthetic foyer."},
+        "nearby_npcs": [],
+    },
+    "tool_result": {
+        "success": True,
+        "applied_tools": ["observe_room"],
+        "summary": "The player takes stock of the room.",
+        "available_exits": [
+            {"direction": "north", "room_id": "eval_gallery", "room_name": "Evaluation Gallery"}
+        ],
+        "available_items": [{"id": "eval_lantern", "name": "Evaluation Lantern"}],
+        "inventory_items": ["eval_brass_key"],
+        "nearby_npcs": [{"id": "eval_npc_a", "name": "Evaluation Steward"}],
+    },
+}
+
+
+@pytest.mark.parametrize(
+    ("field_path", "bad_value"),
+    [
+        ("available_exits", [{"direction": "north", "room_id": "entry_hall", "room_name": "Entry Hall"}]),
+        ("available_items", [{"id": "brass_key", "name": "Brass Key"}]),
+        ("inventory_items", ["brass_key"]),
+        ("nearby_npcs", [{"id": "steward", "name": "Steward"}]),
+    ],
+)
+def test_tool_result_collection_synthetic_ids_pass_and_reject_production_looking_values(
+    field_path: str, bad_value
+) -> None:
+    """Every entity-ID-bearing ToolExecutionResult collection field must be
+    validated against the synthetic eval_ namespace: an eval_-prefixed
+    fixture passes, and a production-looking value (no eval_ prefix) in the
+    same collection is rejected."""
+
+    NarratorAgentInput.model_validate(_NARRATOR_TOOL_RESULT_COLLECTIONS_FIXTURE)
+    _assert_narrator_input_is_synthetic(
+        _NARRATOR_TOOL_RESULT_COLLECTIONS_FIXTURE, scenario_id="synthetic-tool-result-collections"
+    )
+
+    fixture = copy.deepcopy(_NARRATOR_TOOL_RESULT_COLLECTIONS_FIXTURE)
+    fixture["tool_result"][field_path] = bad_value
+    NarratorAgentInput.model_validate(fixture)
+    with pytest.raises(AssertionError):
+        _assert_narrator_input_is_synthetic(fixture, scenario_id="non-eval-tool-result-collection")
 
 
 def _run_main_with_argv(monkeypatch, argv: list[str]) -> int:

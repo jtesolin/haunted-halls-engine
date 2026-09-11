@@ -456,9 +456,8 @@ were introduced in 7B3.
 
 ## Phase 8 — Narrative Progression & Character Systems
 
-**Status: Active. 8A (Story / Quest Model) and 8B (Character Progression
-Model) are implemented as domain foundations; 8E1 (AI evaluation harness
-foundation) is complete; tracked by #52.**
+**Status: Active. 8A (Story / Quest Model) implemented as a domain
+foundation; tracked by #52.**
 
 ### 8A — Story / Quest Model
 
