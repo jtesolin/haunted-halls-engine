@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Sequence
+from types import MappingProxyType
+from typing import Any, Mapping, Sequence
 
 from app.game.character_progression import (
     MAX_TRACK_POINTS,
@@ -97,9 +98,10 @@ def validate_ability_definitions(
 
 
 VALIDATED_ABILITY_DEFINITIONS = validate_ability_definitions(CANONICAL_ABILITY_DEFINITIONS)
-ABILITY_REGISTRY: dict[str, AbilityDefinition] = {
+_VALIDATED_ABILITY_REGISTRY = {
     definition.ability_id: definition for definition in VALIDATED_ABILITY_DEFINITIONS
 }
+ABILITY_REGISTRY: Mapping[str, AbilityDefinition] = MappingProxyType(_VALIDATED_ABILITY_REGISTRY)
 
 
 def get_ability_definition(ability_id: str) -> AbilityDefinition | None:

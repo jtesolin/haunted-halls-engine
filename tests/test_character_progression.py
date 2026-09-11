@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import json
 from copy import deepcopy
-from typing import cast
+from typing import MutableMapping, cast
 
 from app.game.abilities import (
+    ABILITY_REGISTRY,
+    AbilityDefinition,
     CANONICAL_ABILITY_DEFINITIONS,
     MAX_CHECK_DIFFICULTY,
     VALIDATED_ABILITY_DEFINITIONS,
@@ -337,6 +339,39 @@ def test_canonical_ability_definitions_validate_and_registry_is_stable() -> None
     }
 
 
+def test_ability_registry_is_read_only_and_cannot_change_availability() -> None:
+    mutable_registry = cast(MutableMapping[str, AbilityDefinition], ABILITY_REGISTRY)
+
+    try:
+        mutable_registry["invented"] = CANONICAL_ABILITY_DEFINITIONS[0]
+    except TypeError:
+        pass
+    else:
+        raise AssertionError("ability registry should reject additions")
+
+    try:
+        del mutable_registry["keen_eye"]
+    except TypeError:
+        pass
+    else:
+        raise AssertionError("ability registry should reject deletions")
+
+    assert tuple(ABILITY_REGISTRY) == (
+        "keen_eye",
+        "steady_nerves",
+        "read_the_room",
+        "occult_insight",
+    )
+    state = build_fresh_campaign_state()
+    ensure_character_progression_state(state)
+    grant_progress(state, "investigation", 2)
+    unlock_ability(state, "keen_eye")
+    assert evaluate_ability_availability(state, "keen_eye").available is True
+    assert evaluate_ability_availability(state, "invented").status == (
+        AbilityAvailabilityStatus.UNKNOWN_ABILITY
+    )
+
+
 def test_ability_definition_validation_rejects_duplicates_and_invalid_values() -> None:
     duplicate = [
         CANONICAL_ABILITY_DEFINITIONS[0],
@@ -518,6 +553,16 @@ def test_ability_check_resolution_is_deterministic_and_pure() -> None:
     ensure_character_progression_state(state)
     grant_progress(state, "investigation", 5)
     unlock_ability(state, "keen_eye")
+    state["story"] = {
+        "active_quest": "recover_the_map",
+        "notes": ["first clue"],
+        "flags": {"seen_cellar": True},
+    }
+    state["items"]["talisman"] = {"name": "talisman", "value": 1}
+    state["npcs"]["guard"] = {"name": "guard", "mood": "alert"}
+    state["clock"]["tick"] = 5
+    state["facts"].append({"topic": "secret_passage", "resolved": False})
+    state["player"]["unrelated_state"] = {"last_safe_room": "entry_hall"}
 
     success = resolve_ability_check(state, "keen_eye", 3)
     assert success.outcome == AbilityCheckOutcome.SUCCESS
@@ -576,6 +621,6 @@ def test_ability_check_resolution_is_deterministic_and_pure() -> None:
     assert resolve_ability_check(state, "keen_eye", 3) == repeated
 
     before = deepcopy(state)
-    _ = resolve_ability_check(state, "keen_eye", 3)
+    result = resolve_ability_check(state, "keen_eye", 3)
+    assert result == success
     assert state == before
-    assert state["story"] == before["story"] if "story" in state else True
