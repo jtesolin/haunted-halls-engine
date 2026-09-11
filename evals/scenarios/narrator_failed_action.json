@@ -20,8 +20,8 @@
       "success": false,
       "applied_tools": [],
       "summary": "The spirit is not nearby to respond.",
-      "errors": ["npc_not_nearby"],
-      "error_code": "npc_not_nearby",
+      "errors": ["npc_not_present"],
+      "error_code": "npc_not_present",
       "requested_target": "spirit"
     }
   },

@@ -819,7 +819,7 @@ def test_mocked_live_narrator_forwards_failed_tool_result_intact(monkeypatch) ->
     assert isinstance(forwarded_payload, NarratorAgentInput)
     assert forwarded_payload.tool_result is not None
     assert forwarded_payload.tool_result.success is False
-    assert forwarded_payload.tool_result.error_code == "npc_not_nearby"
+    assert forwarded_payload.tool_result.error_code == "npc_not_present"
     assert forwarded_payload.tool_result.summary == "The spirit is not nearby to respond."
     assert forwarded_payload.parsed_action is not None
     assert forwarded_payload.parsed_action.action == "talk"
@@ -2882,3 +2882,16 @@ def test_summarize_results_gives_scenarios_equal_weight_regardless_of_grader_cou
 
     summary = summarize_results([noop_result, move_result])
     assert summary["score"] == 1.0
+
+
+def test_checked_in_failed_action_scenario_uses_authoritative_error_code() -> None:
+    """narrator-failed-action-grounding models a known NPC that is elsewhere
+    or absent from the player's current room -- the authoritative
+    ToolExecutor TALK path for that case is npc_not_present, not the
+    non-existent npc_not_nearby."""
+
+    scenarios = {s.scenario_id: s for s in load_scenarios()}
+    scenario = scenarios["narrator-failed-action-grounding"]
+    tool_result = scenario.authoritative_input["tool_result"]
+    assert tool_result["error_code"] == "npc_not_present"
+    assert tool_result["errors"] == ["npc_not_present"]
