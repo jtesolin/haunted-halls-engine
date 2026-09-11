@@ -1,0 +1,19 @@
+{
+  "scenario_id": "director-legal-adjacent-move",
+  "description": "An active NPC may move to one supplied legal destination.",
+  "target": "director",
+  "tags": ["director", "movement", "bounded"],
+  "authoritative_input": {
+    "current_player_room_id": "entry_hall",
+    "legal_destinations": ["grand_corridor"],
+    "npcs": {"old_caretaker": {"location_id": "entry_hall"}}
+  },
+  "fixture_output": {
+    "decision": "act",
+    "world_action": {
+      "action": "move_npc",
+      "npc_id": "old_caretaker",
+      "destination_room_id": "grand_corridor"
+    }
+  }
+}

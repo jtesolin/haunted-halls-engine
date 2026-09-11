@@ -1,0 +1,21 @@
+{
+  "scenario_id": "narrator-observable-item-state",
+  "description": "Observable item state can be reflected without exposing internal capabilities.",
+  "target": "narrator",
+  "tags": ["narrator", "items", "grounding"],
+  "authoritative_input": {
+    "scene_context": {
+      "current_room": {"id": "entry_hall", "name": "Entry Hall", "description": "A dusty hall."},
+      "nearby_items": [
+        {"id": "brass_key", "name": "Brass key", "description": "A tarnished key.", "observable_state": {"condition": "tarnished"}}
+      ],
+      "nearby_npcs": []
+    },
+    "player_message": "look at the key"
+  },
+  "deterministic_expectations": {
+    "contains": ["brass key", "tarnished"],
+    "must_not_contain": ["unlock_capability", "internal_item_id"]
+  },
+  "fixture_output": {"reply_text": "The brass key is tarnished but catches the light."}
+}

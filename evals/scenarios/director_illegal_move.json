@@ -1,0 +1,20 @@
+{
+  "scenario_id": "director-illegal-non-one-hop-move",
+  "description": "A movement proposal outside the bounded one-hop destinations fails grading.",
+  "target": "director",
+  "tags": ["director", "movement", "failure"],
+  "authoritative_input": {
+    "current_player_room_id": "entry_hall",
+    "legal_destinations": ["grand_corridor"],
+    "npcs": {"old_caretaker": {"location_id": "entry_hall"}}
+  },
+  "deterministic_expectations": {"require_failure": true},
+  "fixture_output": {
+    "decision": "act",
+    "world_action": {
+      "action": "move_npc",
+      "npc_id": "old_caretaker",
+      "destination_room_id": "cellar"
+    }
+  }
+}

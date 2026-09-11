@@ -1,0 +1,18 @@
+{
+  "scenario_id": "director-absent-off-room-npc",
+  "description": "An absent NPC remains represented at its authoritative off-room location.",
+  "target": "director",
+  "tags": ["director", "context", "absent-npc"],
+  "authoritative_input": {
+    "current_player_room_id": "grand_corridor",
+    "legal_destinations": ["entry_hall"],
+    "npcs": {
+      "old_caretaker": {
+        "location_id": "entry_hall",
+        "status": "absent"
+      }
+    }
+  },
+  "deterministic_expectations": {"require_none": true},
+  "fixture_output": {"decision": "none"}
+}

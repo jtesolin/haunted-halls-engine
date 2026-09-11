@@ -1,0 +1,15 @@
+{
+  "scenario_id": "narrator-absent-npc-grounding",
+  "description": "An absent or off-room NPC must not be described as present.",
+  "target": "narrator",
+  "tags": ["narrator", "grounding", "absent-npc"],
+  "authoritative_input": {
+    "scene_context": {
+      "current_room": {"id": "grand_corridor", "name": "Grand Corridor", "description": "A long corridor."},
+      "nearby_npcs": []
+    },
+    "player_message": "look around"
+  },
+  "deterministic_expectations": {"must_not_contain": ["old caretaker is here", "the caretaker waves"]},
+  "fixture_output": {"reply_text": "The Grand Corridor is empty save for the hush of the house."}
+}

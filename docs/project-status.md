@@ -963,6 +963,15 @@ PostgreSQL, vector databases, deployment infrastructure, additional agents, and 
 | CI/CD deployment automation   | Complete — D5 engine and frontend CD production verified |
 | Custom domain (tesolin.us)    | Complete (D6)     |
 
+### Phase 8E1 — AI evaluation harness foundation
+
+**Status: In progress**
+
+* A lightweight provider-free eval harness is being introduced under `evals/` to validate deterministic agent behavior without modifying production gameplay authority.
+* The initial structure supports typed scenario contracts, deterministic Director/Narrator graders, scenario execution, and aggregate reporting.
+* Director validation begins from the existing strict proposal schema and bounded-authority contracts already enforced by the engine.
+* This foundation is intentionally limited to offline, reviewable evaluations and should stay independent from live production provider execution.
+
 # Next Step
 
 Phase 7A — World Authority Foundation and Phase 7B — Director rollout (7B1,

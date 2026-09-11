@@ -1,0 +1,16 @@
+{
+  "scenario_id": "director-unsupported-spawn-action",
+  "description": "Unsupported spawn actions are rejected rather than treated as world authority.",
+  "target": "director",
+  "tags": ["director", "safety", "failure"],
+  "authoritative_input": {
+    "current_player_room_id": "entry_hall",
+    "legal_destinations": ["grand_corridor"],
+    "npcs": {}
+  },
+  "deterministic_expectations": {"require_failure": true},
+  "fixture_output": {
+    "decision": "act",
+    "world_action": {"action": "spawn_npc", "npc_id": "invented_npc"}
+  }
+}

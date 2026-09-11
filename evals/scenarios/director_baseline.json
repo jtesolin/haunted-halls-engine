@@ -1,0 +1,18 @@
+{
+  "scenario_id": "director-baseline-noop",
+  "description": "Baseline Director behavior when there is no valid world-state change.",
+  "target": "director",
+  "tags": ["director", "baseline", "phase-7"],
+  "authoritative_input": {
+    "current_player_room_id": "entry_hall",
+    "clock_tick": 0,
+    "facts": [],
+    "npcs": [
+      {"npc_id": "old_caretaker", "location_id": "entry_hall", "status": "active"},
+      {"npc_id": "library_ghost", "location_id": "library", "status": "active"}
+    ],
+    "legal_destinations": ["grand_corridor", "library"]
+  },
+  "deterministic_expectations": {"require_none": true},
+  "fixture_output": {"decision": "none"}
+}

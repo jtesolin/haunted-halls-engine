@@ -1,0 +1,17 @@
+{
+  "scenario_id": "narrator-failed-action-grounding",
+  "description": "A failed player action must not be narrated as successful.",
+  "target": "narrator",
+  "tags": ["narrator", "grounding", "failure"],
+  "authoritative_input": {
+    "scene_context": {
+      "current_room": {"id": "entry_hall", "name": "Entry Hall", "description": "A dusty hall."},
+      "nearby_npcs": []
+    },
+    "player_message": "talk to the distant ghost"
+  },
+  "deterministic_expectations": {
+    "must_not_contain": ["the ghost answers", "you speak with the ghost"]
+  },
+  "fixture_output": {"reply_text": "The ghost is not nearby, so your call goes unanswered."}
+}
