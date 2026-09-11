@@ -1,6 +1,6 @@
 {
   "scenario_id": "director-absent-off-room-npc",
-  "description": "An absent NPC remains represented at its authoritative off-room location and does not trigger a proposal.",
+  "description": "An absent off-room NPC remains represented in bounded Director context; any proposal must remain within the supplied entity/destination bounds. This scenario does not assert that a live Director must return decision=none merely because a referenced NPC's status is absent -- WorldAuthorityExecutor's MOVE_NPC bounds checks (NPC exists, valid location, destination exists and is exactly one hop away) do not reject a move based on NPC status.",
   "target": "director",
   "tags": ["director", "context", "absent-npc"],
   "authoritative_input": {
@@ -25,6 +25,6 @@
       "error_code": null
     }
   },
-  "deterministic_expectations": {"require_none": true},
+  "deterministic_expectations": {},
   "fixture_output": {"decision": "none"}
 }

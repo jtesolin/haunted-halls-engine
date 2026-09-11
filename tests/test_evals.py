@@ -2895,3 +2895,28 @@ def test_checked_in_failed_action_scenario_uses_authoritative_error_code() -> No
     tool_result = scenario.authoritative_input["tool_result"]
     assert tool_result["error_code"] == "npc_not_present"
     assert tool_result["errors"] == ["npc_not_present"]
+
+
+def test_checked_in_absent_npc_scenario_accepts_valid_bounded_move_proposal() -> None:
+    """director-absent-off-room-npc must not encode a false rule that an
+    NPC's status="absent" makes an otherwise bounded MOVE_NPC invalid.
+    WorldAuthorityExecutor's MOVE_NPC bounds checks (NPC exists, valid
+    location, destination exists and is exactly one hop away) do not
+    consider NPC status; this scenario has no deterministic_expectations
+    requiring decision=none, so a schema-valid, bounded live proposal must
+    evaluate as passing."""
+
+    scenarios = {s.scenario_id: s for s in load_scenarios()}
+    scenario = scenarios["director-absent-off-room-npc"].model_copy(deep=True)
+    scenario.actual_output = {
+        "decision": "act",
+        "world_action": {
+            "action": "move_npc",
+            "npc_id": "eval_npc_a",
+            "destination_room_id": "eval_gallery",
+        },
+    }
+    result = EvalRunner().run(scenario)
+    assert result.passed is True
+    assert result.score == 1.0
+    assert result.max_score == 1.0
