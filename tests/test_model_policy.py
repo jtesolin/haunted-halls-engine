@@ -188,3 +188,81 @@ def test_narrator_agent_passes_policy_reasoning_effort(monkeypatch: Any) -> None
     assert captured_kwargs["reasoning_effort"] == "medium"
     assert captured_kwargs["reasoning_effort"] == ModelPolicy.narrator_reasoning_effort()
 
+
+class _IncompleteDetails:
+    def __init__(self, reason: str) -> None:
+        self.reason = reason
+
+
+class _IncompleteResponseNoText:
+    def __init__(self) -> None:
+        self.output_text = ""
+        self.output: list[Any] = []
+        self.status = "incomplete"
+        self.incomplete_details = _IncompleteDetails("max_output_tokens")
+
+
+class _ResponseWithText:
+    def __init__(self, text: str) -> None:
+        self.output_text = text
+        self.output: list[Any] = []
+
+
+class _FakeResponsesAPI:
+    def __init__(self, responses: list[Any]) -> None:
+        self._responses = responses
+        self.calls: list[dict[str, Any]] = []
+
+    async def create(self, **kwargs: Any) -> Any:
+        self.calls.append(kwargs)
+        index = min(len(self.calls) - 1, len(self._responses) - 1)
+        return self._responses[index]
+
+
+class _FakeClient:
+    def __init__(self, responses: list[Any]) -> None:
+        self.responses = _FakeResponsesAPI(responses)
+
+
+def test_memory_reflection_retry_uses_policy_reasoning_effort(monkeypatch: Any) -> None:
+    from app.ai.model_client import model_client
+
+    incomplete_resp = _IncompleteResponseNoText()
+    assert incomplete_resp.status == "incomplete"
+    assert incomplete_resp.incomplete_details.reason == "max_output_tokens"
+
+    successful_resp = _ResponseWithText('["The player found a rusty key."]')
+    fake_client = _FakeClient([incomplete_resp, successful_resp])
+
+    monkeypatch.setattr(model_client, "_get_client", lambda: fake_client)
+
+    payload = MemoryReflectionInput(
+        recent_turns=[],
+        campaign_state="test_state",
+    )
+
+    output = asyncio.run(
+        MemoryReflectionAgent().reflect(
+            payload=payload,
+            ai_enabled=True,
+            provider_model_enabled=True,
+        )
+    )
+
+    assert len(fake_client.responses.calls) == 2
+
+    first_call_kwargs = fake_client.responses.calls[0]
+    second_call_kwargs = fake_client.responses.calls[1]
+
+    assert first_call_kwargs["reasoning"] == {"effort": "none"}
+    assert first_call_kwargs["reasoning"]["effort"] == ModelPolicy.memory_reflection_reasoning_effort()
+
+    assert second_call_kwargs["reasoning"] == {"effort": "none"}
+    assert second_call_kwargs["reasoning"]["effort"] == ModelPolicy.memory_reflection_reasoning_effort()
+
+    for call in fake_client.responses.calls:
+        assert call["reasoning"]["effort"] != "minimal"
+
+    assert len(output.memories_to_store) == 1
+    assert output.memories_to_store[0].text == "The player found a rusty key."
+
