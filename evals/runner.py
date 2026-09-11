@@ -26,10 +26,16 @@ _OUTPUT_NOT_SUPPLIED = object()
 
 
 class LiveEvalError(RuntimeError):
-    """Sanitized failure raised when a live agent/provider call fails.
+    """Sanitized failure raised at the eval-harness boundary when a live
+    agent/provider call fails.
 
     Never embeds raw provider response, prompt content, or API response
-    bodies; only a safe category/message is carried to callers.
+    bodies in this exception object (its message, __cause__, and
+    __context__ are all limited to a safe failure-type category). This
+    guarantee is scoped to the eval harness's own exception/report
+    boundary; it does not alter or suppress any logging performed inside
+    `DirectorAgent`/`NarratorAgent` or the model client themselves, which
+    is existing, out-of-scope production behavior (see issue #55).
     """
 
 
@@ -154,17 +160,26 @@ async def _run_live_scenario(scenario: Scenario) -> tuple[Any, dict[str, Any]]:
     if scenario.target == ScenarioTarget.DIRECTOR:
         director_input = DirectorInput.model_validate(scenario.authoritative_input)
         selected_model = ModelPolicy.director_model()
+        # `raise ... from None` only sets __cause__ = None and suppresses
+        # traceback *display* of the original exception; Python still
+        # implicitly sets __context__ to the exception being handled while
+        # inside an `except` block. To truly sever the raw provider/agent
+        # exception from the sanitized LiveEvalError (so neither __cause__
+        # nor __context__ retains it), only a safe category string is
+        # captured inside the except block, and the LiveEvalError is raised
+        # after the block has been left (no exception is being handled at
+        # that point). This only sanitizes the LiveEvalError object the eval
+        # harness raises; it does not change or suppress whatever
+        # DirectorAgent.propose() itself already logs internally before the
+        # exception reaches this boundary (existing, out-of-scope production
+        # behavior per issue #55).
+        failure_type: str | None = None
         try:
             result = await DirectorAgent().propose(director_input=director_input, model=selected_model)
         except Exception as exc:
-            # `from None` deliberately severs the exception chain: the raw
-            # provider/agent exception (and any response body/prompt content
-            # it carries) must never be retained as __cause__/__context__
-            # where a caller's traceback logging could expose it. Only the
-            # sanitized category message crosses this boundary.
-            raise LiveEvalError(
-                f"director agent execution failed ({type(exc).__name__})"
-            ) from None
+            failure_type = type(exc).__name__
+        if failure_type is not None:
+            raise LiveEvalError(f"director agent execution failed ({failure_type})")
         metadata: dict[str, Any] = {"target_agent": "director", "model": selected_model}
         usage = _usage_metadata(getattr(result, "usage", None))
         if usage is not None:
@@ -174,15 +189,19 @@ async def _run_live_scenario(scenario: Scenario) -> tuple[Any, dict[str, Any]]:
     if scenario.target == ScenarioTarget.NARRATOR:
         narrator_input = NarratorAgentInput.model_validate(scenario.authoritative_input)
         selected_model = ModelPolicy.narrator_model()
+        # See the Director branch above: capture only the safe category
+        # string inside the except block and raise after leaving it, so
+        # neither __cause__ nor __context__ retains the raw provider/agent
+        # exception. As above, this sanitizes only the LiveEvalError this
+        # harness raises, not any internal logging NarratorAgent.generate()
+        # itself performs (existing, out-of-scope production behavior).
+        failure_type = None
         try:
             output = await NarratorAgent().generate(payload=narrator_input, model=selected_model)
         except Exception as exc:
-            # See the Director branch above: `from None` prevents the raw
-            # provider/agent exception from being retained as __cause__ so
-            # traceback logging cannot expose provider response content.
-            raise LiveEvalError(
-                f"narrator agent execution failed ({type(exc).__name__})"
-            ) from None
+            failure_type = type(exc).__name__
+        if failure_type is not None:
+            raise LiveEvalError(f"narrator agent execution failed ({failure_type})")
         metadata = {"target_agent": "narrator", "model": selected_model}
         usage = _usage_metadata(
             ModelUsage(

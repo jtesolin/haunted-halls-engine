@@ -16,7 +16,7 @@ from app.db.session import get_engine, session
 from app.schemas.director import DirectorInput
 
 from evals.graders import grade_scenario
-from evals.report import summarize_results
+from evals.report import render_report, summarize_results
 from evals.runner import EvalRunner, run_scenarios
 from evals.runner import LiveEvalError, _run_live_scenario, _run_live_scenarios
 import evals.runner as runner_module
@@ -217,6 +217,18 @@ def test_checked_in_narrator_scenario_fails_grading_on_violated_expectations() -
     scenario.actual_output = {"reply_text": "The steward is here, and the steward waves warmly."}
     results = grade_scenario(scenario)
     assert any(not result.passed for result in results)
+
+
+def test_observable_item_scenario_rejects_unlit_contradiction() -> None:
+    """The positive expectation must be specific enough that "unlit" (which
+    contains "lit" as a substring) is not mistakenly accepted as satisfying
+    it."""
+
+    scenarios = {s.scenario_id: s for s in load_scenarios()}
+    scenario = scenarios["narrator-observable-item-state"].model_copy(deep=True)
+    scenario.actual_output = {"reply_text": "The evaluation lantern is unlit."}
+    results = grade_scenario(scenario)
+    assert any(result.name == "expected_content" and result.passed is False for result in results)
 
 
 def test_narrator_output_rejects_empty_and_whitespace_only_text() -> None:
@@ -598,6 +610,7 @@ def test_mocked_live_director_failure_is_sanitized(monkeypatch) -> None:
         asyncio.run(_run_live_scenario(scenario))
     assert secret_marker not in str(exc_info.value)
     assert exc_info.value.__cause__ is None
+    assert exc_info.value.__context__ is None
     assert secret_marker not in "".join(
         traceback.format_exception(
             type(exc_info.value), exc_info.value, exc_info.value.__traceback__
@@ -719,6 +732,7 @@ def test_mocked_live_narrator_failure_is_sanitized(monkeypatch) -> None:
         asyncio.run(_run_live_scenario(scenario))
     assert secret_marker not in str(exc_info.value)
     assert exc_info.value.__cause__ is None
+    assert exc_info.value.__context__ is None
     assert secret_marker not in "".join(
         traceback.format_exception(
             type(exc_info.value), exc_info.value, exc_info.value.__traceback__
@@ -895,6 +909,70 @@ def test_report_allowlists_grader_details_dropping_unknown_keys() -> None:
     assert marker not in json.dumps(summary)
     assert "provider_response" not in details
     assert details["length"] == 42
+
+
+def test_report_drops_arbitrary_nested_mapping_under_an_allowed_detail_key() -> None:
+    """An allowed key name only bounds the KEY; nothing prevents a grader
+    from attaching an arbitrary nested mapping as that key's VALUE (e.g.
+    details={"expected": {"reply_text": ...}}). The report boundary must
+    restrict values to bounded scalar/list shapes, not just filter keys."""
+
+    marker = "UNIQUE_RAW_PROVIDER_MARKER"
+    result = ScenarioResult(
+        scenario_id="report-nested-detail-value",
+        description="Nested mappings under an allowed key must not survive report serialization.",
+        target=ScenarioTarget.NARRATOR,
+        grader_results=[
+            GraderResult(
+                name="fake-grader",
+                passed=True,
+                details={"expected": {"reply_text": marker}, "length": 42},
+            )
+        ],
+        passed=True,
+        score=1.0,
+        max_score=1.0,
+    )
+    summary = summarize_results([result])
+    details = summary["results"][0]["grader_results"][0]["details"]
+    assert marker not in json.dumps(summary)
+    assert "expected" not in details
+    assert details["length"] == 42
+
+
+def test_report_sanitizes_model_metadata_dropping_unknown_fields() -> None:
+    """Scenario.model_metadata is an arbitrary caller-supplied dict; the
+    report boundary must retain only target_agent/model/known usage
+    counters and drop everything else, in both the JSON and human-readable
+    report."""
+
+    marker = "UNIQUE_RAW_PROVIDER_MARKER"
+    scenario = Scenario(
+        scenario_id="report-model-metadata-sanitization",
+        description="Unknown model_metadata fields must not survive report serialization.",
+        target=ScenarioTarget.DIRECTOR,
+        authoritative_input=_DIRECTOR_FIXTURE,
+        deterministic_expectations={"require_none": True},
+        actual_output={"decision": "none"},
+    )
+    result = EvalRunner().run(
+        scenario,
+        model_metadata={
+            "target_agent": "director",
+            "model": "gpt-test",
+            "provider_response": marker,
+            "usage": {"total_tokens": 12, "response_body": marker},
+        },
+    )
+    summary = summarize_results([result])
+    serialized_metadata = summary["results"][0]["model_metadata"]
+    assert serialized_metadata["target_agent"] == "director"
+    assert serialized_metadata["model"] == "gpt-test"
+    assert serialized_metadata["usage"] == {"total_tokens": 12}
+    assert "provider_response" not in serialized_metadata
+    assert "response_body" not in serialized_metadata["usage"]
+    assert marker not in json.dumps(summary)
+    assert marker not in render_report([result])
 
 
 def test_report_summary_has_stable_json_fields() -> None:
@@ -1141,6 +1219,12 @@ def _assert_director_input_is_synthetic(authoritative_input: dict, *, scenario_i
 
 
 def _assert_narrator_input_is_synthetic(authoritative_input: dict, *, scenario_id: str) -> None:
+    """Walk every entity-ID-bearing field of a Narrator authoritative_input
+    and require the synthetic eval_ namespace. Free-form player/parser text
+    such as ParsedAction.target or ToolExecutionResult.requested_target is
+    deliberately excluded: it names something in prose (e.g. "spirit") but
+    is not itself an entity ID, so it must not be required to use eval_."""
+
     scene_context = authoritative_input.get("scene_context", {})
     current_room = scene_context.get("current_room")
     if current_room is not None:
@@ -1151,6 +1235,38 @@ def _assert_narrator_input_is_synthetic(authoritative_input: dict, *, scenario_i
         _assert_eval_namespaced(npc["id"], where=f"{scenario_id}.scene_context.nearby_npcs[].id")
     for item in scene_context.get("nearby_items", []):
         _assert_eval_namespaced(item["id"], where=f"{scenario_id}.scene_context.nearby_items[].id")
+    for item in scene_context.get("inventory_items", []):
+        _assert_eval_namespaced(item["id"], where=f"{scenario_id}.scene_context.inventory_items[].id")
+    for exit_entry in scene_context.get("available_exits", []):
+        # Production `World.available_exits()` returns dicts shaped like
+        # {"direction": ..., "room_id": ..., "room_name": ...}; the
+        # destination room ID is carried under "room_id", not the generic
+        # dict[str, str] key names implied by the (intentionally loose)
+        # NarratorSceneContext schema type.
+        destination_room_id = exit_entry.get("room_id")
+        if destination_room_id is not None:
+            _assert_eval_namespaced(
+                destination_room_id, where=f"{scenario_id}.scene_context.available_exits[].room_id"
+            )
+
+    tool_result = authoritative_input.get("tool_result")
+    if isinstance(tool_result, dict):
+        # These ToolExecutionResult fields are genuinely entity/location IDs
+        # in production (see app/services/tool_executor.py); requested_target
+        # is free-form player-facing text and is deliberately excluded.
+        for field_name in (
+            "previous_location",
+            "current_location",
+            "moved_from",
+            "moved_to",
+            "npc_id",
+            "item_id",
+            "with_item_id",
+            "resolved_exit",
+        ):
+            value = tool_result.get(field_name)
+            if value is not None:
+                _assert_eval_namespaced(value, where=f"{scenario_id}.tool_result.{field_name}")
 
 
 def _assert_director_world_action_is_synthetic(fixture_output, *, scenario_id: str) -> None:
@@ -1195,6 +1311,48 @@ def test_checked_in_corpus_uses_synthetic_identifiers_not_production_world_ids()
             DirectorInput.model_validate(scenario.authoritative_input)
         else:
             NarratorAgentInput.model_validate(scenario.authoritative_input)
+
+
+_NARRATOR_EXITS_AND_INVENTORY_FIXTURE = {
+    "player_message": "check the way north and my pack",
+    "scene_context": {
+        "current_room": {"id": "eval_foyer", "name": "Evaluation Foyer", "description": "A dusty synthetic foyer."},
+        "available_exits": [
+            {"direction": "north", "room_id": "eval_gallery", "room_name": "Evaluation Gallery"}
+        ],
+        "inventory_items": [
+            {"id": "eval_brass_key", "name": "Evaluation Brass Key", "description": "A synthetic test key."}
+        ],
+        "nearby_npcs": [],
+    },
+}
+
+
+def test_narrator_available_exits_and_inventory_items_synthetic_ids_pass() -> None:
+    """A synthetic-namespaced available_exits destination room ID and
+    inventory_items item ID must validate against both the production
+    NarratorAgentInput contract and the structural eval_ helper."""
+
+    NarratorAgentInput.model_validate(_NARRATOR_EXITS_AND_INVENTORY_FIXTURE)
+    _assert_narrator_input_is_synthetic(
+        _NARRATOR_EXITS_AND_INVENTORY_FIXTURE, scenario_id="synthetic-exits-and-inventory"
+    )
+
+
+def test_narrator_available_exits_non_eval_destination_is_rejected() -> None:
+    fixture = copy.deepcopy(_NARRATOR_EXITS_AND_INVENTORY_FIXTURE)
+    fixture["scene_context"]["available_exits"][0]["room_id"] = "entry_hall"
+    NarratorAgentInput.model_validate(fixture)
+    with pytest.raises(AssertionError):
+        _assert_narrator_input_is_synthetic(fixture, scenario_id="non-eval-exit")
+
+
+def test_narrator_inventory_items_non_eval_id_is_rejected() -> None:
+    fixture = copy.deepcopy(_NARRATOR_EXITS_AND_INVENTORY_FIXTURE)
+    fixture["scene_context"]["inventory_items"][0]["id"] = "brass_key"
+    NarratorAgentInput.model_validate(fixture)
+    with pytest.raises(AssertionError):
+        _assert_narrator_input_is_synthetic(fixture, scenario_id="non-eval-inventory-item")
 
 
 def _run_main_with_argv(monkeypatch, argv: list[str]) -> int:

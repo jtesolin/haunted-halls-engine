@@ -19,7 +19,7 @@
     }
   },
   "deterministic_expectations": {
-    "contains": ["evaluation lantern", "lit"],
+    "contains": ["evaluation lantern", "is lit"],
     "must_not_contain": ["lightable", "openable", "properties", "opens"]
   },
   "fixture_output": {"reply_text": "The evaluation lantern is lit, casting a warm glow across the foyer."}

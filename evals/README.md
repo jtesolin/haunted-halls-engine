@@ -117,6 +117,13 @@ live mode; `--live` is always required explicitly. Automated tests must mock
 provider calls; normal CI never runs live mode and must not make network
 calls.
 
+A failed live call raises a sanitized `LiveEvalError` carrying only a safe
+failure-type category, with no chained `__cause__`/`__context__` back to the
+raw provider/agent exception. This sanitization is scoped to the eval
+harness's own exception and report boundary; it does not alter or suppress
+any logging `DirectorAgent`/`NarratorAgent`/the model client perform
+internally, which is existing, out-of-scope production behavior.
+
 Live results populate `ScenarioResult.model_metadata` with the target agent,
 the selected model, and available provider token/usage counts (never raw
 provider response content). This metadata is surfaced in both the JSON report
