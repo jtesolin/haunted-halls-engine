@@ -4,29 +4,29 @@
   "target": "narrator",
   "tags": ["narrator", "grounding", "failure"],
   "authoritative_input": {
-    "player_message": "talk to the distant ghost",
+    "player_message": "talk to the distant spirit",
     "scene_context": {
-      "current_room": {"id": "entry_hall", "name": "Entry Hall", "description": "A dusty hall."},
+      "current_room": {"id": "eval_foyer", "name": "Evaluation Foyer", "description": "A dusty synthetic foyer."},
       "nearby_npcs": []
     },
     "parsed_action": {
-      "raw_text": "talk to the distant ghost",
+      "raw_text": "talk to the distant spirit",
       "action": "talk",
-      "target": "ghost",
+      "target": "spirit",
       "parse_status": "ok",
       "confidence": 0.8
     },
     "tool_result": {
       "success": false,
       "applied_tools": [],
-      "summary": "The ghost is not nearby to respond.",
+      "summary": "The spirit is not nearby to respond.",
       "errors": ["npc_not_nearby"],
       "error_code": "npc_not_nearby",
-      "requested_target": "ghost"
+      "requested_target": "spirit"
     }
   },
   "deterministic_expectations": {
-    "must_not_contain": ["the ghost answers", "you speak with the ghost"]
+    "must_not_contain": ["the spirit answers", "you speak with the spirit"]
   },
-  "fixture_output": {"reply_text": "The ghost is not nearby, so your call goes unanswered."}
+  "fixture_output": {"reply_text": "The spirit is not nearby, so your words go unanswered."}
 }

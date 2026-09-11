@@ -1001,10 +1001,11 @@ state.
 Phase 8E1 — AI evaluation harness foundation (issue #55) is complete. Ongoing
 Phase 8 work is tracked under roadmap issue #52; consult that issue for the
 current sequence of Phase 8 milestones before starting further Phase 8 work.
-See **Explicit Deferrals** above and tracking issue #43 for the separate
-backlog of pre-Phase-8 candidate areas (for example combat/damage,
-doors/locks/keys/cellar progression, further Director capabilities,
-semantic-memory redesign, or D7 observability).
+Tracking issue #43 (Phase 7B rollout planning) is closed and is not the
+active source for future-work candidates. See **Explicit Deferrals** above
+for the separate backlog of pre-Phase-8 candidate areas (for example
+combat/damage, doors/locks/keys/cellar progression, further Director
+capabilities, semantic-memory redesign, or D7 observability).
 
 Phase 5 should be considered closed as of engine commit:
 

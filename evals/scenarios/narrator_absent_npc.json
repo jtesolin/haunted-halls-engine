@@ -6,10 +6,10 @@
   "authoritative_input": {
     "player_message": "look around",
     "scene_context": {
-      "current_room": {"id": "grand_corridor", "name": "Grand Corridor", "description": "A long corridor."},
+      "current_room": {"id": "eval_gallery", "name": "Evaluation Gallery", "description": "A long synthetic gallery."},
       "nearby_npcs": []
     }
   },
-  "deterministic_expectations": {"must_not_contain": ["old caretaker is here", "the caretaker waves"]},
-  "fixture_output": {"reply_text": "The Grand Corridor is empty save for the hush of the house."}
+  "deterministic_expectations": {"must_not_contain": ["the steward is here", "the steward waves"]},
+  "fixture_output": {"reply_text": "The Evaluation Gallery is empty save for the hush of dust."}
 }

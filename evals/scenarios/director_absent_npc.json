@@ -4,15 +4,15 @@
   "target": "director",
   "tags": ["director", "context", "absent-npc"],
   "authoritative_input": {
-    "current_player_room_id": "grand_corridor",
+    "current_player_room_id": "eval_gallery",
     "clock_tick": 1,
-    "facts": ["The caretaker left the corridor some time ago."],
+    "facts": ["The steward left the gallery some time ago."],
     "npcs": [
       {
-        "npc_id": "old_caretaker",
-        "location_id": "entry_hall",
+        "npc_id": "eval_npc_a",
+        "location_id": "eval_foyer",
         "status": "absent",
-        "one_hop_destination_room_ids": ["grand_corridor"]
+        "one_hop_destination_room_ids": ["eval_gallery"]
       }
     ],
     "player_action": {
@@ -20,7 +20,7 @@
       "target": null,
       "parse_status": "ok",
       "succeeded": true,
-      "result_summary": "The player looks down the empty corridor.",
+      "result_summary": "The player looks down the empty gallery.",
       "applied_tools": ["observe_room"],
       "error_code": null
     }

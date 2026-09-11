@@ -4,14 +4,14 @@
   "target": "narrator",
   "tags": ["narrator", "items", "grounding"],
   "authoritative_input": {
-    "player_message": "look at the lamp",
+    "player_message": "look at the lantern",
     "scene_context": {
-      "current_room": {"id": "entry_hall", "name": "Entry Hall", "description": "A dusty hall."},
+      "current_room": {"id": "eval_foyer", "name": "Evaluation Foyer", "description": "A dusty synthetic foyer."},
       "nearby_items": [
         {
-          "id": "brass_lamp",
-          "name": "Brass Lamp",
-          "description": "An old brass oil lamp.",
+          "id": "eval_lantern",
+          "name": "Evaluation Lantern",
+          "description": "A synthetic evaluation lantern.",
           "observable_state": {"lit": true}
         }
       ],
@@ -19,8 +19,8 @@
     }
   },
   "deterministic_expectations": {
-    "contains": ["brass lamp", "lit"],
+    "contains": ["evaluation lantern", "lit"],
     "must_not_contain": ["lightable", "openable", "properties", "opens"]
   },
-  "fixture_output": {"reply_text": "The brass lamp is lit, casting a warm glow across the hall."}
+  "fixture_output": {"reply_text": "The evaluation lantern is lit, casting a warm glow across the foyer."}
 }

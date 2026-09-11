@@ -3,7 +3,10 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from evals.schemas import Scenario
+from app.agents.narrator import NarratorAgentInput
+from app.schemas.director import DirectorInput
+
+from evals.schemas import Scenario, ScenarioTarget
 
 _SCENARIO_DIR = Path(__file__).resolve().parent
 
@@ -11,7 +14,25 @@ _SCENARIO_DIR = Path(__file__).resolve().parent
 def load_scenario(path: str | Path) -> Scenario:
     with Path(path).open("r", encoding="utf-8") as handle:
         payload = json.load(handle)
-    return Scenario.model_validate(payload)
+    scenario = Scenario.model_validate(payload)
+    _validate_target_specific_input(scenario)
+    return scenario
+
+
+def _validate_target_specific_input(scenario: Scenario) -> None:
+    """Validate authoritative_input against the real production contract.
+
+    Scenario.authoritative_input stays a generic dict in the harness-wide
+    Scenario model, but a malformed target-specific fixture must fail at
+    load time, before offline grading, filtering/execution, or live
+    execution. Reuses the existing production classes rather than a
+    duplicate eval-only input schema.
+    """
+
+    if scenario.target == ScenarioTarget.DIRECTOR:
+        DirectorInput.model_validate(scenario.authoritative_input)
+    elif scenario.target == ScenarioTarget.NARRATOR:
+        NarratorAgentInput.model_validate(scenario.authoritative_input)
 
 
 def load_scenarios(directory: str | Path = _SCENARIO_DIR) -> list[Scenario]:

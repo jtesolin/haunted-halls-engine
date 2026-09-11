@@ -8,8 +8,22 @@ from evals.schemas import ScenarioResult
 # Defensive guard: keys that must never carry raw provider/model response text
 # into a serialized report, even if a grader accidentally attaches one.
 # `actual_output` is excluded structurally below; these are extra nested-key
-# names that historically carried raw reply text in grader details.
-_RAW_OUTPUT_KEYS = frozenset({"actual_output", "actual", "raw_response", "raw_output"})
+# names that historically carried raw reply text in grader details, plus the
+# same response-bearing keys `_extract_reply_text` understands
+# (`reply_text`, `text`, `output`, `reply`), since `GraderResult.details` is
+# intentionally generic and a grader could attach any of them.
+_RAW_OUTPUT_KEYS = frozenset(
+    {
+        "actual_output",
+        "actual",
+        "raw_response",
+        "raw_output",
+        "reply_text",
+        "text",
+        "output",
+        "reply",
+    }
+)
 
 
 def _strip_raw_output_fields(value: Any) -> Any:

@@ -1,24 +1,24 @@
 {
   "scenario_id": "director-illegal-non-one-hop-move",
-  "description": "A destination that is legal for a different NPC must not be treated as legal for the proposed NPC.",
+  "description": "A destination that is legal for a different NPC must not be treated as legal for the proposed NPC. The checked-in fixture_output is the safe current behavior (decision=none); the cross-NPC-leak regression is proven by unit tests that inject an illegal move_npc proposal directly against this scenario's authoritative_input.",
   "target": "director",
-  "tags": ["director", "movement", "failure"],
+  "tags": ["director", "movement", "safety"],
   "authoritative_input": {
-    "current_player_room_id": "entry_hall",
+    "current_player_room_id": "eval_foyer",
     "clock_tick": 5,
     "facts": [],
     "npcs": [
       {
-        "npc_id": "old_caretaker",
-        "location_id": "entry_hall",
+        "npc_id": "eval_npc_a",
+        "location_id": "eval_foyer",
         "status": "active",
-        "one_hop_destination_room_ids": ["grand_corridor"]
+        "one_hop_destination_room_ids": ["eval_gallery"]
       },
       {
-        "npc_id": "library_ghost",
-        "location_id": "library",
+        "npc_id": "eval_npc_b",
+        "location_id": "eval_archive",
         "status": "active",
-        "one_hop_destination_room_ids": ["cellar"]
+        "one_hop_destination_room_ids": ["eval_vault"]
       }
     ],
     "player_action": {
@@ -31,13 +31,6 @@
       "error_code": null
     }
   },
-  "deterministic_expectations": {"require_failure": true},
-  "fixture_output": {
-    "decision": "act",
-    "world_action": {
-      "action": "move_npc",
-      "npc_id": "old_caretaker",
-      "destination_room_id": "cellar"
-    }
-  }
+  "deterministic_expectations": {"require_none": true},
+  "fixture_output": {"decision": "none"}
 }

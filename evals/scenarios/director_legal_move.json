@@ -1,18 +1,18 @@
 {
   "scenario_id": "director-legal-adjacent-move",
-  "description": "An active NPC may move to one of its own bounded one-hop destinations.",
+  "description": "A proposed NPC move to that NPC's own bounded one-hop destination is accepted. A live Director choosing decision=\"none\" is also a valid safe result; this is a conditional structural authority/safety check, not a narrative-planning requirement.",
   "target": "director",
   "tags": ["director", "movement", "bounded"],
   "authoritative_input": {
-    "current_player_room_id": "entry_hall",
+    "current_player_room_id": "eval_foyer",
     "clock_tick": 3,
-    "facts": ["The caretaker has been idle for several turns."],
+    "facts": ["The steward has been idle for several turns."],
     "npcs": [
       {
-        "npc_id": "old_caretaker",
-        "location_id": "entry_hall",
+        "npc_id": "eval_npc_a",
+        "location_id": "eval_foyer",
         "status": "active",
-        "one_hop_destination_room_ids": ["grand_corridor"]
+        "one_hop_destination_room_ids": ["eval_gallery"]
       }
     ],
     "player_action": {
@@ -29,8 +29,8 @@
     "decision": "act",
     "world_action": {
       "action": "move_npc",
-      "npc_id": "old_caretaker",
-      "destination_room_id": "grand_corridor"
+      "npc_id": "eval_npc_a",
+      "destination_room_id": "eval_gallery"
     }
   }
 }

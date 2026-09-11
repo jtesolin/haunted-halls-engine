@@ -28,17 +28,10 @@ scenario = Scenario(
     description="No action when nothing needs changing.",
     target=ScenarioTarget.DIRECTOR,
     authoritative_input={
-        "current_player_room_id": "entry_hall",
+        "current_player_room_id": "eval_foyer",
         "clock_tick": 0,
         "facts": [],
-        "npcs": [
-            {
-                "npc_id": "old_caretaker",
-                "location_id": "entry_hall",
-                "status": "active",
-                "one_hop_destination_room_ids": ["grand_corridor"],
-            }
-        ],
+        "npcs": [],
         "player_action": {
             "action": "observe",
             "parse_status": "ok",
@@ -70,8 +63,17 @@ must validate as the real, production
 `app.agents.narrator.NarratorAgentInput` contract (`player_message`,
 `scene_context`, and optionally `recent_turns`, `campaign_summary`,
 `relevant_memories`, `parsed_action`, `tool_result`). The harness does not
-define a second, competing input schema; tests assert every checked-in
-scenario validates against these production contracts.
+define a second, competing input schema; scenario loading validates the
+target-specific contract for every checked-in and custom scenario file, and
+tests assert every checked-in scenario validates against these production
+contracts.
+
+Room, NPC, and item identifiers in the checked-in corpus are synthetic
+fixture-local IDs (for example `eval_foyer`, `eval_gallery`, `eval_npc_a`,
+`eval_lantern`) rather than shipped campaign content. Production schema
+validation must still succeed against these synthetic values; the corpus is
+never required to reference `app/game/world.py` or `app/game/npcs.py`
+content.
 
 Run the corpus offline:
 

@@ -106,18 +106,6 @@ class DirectorDeterministicGrader(DeterministicGrader):
             if not is_allowed:
                 return results
 
-            if action.action == "spawn_npc":
-                results.append(
-                    GraderResult(
-                        name="reject_spawn_npc",
-                        passed=False,
-                        score=0.0,
-                        max_score=1.0,
-                        details={"action": action.action},
-                    )
-                )
-                return results
-
             if action.action == "move_npc":
                 npc_id = getattr(action, "npc_id", None)
                 npc_context = _find_npc_context(scenario.authoritative_input, npc_id)

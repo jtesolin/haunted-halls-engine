@@ -1,10 +1,10 @@
 {
   "scenario_id": "director-unsupported-spawn-action",
-  "description": "Unsupported spawn actions are rejected rather than treated as world authority.",
+  "description": "Unsupported spawn actions are rejected rather than treated as world authority. The checked-in fixture_output is the safe current behavior (decision=none); the rejection of an injected spawn_npc action is proven by a focused unit test against this scenario's authoritative_input.",
   "target": "director",
-  "tags": ["director", "safety", "failure"],
+  "tags": ["director", "safety"],
   "authoritative_input": {
-    "current_player_room_id": "entry_hall",
+    "current_player_room_id": "eval_foyer",
     "clock_tick": 2,
     "facts": [],
     "npcs": [],
@@ -18,9 +18,6 @@
       "error_code": null
     }
   },
-  "deterministic_expectations": {"require_failure": true},
-  "fixture_output": {
-    "decision": "act",
-    "world_action": {"action": "spawn_npc", "npc_id": "invented_npc"}
-  }
+  "deterministic_expectations": {"require_none": true},
+  "fixture_output": {"decision": "none"}
 }
