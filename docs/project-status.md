@@ -456,8 +456,10 @@ were introduced in 7B3.
 
 ## Phase 8 — Narrative Progression & Character Systems
 
-**Status: Active. 8A (Story / Quest Model) implemented as a domain
-foundation; tracked by #52.**
+**Status: Active. 8A Story / Quest, 8B progression, 8C ability/check domain
+foundation, and 8E1 evaluation-harness foundation are complete. With the
+8A/8B/8C prerequisites complete, 8D Narrative Director Expansion is the next
+main gameplay milestone; ongoing Phase 8 work is tracked by #52.**
 
 ### 8A — Story / Quest Model
 
@@ -529,6 +531,38 @@ ability/check resolution, without designing the system around combat.
   (Phase 8C), does not touch `ChatOrchestrator`, the Director, or
   `WorldAuthorityExecutor`, and preserves the existing `CharacterInfo` /
   `CharacterList` API DTOs in `app/schemas/character.py` unchanged.
+
+## Phase 8C — Deterministic Ability and Check System
+
+**Status: Complete — domain foundation only (issue #59; roadmap #52)**
+
+Phase 8C adds the engine-owned deterministic ability-availability and
+check-resolution foundation on top of Phase 8B progression. Its immutable,
+read-only static domain definitions are separate from campaign state and
+define four canonical abilities, each requiring two progression points in its
+backing track:
+
+* `keen_eye` → `investigation`
+* `steady_nerves` → `resolve`
+* `read_the_room` → `rapport`
+* `occult_insight` → `occult`
+
+Ability ownership persists in the player character's progression state.
+Availability requires all three authoritative conditions: a known ability
+definition, persisted ownership, and sufficient normalized progression in the
+ability's backing track. The shared progression scale remains bounded from
+`0` through `10`; checks resolve deterministically as
+`track_points >= difficulty`, so equality succeeds. Structured availability
+and check results expose their status and, for resolved checks, the margin.
+
+Malformed persisted progression or ownership data is normalized safely and
+cannot escalate ownership or ability availability. Evaluation and resolution
+are pure reads with no campaign mutation, RNG/dice, model judgment, combat,
+or database migration.
+
+This is **8C DOMAIN FOUNDATION only**. It is **not** integrated into the
+Action Parser, player `ToolExecutor`, Director, Narrator, `ChatOrchestrator`,
+or story progression.
 
 ## Authentication and Authorization
 
@@ -1074,9 +1108,12 @@ through the deterministic `WorldAuthorityExecutor`, and both narrator scene
 projection and memory maintenance ground in the resulting final authoritative
 state.
 
-Phase 8E1 — AI evaluation harness foundation (issue #55) is complete. Ongoing
-Phase 8 work is tracked under roadmap issue #52; consult that issue for the
-current sequence of Phase 8 milestones before starting further Phase 8 work.
+Phase 8A Story / Quest, 8B progression, 8C ability/check domain foundation,
+and 8E1 AI evaluation-harness foundation (issue #55) are complete. With the
+8A/8B/8C prerequisites complete, 8D Narrative Director Expansion is the next
+main gameplay milestone. Ongoing Phase 8 work is tracked under roadmap issue
+#52; consult that issue for the current sequence of Phase 8 milestones before
+starting further Phase 8 work.
 Tracking issue #43 (Phase 7B rollout planning) is closed and is not the
 active source for future-work candidates. See **Explicit Deferrals** above
 for the separate backlog of pre-Phase-8 candidate areas (for example
