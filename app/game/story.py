@@ -17,6 +17,7 @@ duplicated into every save.
 
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -263,7 +264,6 @@ def apply_story_signal(
     match any current or completed objective (`NOT_APPLICABLE`) or that fail
     to parse as a known typed signal (`INVALID_SIGNAL`).
     """
-    story = ensure_story_state(state)
     coerced = _coerce_signal(signal)
     if coerced is None:
         return StoryProgressionResult(
@@ -272,10 +272,15 @@ def apply_story_signal(
             reason="Signal payload is not a recognized typed story signal.",
         )
 
+    working_state = {"story": deepcopy(state.get("story"))}
+    story = ensure_story_state(working_state)
     incoming_type = _signal_type(coerced)
     incoming_value = _signal_match_value(coerced)
 
     quests: dict[str, Any] = story["quests"]
+    completed_match: tuple[str, QuestDefinition, dict[str, Any], ObjectiveDefinition] | None = None
+    locked_match: tuple[str, QuestDefinition, dict[str, Any], ObjectiveDefinition] | None = None
+    active_match: tuple[str, QuestDefinition, dict[str, Any], ObjectiveDefinition] | None = None
     for quest_id, quest in STORY_QUESTS.items():
         progress = quests[quest_id]
         objective_statuses: dict[str, str] = progress["objectives"]
@@ -286,41 +291,36 @@ def apply_story_signal(
                 continue
             current_status = objective_statuses[objective.id]
             if current_status == ObjectiveStatus.COMPLETED.value:
-                return StoryProgressionResult(
-                    changed=False,
-                    outcome=StoryProgressionOutcome.ALREADY_SATISFIED,
-                    reason="Signal matches an already-completed objective.",
-                    quest_id=quest_id,
-                    objective_id=objective.id,
-                    previous_objective_status=ObjectiveStatus.COMPLETED,
-                    new_objective_status=ObjectiveStatus.COMPLETED,
-                    previous_quest_status=QuestStatus(progress["status"]),
-                    new_quest_status=QuestStatus(progress["status"]),
-                )
-            if current_status == ObjectiveStatus.LOCKED.value:
-                return _not_applicable(
-                    "Signal matches a locked objective; prerequisites are not yet met."
-                )
-            # current_status == ACTIVE: this objective may advance.
-            previous_quest_status = QuestStatus(progress["status"])
-            objective_statuses[objective.id] = ObjectiveStatus.COMPLETED.value
-            next_objective = _next_objective(quest, objective.order)
-            if next_objective is None:
-                progress["status"] = QuestStatus.COMPLETED.value
-                return StoryProgressionResult(
-                    changed=True,
-                    outcome=StoryProgressionOutcome.QUEST_COMPLETED,
-                    reason="Final objective completed; quest completed.",
-                    quest_id=quest_id,
-                    objective_id=objective.id,
-                    previous_objective_status=ObjectiveStatus.ACTIVE,
-                    new_objective_status=ObjectiveStatus.COMPLETED,
-                    previous_quest_status=previous_quest_status,
-                    new_quest_status=QuestStatus.COMPLETED,
-                )
-            objective_statuses[next_objective.id] = ObjectiveStatus.ACTIVE.value
+                if completed_match is None:
+                    completed_match = (quest_id, quest, progress, objective)
+            elif current_status == ObjectiveStatus.LOCKED.value:
+                if locked_match is None:
+                    locked_match = (quest_id, quest, progress, objective)
+            elif active_match is None:
+                active_match = (quest_id, quest, progress, objective)
+
+    if active_match is not None:
+        quest_id, quest, progress, objective = active_match
+        previous_quest_status = QuestStatus(progress["status"])
+        progress["objectives"][objective.id] = ObjectiveStatus.COMPLETED.value
+        next_objective = _next_objective(quest, objective.order)
+        if next_objective is None:
+            progress["status"] = QuestStatus.COMPLETED.value
+            result = StoryProgressionResult(
+                changed=True,
+                outcome=StoryProgressionOutcome.QUEST_COMPLETED,
+                reason="Final objective completed; quest completed.",
+                quest_id=quest_id,
+                objective_id=objective.id,
+                previous_objective_status=ObjectiveStatus.ACTIVE,
+                new_objective_status=ObjectiveStatus.COMPLETED,
+                previous_quest_status=previous_quest_status,
+                new_quest_status=QuestStatus.COMPLETED,
+            )
+        else:
+            progress["objectives"][next_objective.id] = ObjectiveStatus.ACTIVE.value
             progress["status"] = QuestStatus.ACTIVE.value
-            return StoryProgressionResult(
+            result = StoryProgressionResult(
                 changed=True,
                 outcome=StoryProgressionOutcome.OBJECTIVE_ADVANCED,
                 reason="Objective completed; next objective activated.",
@@ -331,6 +331,27 @@ def apply_story_signal(
                 previous_quest_status=previous_quest_status,
                 new_quest_status=QuestStatus.ACTIVE,
             )
+        state["story"] = story
+        return result
+
+    if completed_match is not None:
+        quest_id, _, progress, objective = completed_match
+        return StoryProgressionResult(
+            changed=False,
+            outcome=StoryProgressionOutcome.ALREADY_SATISFIED,
+            reason="Signal matches an already-completed objective.",
+            quest_id=quest_id,
+            objective_id=objective.id,
+            previous_objective_status=ObjectiveStatus.COMPLETED,
+            new_objective_status=ObjectiveStatus.COMPLETED,
+            previous_quest_status=QuestStatus(progress["status"]),
+            new_quest_status=QuestStatus(progress["status"]),
+        )
+
+    if locked_match is not None:
+        return _not_applicable(
+            "Signal matches a locked objective; prerequisites are not yet met."
+        )
 
     return _not_applicable("Signal does not match any known story objective.")
 

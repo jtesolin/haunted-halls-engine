@@ -85,10 +85,10 @@ class StoryProgressionOutcome(StrEnum):
 class StoryProgressionResult(BaseModel):
     """Structured outcome of `apply_story_signal`.
 
-    Callers must treat `changed` as the only authoritative indicator of a
-    state mutation; the remaining fields are diagnostic context for future
-    persistence/eventing integration and are not evidence of progression by
-    themselves.
+    Callers must treat `changed` as the authoritative indicator that
+    `apply_story_signal` mutated story progression. The remaining fields are
+    diagnostic context for future persistence/eventing integration and are not
+    evidence of progression by themselves.
     """
 
     model_config = ConfigDict(extra="forbid")

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 
+import app.game.story as story_module
 from app.game.story import STORY_QUESTS, apply_story_signal, ensure_story_state
 from app.schemas.story import (
     FactRecordedSignal,
@@ -10,6 +11,7 @@ from app.schemas.story import (
     ObjectiveStatus,
     QuestStatus,
     RoomEnteredSignal,
+    StorySignalType,
     StoryProgressionOutcome,
 )
 
@@ -77,15 +79,13 @@ def test_entering_library_completes_only_first_objective() -> None:
 
 def test_speaking_to_ghost_before_first_objective_does_not_skip_progression() -> None:
     state = _fresh_state()
+    snapshot = json.loads(json.dumps(state))
 
     result = apply_story_signal(state, NpcSpokenToSignal(npc_id="library_ghost"))
 
     assert result.changed is False
     assert result.outcome is StoryProgressionOutcome.NOT_APPLICABLE
-
-    progress = state["story"]["quests"][QUEST_ID]
-    assert progress["objectives"]["enter_library"] == ObjectiveStatus.ACTIVE.value
-    assert progress["objectives"]["speak_to_library_ghost"] == ObjectiveStatus.LOCKED.value
+    assert state == snapshot
 
 
 def test_speaking_to_ghost_after_first_objective_advances_second_objective() -> None:
@@ -125,14 +125,13 @@ def test_acquiring_old_book_completes_final_objective_and_quest_after_prerequisi
 
 def test_acquiring_old_book_too_early_does_not_complete_quest() -> None:
     state = _fresh_state()
+    snapshot = json.loads(json.dumps(state))
 
     result = apply_story_signal(state, ItemAcquiredSignal(item_id="old_book"))
 
     assert result.changed is False
     assert result.outcome is StoryProgressionOutcome.NOT_APPLICABLE
-    progress = state["story"]["quests"][QUEST_ID]
-    assert progress["status"] == QuestStatus.ACTIVE.value
-    assert progress["objectives"]["acquire_old_book"] == ObjectiveStatus.LOCKED.value
+    assert state == snapshot
 
 
 def test_duplicate_signals_are_idempotent_and_do_not_double_advance() -> None:
@@ -238,6 +237,122 @@ def test_invalid_signal_payload_is_rejected_without_mutation() -> None:
     assert result.changed is False
     assert result.outcome is StoryProgressionOutcome.INVALID_SIGNAL
     assert state["story"] == snapshot
+
+
+def test_invalid_signal_without_story_namespace_leaves_entire_state_unchanged() -> None:
+    state = _fresh_state()
+    snapshot = json.loads(json.dumps(state))
+
+    result = apply_story_signal(state, {"signal_type": "not_a_real_signal"})
+
+    assert result.changed is False
+    assert result.outcome is StoryProgressionOutcome.INVALID_SIGNAL
+    assert state == snapshot
+
+
+def _matching_quest(quest_id: str) -> story_module.QuestDefinition:
+    return story_module.QuestDefinition(
+        id=quest_id,
+        title=quest_id,
+        description="Test quest",
+        objectives=(
+            story_module.ObjectiveDefinition(
+                id=f"{quest_id}_objective",
+                order=0,
+                description="Test objective",
+                signal_type=StorySignalType.ROOM_ENTERED,
+                match_value="shared_room",
+            ),
+        ),
+    )
+
+
+def _matching_story(
+    quests: dict[str, story_module.QuestDefinition],
+    statuses: dict[str, ObjectiveStatus],
+) -> dict:
+    return {
+        "quests": {
+            quest_id: {
+                "status": {
+                    ObjectiveStatus.COMPLETED: QuestStatus.COMPLETED.value,
+                    ObjectiveStatus.ACTIVE: QuestStatus.ACTIVE.value,
+                    ObjectiveStatus.LOCKED: QuestStatus.INACTIVE.value,
+                }[statuses[quest_id]],
+                "objectives": {
+                    quest.objectives[0].id: statuses[quest_id].value
+                },
+            }
+            for quest_id, quest in quests.items()
+        }
+    }
+
+
+def test_later_active_match_precedes_earlier_completed_match(monkeypatch) -> None:
+    quests = {"earlier": _matching_quest("earlier"), "later": _matching_quest("later")}
+    monkeypatch.setattr(story_module, "STORY_QUESTS", quests)
+    state = _fresh_state()
+    state["story"] = _matching_story(
+        quests,
+        {"earlier": ObjectiveStatus.COMPLETED, "later": ObjectiveStatus.ACTIVE},
+    )
+
+    result = apply_story_signal(state, RoomEnteredSignal(room_id="shared_room"))
+
+    assert result.changed is True
+    assert result.quest_id == "later"
+
+
+def test_later_active_match_precedes_earlier_locked_match(monkeypatch) -> None:
+    quests = {"earlier": _matching_quest("earlier"), "later": _matching_quest("later")}
+    monkeypatch.setattr(story_module, "STORY_QUESTS", quests)
+    state = _fresh_state()
+    state["story"] = _matching_story(
+        quests,
+        {"earlier": ObjectiveStatus.LOCKED, "later": ObjectiveStatus.ACTIVE},
+    )
+
+    result = apply_story_signal(state, RoomEnteredSignal(room_id="shared_room"))
+
+    assert result.changed is True
+    assert result.quest_id == "later"
+
+
+def test_completed_match_is_fallback_when_no_active_match_exists(monkeypatch) -> None:
+    quests = {"earlier": _matching_quest("earlier"), "later": _matching_quest("later")}
+    monkeypatch.setattr(story_module, "STORY_QUESTS", quests)
+    state = _fresh_state()
+    state["story"] = _matching_story(
+        quests,
+        {"earlier": ObjectiveStatus.COMPLETED, "later": ObjectiveStatus.LOCKED},
+    )
+    snapshot = json.loads(json.dumps(state))
+
+    result = apply_story_signal(state, RoomEnteredSignal(room_id="shared_room"))
+
+    assert result.changed is False
+    assert result.outcome is StoryProgressionOutcome.ALREADY_SATISFIED
+    assert state == snapshot
+
+
+def test_locked_match_is_fallback_when_no_active_or_completed_match_exists(
+    monkeypatch,
+) -> None:
+    quests = {"earlier": _matching_quest("earlier"), "later": _matching_quest("later")}
+    monkeypatch.setattr(story_module, "STORY_QUESTS", quests)
+    state = _fresh_state()
+    state["story"] = _matching_story(
+        quests,
+        {"earlier": ObjectiveStatus.LOCKED, "later": ObjectiveStatus.LOCKED},
+    )
+    snapshot = json.loads(json.dumps(state))
+
+    result = apply_story_signal(state, RoomEnteredSignal(room_id="shared_room"))
+
+    assert result.changed is False
+    assert result.outcome is StoryProgressionOutcome.NOT_APPLICABLE
+    assert "locked objective" in result.reason
+    assert state == snapshot
 
 
 def test_story_state_json_round_trip_preserves_progress() -> None:
