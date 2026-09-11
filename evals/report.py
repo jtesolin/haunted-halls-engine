@@ -196,20 +196,32 @@ def summarize_results(results: Sequence[ScenarioResult]) -> dict[str, Any]:
 
     serialized_results = []
     for result in results:
-        # Sanitize BEFORE any JSON-mode encoding. grader_results.details and
-        # model_metadata are both `dict[str, Any]`, so a caller could place a
-        # non-JSON-serializable object under an unrecognized key; Pydantic's
-        # own `mode="json"` dump would then raise before the sanitizer below
-        # ever runs. `mode="python"` performs no JSON-compatibility coercion
-        # (so it never raises on arbitrary values) while still recursively
-        # expanding nested models (GraderResult) into plain dicts; the
-        # explicit safe-projection helpers then reduce every arbitrary field
-        # to bounded, already-JSON-safe scalars before this function returns.
-        dumped = result.model_dump(mode="python", exclude={"actual_output", "fixture_output"})
-        dumped["grader_results"] = [
-            _safe_grader_result(grader_result) for grader_result in dumped.get("grader_results", [])
-        ]
-        dumped["model_metadata"] = _safe_model_metadata(dumped.get("model_metadata", {}))
+        # Build the stable report record from an explicit safe-field
+        # ALLOWLIST rather than a broad model dump. `Scenario`/
+        # `ScenarioResult` are the harness-wide contract and also carry
+        # `authoritative_input` and `deterministic_expectations` -- arbitrary
+        # caller/fixture payload fields that issue #55 does not require in
+        # every report and that could otherwise smuggle a
+        # non-JSON-serializable object or raw provider-shaped content into a
+        # stable report merely because they happen to round-trip through
+        # `model_dump()`. `actual_output`/`fixture_output` are excluded for
+        # the same reason (see prior rounds). `grader_results` and
+        # `model_metadata` are still routed through their existing safe
+        # projections below.
+        dumped = {
+            "scenario_id": result.scenario_id,
+            "description": result.description,
+            "target": result.target,
+            "tags": list(result.tags),
+            "grader_results": [
+                _safe_grader_result(grader_result.model_dump(mode="python"))
+                for grader_result in result.grader_results
+            ],
+            "passed": result.passed,
+            "score": result.score,
+            "max_score": result.max_score,
+            "model_metadata": _safe_model_metadata(result.model_metadata),
+        }
         serialized_results.append(dumped)
 
     summary = {

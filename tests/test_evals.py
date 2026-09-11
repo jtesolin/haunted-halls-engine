@@ -2529,3 +2529,147 @@ def test_run_live_scenario_still_runs_valid_programmatic_director_scenario(monke
     )
     output, _ = asyncio.run(_run_live_scenario(scenario))
     assert output == {"decision": "none"}
+
+
+# --- Item 1: explicit stable report projection -----------------------------
+
+
+class _UnserializableMarker:
+    """Deliberately not JSON-serializable and has no meaningful __repr__
+    content to leak; used only to prove such an object cannot reach the
+    stable report even when embedded inside authoritative_input."""
+
+    def __repr__(self) -> str:
+        return "<UnserializableMarker>"
+
+
+def test_report_excludes_raw_authoritative_input_with_unsafe_values() -> None:
+    """authoritative_input is arbitrary fixture/programmatic payload; a
+    non-JSON-serializable object or a non-finite float embedded in it must
+    never reach summarize_results()'s output, and must not cause
+    summarize_results() itself to raise."""
+
+    result = ScenarioResult(
+        scenario_id="report-excludes-raw-authoritative-input",
+        description="Raw authoritative_input must never be projected into the stable report.",
+        target=ScenarioTarget.DIRECTOR,
+        authoritative_input={
+            "unserializable": _UnserializableMarker(),
+            "non_finite": float("nan"),
+        },
+        deterministic_expectations={"require_none": True},
+        passed=True,
+        score=1.0,
+        max_score=1.0,
+    )
+    summary = summarize_results([result])
+    # Must succeed even though authoritative_input itself is not
+    # JSON-serializable/finite -- the stable projection never touches it.
+    json.dumps(summary, allow_nan=False)
+    serialized = summary["results"][0]
+    assert "authoritative_input" not in serialized
+    assert "deterministic_expectations" not in serialized
+    assert "actual_output" not in serialized
+    assert "fixture_output" not in serialized
+
+
+def test_report_projection_omits_deterministic_expectations_field() -> None:
+    """deterministic_expectations must not be copied wholesale into the
+    stable report, even when it is otherwise safe/JSON-serializable."""
+
+    result = ScenarioResult(
+        scenario_id="report-omits-deterministic-expectations",
+        description="d",
+        target=ScenarioTarget.NARRATOR,
+        authoritative_input=_NARRATOR_FIXTURE,
+        deterministic_expectations={"contains": ["evaluation lantern"]},
+        passed=True,
+        score=1.0,
+        max_score=1.0,
+    )
+    summary = summarize_results([result])
+    serialized = summary["results"][0]
+    assert "deterministic_expectations" not in serialized
+    serialized_json = json.dumps(summary)
+    assert "evaluation lantern" not in serialized_json
+
+
+def test_report_stable_projection_retains_expected_safe_fields() -> None:
+    """The explicit safe-field projection must still retain the fields the
+    report/CLI actually rely on."""
+
+    result = ScenarioResult(
+        scenario_id="report-safe-fields",
+        description="A scenario description.",
+        target=ScenarioTarget.DIRECTOR,
+        tags=["smoke"],
+        authoritative_input=_DIRECTOR_FIXTURE,
+        deterministic_expectations={"require_none": True},
+        passed=True,
+        score=1.0,
+        max_score=1.0,
+        grader_results=[GraderResult(name="require_none", passed=True, score=1.0, max_score=1.0)],
+    )
+    summary = summarize_results([result])
+    serialized = summary["results"][0]
+    assert serialized["scenario_id"] == "report-safe-fields"
+    assert serialized["description"] == "A scenario description."
+    assert serialized["target"] == "director"
+    assert serialized["tags"] == ["smoke"]
+    assert serialized["passed"] is True
+    assert serialized["score"] == 1.0
+    assert serialized["max_score"] == 1.0
+    assert serialized["grader_results"][0]["name"] == "require_none"
+
+
+# --- Item 2: model_metadata reset for offline/ordinary runs ----------------
+
+
+def test_eval_runner_resets_model_metadata_from_input_scenario() -> None:
+    """model_metadata embedded in the input Scenario (fixture/programmatic
+    payload) must never be implicitly treated as this run's metadata."""
+
+    scenario = Scenario(
+        scenario_id="offline-metadata-reset",
+        description="d",
+        target=ScenarioTarget.DIRECTOR,
+        authoritative_input=_DIRECTOR_FIXTURE,
+        deterministic_expectations={"require_none": True},
+        fixture_output={"decision": "none"},
+        model_metadata={"target_agent": "director", "model": "fake-provider-model"},
+    )
+    result = EvalRunner().run(scenario)
+    assert result.model_metadata == {}
+
+
+def test_run_scenarios_resets_model_metadata_from_input_scenarios() -> None:
+    scenario = Scenario(
+        scenario_id="offline-metadata-reset-batch",
+        description="d",
+        target=ScenarioTarget.DIRECTOR,
+        authoritative_input=_DIRECTOR_FIXTURE,
+        deterministic_expectations={"require_none": True},
+        fixture_output={"decision": "none"},
+        model_metadata={"target_agent": "director", "model": "fake-provider-model"},
+    )
+    results = run_scenarios([scenario])
+    assert results[0].model_metadata == {}
+
+
+def test_eval_runner_retains_explicitly_supplied_run_metadata() -> None:
+    """Metadata explicitly passed for THIS execution (as the live path does)
+    must still be retained, not wiped by the reset."""
+
+    scenario = Scenario(
+        scenario_id="explicit-metadata-survives",
+        description="d",
+        target=ScenarioTarget.DIRECTOR,
+        authoritative_input=_DIRECTOR_FIXTURE,
+        deterministic_expectations={"require_none": True},
+    )
+    result = EvalRunner().run(
+        scenario,
+        actual_output={"decision": "none"},
+        model_metadata={"target_agent": "director", "model": "real-model"},
+    )
+    assert result.model_metadata == {"target_agent": "director", "model": "real-model"}

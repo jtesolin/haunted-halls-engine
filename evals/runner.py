@@ -61,6 +61,12 @@ class EvalRunner:
             scenario_copy.actual_output = actual_output
         elif scenario_copy.actual_output is None:
             scenario_copy.actual_output = scenario_copy.fixture_output
+        # Reset model_metadata unconditionally: an input Scenario's
+        # model_metadata is fixture/programmatic payload, not THIS run's
+        # metadata, and must never be implicitly treated as if it were. Only
+        # metadata the caller explicitly supplies for this execution (e.g.
+        # the live path's target/model/usage) is retained.
+        scenario_copy.model_metadata = {}
         if model_metadata is not None:
             scenario_copy.model_metadata = model_metadata
         # `Scenario` is also the public PROGRAMMATIC contract: callers can
