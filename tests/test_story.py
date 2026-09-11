@@ -2,8 +2,16 @@ from __future__ import annotations
 
 import json
 
-import app.game.story as story_module
-from app.game.story import STORY_QUESTS, apply_story_signal, ensure_story_state
+import pytest
+
+from app.game.story import (
+    STORY_QUESTS,
+    ObjectiveDefinition,
+    QuestDefinition,
+    apply_story_signal,
+    ensure_story_state,
+    validate_story_definitions,
+)
 from app.schemas.story import (
     FactRecordedSignal,
     ItemAcquiredSignal,
@@ -250,109 +258,147 @@ def test_invalid_signal_without_story_namespace_leaves_entire_state_unchanged() 
     assert state == snapshot
 
 
-def _matching_quest(quest_id: str) -> story_module.QuestDefinition:
-    return story_module.QuestDefinition(
-        id=quest_id,
-        title=quest_id,
-        description="Test quest",
+def test_canonical_dev_definitions_validate_successfully() -> None:
+    validate_story_definitions(STORY_QUESTS)
+
+
+def test_duplicate_condition_within_one_quest_rejected() -> None:
+    quest = QuestDefinition(
+        id="dup_quest",
+        title="Duplicate Quest",
+        description="Test",
         objectives=(
-            story_module.ObjectiveDefinition(
-                id=f"{quest_id}_objective",
+            ObjectiveDefinition(
+                id="obj1",
                 order=0,
-                description="Test objective",
+                description="First",
+                signal_type=StorySignalType.ROOM_ENTERED,
+                match_value="library",
+            ),
+            ObjectiveDefinition(
+                id="obj2",
+                order=1,
+                description="Second",
+                signal_type=StorySignalType.ROOM_ENTERED,
+                match_value="library",
+            ),
+        ),
+    )
+    with pytest.raises(ValueError, match="Duplicate story progression condition"):
+        validate_story_definitions({"dup_quest": quest})
+
+
+def test_duplicate_condition_across_two_quests_rejected() -> None:
+    q1 = QuestDefinition(
+        id="q1",
+        title="Q1",
+        description="Test",
+        objectives=(
+            ObjectiveDefinition(
+                id="q1_obj",
+                order=0,
+                description="First",
                 signal_type=StorySignalType.ROOM_ENTERED,
                 match_value="shared_room",
             ),
         ),
     )
+    q2 = QuestDefinition(
+        id="q2",
+        title="Q2",
+        description="Test",
+        objectives=(
+            ObjectiveDefinition(
+                id="q2_obj",
+                order=0,
+                description="Second",
+                signal_type=StorySignalType.ROOM_ENTERED,
+                match_value="shared_room",
+            ),
+        ),
+    )
+    with pytest.raises(ValueError, match="Duplicate story progression condition"):
+        validate_story_definitions({"q1": q1, "q2": q2})
 
 
-def _matching_story(
-    quests: dict[str, story_module.QuestDefinition],
-    statuses: dict[str, ObjectiveStatus],
-) -> dict:
-    return {
+def test_different_conditions_across_multiple_quests_valid() -> None:
+    q1 = QuestDefinition(
+        id="q1",
+        title="Q1",
+        description="Test",
+        objectives=(
+            ObjectiveDefinition(
+                id="q1_obj",
+                order=0,
+                description="First",
+                signal_type=StorySignalType.ROOM_ENTERED,
+                match_value="room_a",
+            ),
+        ),
+    )
+    q2 = QuestDefinition(
+        id="q2",
+        title="Q2",
+        description="Test",
+        objectives=(
+            ObjectiveDefinition(
+                id="q2_obj",
+                order=0,
+                description="Second",
+                signal_type=StorySignalType.ROOM_ENTERED,
+                match_value="room_b",
+            ),
+        ),
+    )
+    validate_story_definitions({"q1": q1, "q2": q2})
+
+
+def test_stuck_completed_prefix_locked_suffix_without_active_objective_resets_safely() -> None:
+    state = _fresh_state()
+    state["story"] = {
         "quests": {
-            quest_id: {
-                "status": {
-                    ObjectiveStatus.COMPLETED: QuestStatus.COMPLETED.value,
-                    ObjectiveStatus.ACTIVE: QuestStatus.ACTIVE.value,
-                    ObjectiveStatus.LOCKED: QuestStatus.INACTIVE.value,
-                }[statuses[quest_id]],
+            QUEST_ID: {
+                "status": "active",
                 "objectives": {
-                    quest.objectives[0].id: statuses[quest_id].value
+                    "enter_library": "completed",
+                    "speak_to_library_ghost": "locked",
+                    "acquire_old_book": "locked",
                 },
             }
-            for quest_id, quest in quests.items()
         }
     }
 
+    story = ensure_story_state(state)
 
-def test_later_active_match_precedes_earlier_completed_match(monkeypatch) -> None:
-    quests = {"earlier": _matching_quest("earlier"), "later": _matching_quest("later")}
-    monkeypatch.setattr(story_module, "STORY_QUESTS", quests)
+    progress = story["quests"][QUEST_ID]
+    assert progress["status"] == QuestStatus.ACTIVE.value
+    assert progress["objectives"] == {
+        "enter_library": ObjectiveStatus.ACTIVE.value,
+        "speak_to_library_ghost": ObjectiveStatus.LOCKED.value,
+        "acquire_old_book": ObjectiveStatus.LOCKED.value,
+    }
+
+
+def test_stuck_completed_completed_locked_without_active_objective_resets_safely() -> None:
     state = _fresh_state()
-    state["story"] = _matching_story(
-        quests,
-        {"earlier": ObjectiveStatus.COMPLETED, "later": ObjectiveStatus.ACTIVE},
-    )
+    state["story"] = {
+        "quests": {
+            QUEST_ID: {
+                "status": "active",
+                "objectives": {
+                    "enter_library": "completed",
+                    "speak_to_library_ghost": "completed",
+                    "acquire_old_book": "locked",
+                },
+            }
+        }
+    }
 
-    result = apply_story_signal(state, RoomEnteredSignal(room_id="shared_room"))
+    story = ensure_story_state(state)
 
-    assert result.changed is True
-    assert result.quest_id == "later"
-
-
-def test_later_active_match_precedes_earlier_locked_match(monkeypatch) -> None:
-    quests = {"earlier": _matching_quest("earlier"), "later": _matching_quest("later")}
-    monkeypatch.setattr(story_module, "STORY_QUESTS", quests)
-    state = _fresh_state()
-    state["story"] = _matching_story(
-        quests,
-        {"earlier": ObjectiveStatus.LOCKED, "later": ObjectiveStatus.ACTIVE},
-    )
-
-    result = apply_story_signal(state, RoomEnteredSignal(room_id="shared_room"))
-
-    assert result.changed is True
-    assert result.quest_id == "later"
-
-
-def test_completed_match_is_fallback_when_no_active_match_exists(monkeypatch) -> None:
-    quests = {"earlier": _matching_quest("earlier"), "later": _matching_quest("later")}
-    monkeypatch.setattr(story_module, "STORY_QUESTS", quests)
-    state = _fresh_state()
-    state["story"] = _matching_story(
-        quests,
-        {"earlier": ObjectiveStatus.COMPLETED, "later": ObjectiveStatus.LOCKED},
-    )
-    snapshot = json.loads(json.dumps(state))
-
-    result = apply_story_signal(state, RoomEnteredSignal(room_id="shared_room"))
-
-    assert result.changed is False
-    assert result.outcome is StoryProgressionOutcome.ALREADY_SATISFIED
-    assert state == snapshot
-
-
-def test_locked_match_is_fallback_when_no_active_or_completed_match_exists(
-    monkeypatch,
-) -> None:
-    quests = {"earlier": _matching_quest("earlier"), "later": _matching_quest("later")}
-    monkeypatch.setattr(story_module, "STORY_QUESTS", quests)
-    state = _fresh_state()
-    state["story"] = _matching_story(
-        quests,
-        {"earlier": ObjectiveStatus.LOCKED, "later": ObjectiveStatus.LOCKED},
-    )
-    snapshot = json.loads(json.dumps(state))
-
-    result = apply_story_signal(state, RoomEnteredSignal(room_id="shared_room"))
-
-    assert result.changed is False
-    assert result.outcome is StoryProgressionOutcome.NOT_APPLICABLE
-    assert "locked objective" in result.reason
-    assert state == snapshot
+    progress = story["quests"][QUEST_ID]
+    assert progress["status"] == QuestStatus.ACTIVE.value
+    assert progress["objectives"]["enter_library"] == ObjectiveStatus.ACTIVE.value
 
 
 def test_story_state_json_round_trip_preserves_progress() -> None:

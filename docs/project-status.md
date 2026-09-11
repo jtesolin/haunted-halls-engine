@@ -481,6 +481,11 @@ already-completed objective, and returns a typed `StoryProgressionResult`
 (never a bare boolean) that also distinguishes not-applicable signals from
 malformed/unrecognized ones. It does not persist events itself.
 
+Each progression trigger condition (`signal_type`, `match_value`) is
+unique across the static story definition collection, enabling payload-level
+replay idempotence without event identity; richer repeated or shared triggers
+require future authoritative event identity/consumption semantics.
+
 One development quest, "The Library's Whisper", proves the model using only
 existing canonical content: enter the `library`, speak to `library_ghost`,
 then acquire the `old_book`.

@@ -13,13 +13,19 @@ Static quest/objective *definitions* are immutable content data. Per-campaign
 mutable *progress* lives only in authoritative campaign state under the
 `story` namespace, kept separate from definitions so definitions are never
 duplicated into every save.
+
+A progression trigger condition (`signal_type`, `match_value`) is unique across
+the static story definition collection. This enables payload-level replay
+idempotence without requiring event identity; richer repeated or shared
+triggers require future authoritative event identity/consumption semantics.
 """
 
 from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import dataclass, field
-from typing import Any
+from collections.abc import Mapping
+from typing import Any, Iterable
 
 from pydantic import ValidationError
 
@@ -94,7 +100,41 @@ def build_development_quests() -> dict[str, QuestDefinition]:
     return {library_whisper.id: library_whisper}
 
 
+def validate_story_definitions(
+    quests: dict[str, QuestDefinition] | Iterable[QuestDefinition]
+) -> None:
+    """Validate that progression conditions are globally unique across quests.
+
+    A progression trigger condition (`signal_type`, `match_value`) must be unique
+    across all objectives in the static story definition collection. This enables
+    payload-level replay idempotence without requiring event identity; richer
+    repeated or shared triggers require future authoritative event identity/consumption
+    semantics.
+    """
+    quest_list: list[tuple[str, QuestDefinition]] = []
+    if isinstance(quests, Mapping):
+        for q_id, q_def in quests.items():
+            quest_list.append((str(q_id), q_def))
+    else:
+        for q_item in quests:
+            if isinstance(q_item, QuestDefinition):
+                quest_list.append((q_item.id, q_item))
+    seen: dict[tuple[StorySignalType, str], tuple[str, str]] = {}
+    for quest_id, quest in quest_list:
+        for objective in quest.objectives:
+            key = (objective.signal_type, objective.match_value)
+            if key in seen:
+                first_quest, first_obj = seen[key]
+                raise ValueError(
+                    f"Duplicate story progression condition {key} in objective "
+                    f"'{objective.id}' of quest '{quest_id}' (already defined in "
+                    f"objective '{first_obj}' of quest '{first_quest}')."
+                )
+            seen[key] = (quest_id, objective.id)
+
+
 STORY_QUESTS: dict[str, QuestDefinition] = build_development_quests()
+validate_story_definitions(STORY_QUESTS)
 
 
 def _fresh_quest_progress(quest: QuestDefinition) -> dict[str, Any]:
@@ -117,45 +157,55 @@ def _derive_quest_status(
     """Validate the completed/active/locked sequence and derive quest status.
 
     Returns `None` when the persisted sequence is not a valid
-    completed-prefix / at-most-one-active / locked-suffix sequence, signaling
-    that the caller must fall back to a fresh, safe default rather than trust
-    (and potentially grant progression from) malformed data.
+    completed-prefix / exactly-one-active / locked-suffix sequence (or all
+    locked / all completed), signaling that the caller must fall back to a fresh,
+    safe default rather than trust (and potentially grant progression from or
+    get permanently stuck on) malformed data.
     """
+    if not quest.objectives:
+        return QuestStatus.INACTIVE.value
+
     phase = "completed"
-    any_completed = False
-    any_active = False
+    completed_count = 0
+    active_count = 0
+    locked_count = 0
+
     for objective in quest.objectives:
         status = objective_statuses.get(objective.id)
         if status not in _VALID_OBJECTIVE_STATUSES:
             return None
         if phase == "completed":
             if status == ObjectiveStatus.COMPLETED.value:
-                any_completed = True
+                completed_count += 1
                 continue
             if status == ObjectiveStatus.ACTIVE.value:
-                any_active = True
+                active_count += 1
                 phase = "active"
                 continue
             if status == ObjectiveStatus.LOCKED.value:
+                locked_count += 1
                 phase = "locked"
                 continue
             return None
         if phase == "active":
             if status == ObjectiveStatus.LOCKED.value:
+                locked_count += 1
                 phase = "locked"
                 continue
             return None
         if phase == "locked":
-            if status != ObjectiveStatus.LOCKED.value:
-                return None
-            continue
-    if not quest.objectives:
-        return QuestStatus.INACTIVE.value
-    if phase == "completed" and any_completed:
+            if status == ObjectiveStatus.LOCKED.value:
+                locked_count += 1
+                continue
+            return None
+
+    if completed_count == len(quest.objectives):
         return QuestStatus.COMPLETED.value
-    if any_completed or any_active:
+    if active_count == 1:
         return QuestStatus.ACTIVE.value
-    return QuestStatus.INACTIVE.value
+    if completed_count == 0 and active_count == 0 and locked_count == len(quest.objectives):
+        return QuestStatus.INACTIVE.value
+    return None
 
 
 def _normalize_quest_progress(
