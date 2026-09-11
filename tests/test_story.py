@@ -235,6 +235,35 @@ def test_malformed_story_progress_with_inconsistent_status_resets_safely() -> No
     assert progress["objectives"]["enter_library"] == ObjectiveStatus.ACTIVE.value
 
 
+@pytest.mark.parametrize("malformed_status", [[], {}])
+def test_malformed_story_progress_with_unhashable_status_resets_safely(
+    malformed_status: object,
+) -> None:
+    state = _fresh_state()
+    state["story"] = {
+        "quests": {
+            QUEST_ID: {
+                "status": malformed_status,
+                "objectives": {
+                    "enter_library": "active",
+                    "speak_to_library_ghost": "locked",
+                    "acquire_old_book": "locked",
+                },
+            }
+        }
+    }
+
+    story = ensure_story_state(state)
+
+    progress = story["quests"][QUEST_ID]
+    assert progress["status"] == QuestStatus.ACTIVE.value
+    assert progress["objectives"] == {
+        "enter_library": ObjectiveStatus.ACTIVE.value,
+        "speak_to_library_ghost": ObjectiveStatus.LOCKED.value,
+        "acquire_old_book": ObjectiveStatus.LOCKED.value,
+    }
+
+
 def test_invalid_signal_payload_is_rejected_without_mutation() -> None:
     state = _fresh_state()
     ensure_story_state(state)

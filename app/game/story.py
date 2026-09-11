@@ -196,7 +196,6 @@ def _derive_quest_status(
     phase = "completed"
     completed_count = 0
     active_count = 0
-    locked_count = 0
 
     for objective in quest.objectives:
         status = objective_statuses.get(objective.id)
@@ -211,19 +210,16 @@ def _derive_quest_status(
                 phase = "active"
                 continue
             if status == ObjectiveStatus.LOCKED.value:
-                locked_count += 1
                 phase = "locked"
                 continue
             return None
         if phase == "active":
             if status == ObjectiveStatus.LOCKED.value:
-                locked_count += 1
                 phase = "locked"
                 continue
             return None
         if phase == "locked":
             if status == ObjectiveStatus.LOCKED.value:
-                locked_count += 1
                 continue
             return None
 
@@ -255,7 +251,7 @@ def _normalize_quest_progress(
     if derived_status is None:
         return fresh
     persisted_status = persisted.get("status")
-    if persisted_status not in _VALID_QUEST_STATUSES:
+    if not isinstance(persisted_status, str) or persisted_status not in _VALID_QUEST_STATUSES:
         return fresh
     if persisted_status != derived_status:
         return fresh
