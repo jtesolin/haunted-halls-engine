@@ -272,10 +272,16 @@ def test_json_serialization_round_trip_preserves_valid_progression() -> None:
 
 def test_progression_operations_do_not_mutate_unrelated_world_state() -> None:
     state = build_fresh_campaign_state()
+    state["story"] = {
+        "active_quest": "find_the_missing_curator",
+        "clues": ["torn_letter", {"location": "west_archive", "revealed": True}],
+        "flags": {"curator_trusted": False},
+    }
     items_before = json.dumps(state["items"], sort_keys=True)
     npcs_before = json.dumps(state["npcs"], sort_keys=True)
     clock_before = json.dumps(state["clock"], sort_keys=True)
     facts_before = json.dumps(state["facts"], sort_keys=True)
+    story_before = json.dumps(state["story"], sort_keys=True)
     inventory_before = list(state["player"]["inventory"])
     location_before = state["player"]["location"]
 
@@ -286,6 +292,7 @@ def test_progression_operations_do_not_mutate_unrelated_world_state() -> None:
     assert json.dumps(state["npcs"], sort_keys=True) == npcs_before
     assert json.dumps(state["clock"], sort_keys=True) == clock_before
     assert json.dumps(state["facts"], sort_keys=True) == facts_before
+    assert json.dumps(state["story"], sort_keys=True) == story_before
     assert state["player"]["inventory"] == inventory_before
     assert state["player"]["location"] == location_before
 
