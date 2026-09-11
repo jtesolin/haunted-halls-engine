@@ -262,6 +262,114 @@ def test_canonical_dev_definitions_validate_successfully() -> None:
     validate_story_definitions(STORY_QUESTS)
 
 
+def test_duplicate_objective_ids_within_quest_rejected() -> None:
+    quest = QuestDefinition(
+        id="duplicate_ids",
+        title="Duplicate IDs",
+        description="Test",
+        objectives=(
+            ObjectiveDefinition(
+                id="same_id",
+                order=0,
+                description="First",
+                signal_type=StorySignalType.ROOM_ENTERED,
+                match_value="room_a",
+            ),
+            ObjectiveDefinition(
+                id="same_id",
+                order=1,
+                description="Second",
+                signal_type=StorySignalType.ROOM_ENTERED,
+                match_value="room_b",
+            ),
+        ),
+    )
+
+    with pytest.raises(ValueError, match="Duplicate objective ID 'same_id'"):
+        validate_story_definitions({"duplicate_ids": quest})
+
+
+def test_duplicate_objective_orders_within_quest_rejected() -> None:
+    quest = QuestDefinition(
+        id="duplicate_orders",
+        title="Duplicate Orders",
+        description="Test",
+        objectives=(
+            ObjectiveDefinition(
+                id="first",
+                order=0,
+                description="First",
+                signal_type=StorySignalType.ROOM_ENTERED,
+                match_value="room_a",
+            ),
+            ObjectiveDefinition(
+                id="second",
+                order=0,
+                description="Second",
+                signal_type=StorySignalType.ROOM_ENTERED,
+                match_value="room_b",
+            ),
+        ),
+    )
+
+    with pytest.raises(ValueError, match="Duplicate objective order 0"):
+        validate_story_definitions({"duplicate_orders": quest})
+
+
+def test_non_contiguous_objective_orders_within_quest_rejected() -> None:
+    quest = QuestDefinition(
+        id="missing_order",
+        title="Missing Order",
+        description="Test",
+        objectives=(
+            ObjectiveDefinition(
+                id="first",
+                order=0,
+                description="First",
+                signal_type=StorySignalType.ROOM_ENTERED,
+                match_value="room_a",
+            ),
+            ObjectiveDefinition(
+                id="third",
+                order=2,
+                description="Third",
+                signal_type=StorySignalType.ROOM_ENTERED,
+                match_value="room_b",
+            ),
+        ),
+    )
+
+    with pytest.raises(ValueError, match="expected order 1"):
+        validate_story_definitions({"missing_order": quest})
+
+
+def test_out_of_order_objective_definition_tuple_rejected() -> None:
+    quest = QuestDefinition(
+        id="out_of_order",
+        title="Out of Order",
+        description="Test",
+        objectives=(
+            ObjectiveDefinition(
+                id="second",
+                order=1,
+                description="Second",
+                signal_type=StorySignalType.ROOM_ENTERED,
+                match_value="room_b",
+            ),
+            ObjectiveDefinition(
+                id="first",
+                order=0,
+                description="First",
+                signal_type=StorySignalType.ROOM_ENTERED,
+                match_value="room_a",
+            ),
+        ),
+    )
+
+    with pytest.raises(ValueError, match="position 0 has order 1"):
+        validate_story_definitions({"out_of_order": quest})
+
+
 def test_duplicate_condition_within_one_quest_rejected() -> None:
     quest = QuestDefinition(
         id="dup_quest",
@@ -399,6 +507,92 @@ def test_stuck_completed_completed_locked_without_active_objective_resets_safely
     progress = story["quests"][QUEST_ID]
     assert progress["status"] == QuestStatus.ACTIVE.value
     assert progress["objectives"]["enter_library"] == ObjectiveStatus.ACTIVE.value
+
+
+def test_all_locked_nonempty_quest_progress_resets_safely() -> None:
+    state = _fresh_state()
+    state["story"] = {
+        "quests": {
+            QUEST_ID: {
+                "status": "inactive",
+                "objectives": {
+                    "enter_library": "locked",
+                    "speak_to_library_ghost": "locked",
+                    "acquire_old_book": "locked",
+                },
+            }
+        }
+    }
+
+    story = ensure_story_state(state)
+
+    assert story["quests"][QUEST_ID] == {
+        "status": QuestStatus.ACTIVE.value,
+        "objectives": {
+            "enter_library": ObjectiveStatus.ACTIVE.value,
+            "speak_to_library_ghost": ObjectiveStatus.LOCKED.value,
+            "acquire_old_book": ObjectiveStatus.LOCKED.value,
+        },
+    }
+
+
+def test_extra_persisted_objective_key_resets_known_quest_progress_safely() -> None:
+    state = _fresh_state()
+    state["story"] = {
+        "quests": {
+            QUEST_ID: {
+                "status": "completed",
+                "objectives": {
+                    "enter_library": "completed",
+                    "speak_to_library_ghost": "completed",
+                    "acquire_old_book": "completed",
+                    "unknown_objective": "completed",
+                },
+            }
+        }
+    }
+
+    story = ensure_story_state(state)
+
+    assert story["quests"][QUEST_ID]["status"] == QuestStatus.ACTIVE.value
+    assert story["quests"][QUEST_ID]["objectives"] == {
+        "enter_library": ObjectiveStatus.ACTIVE.value,
+        "speak_to_library_ghost": ObjectiveStatus.LOCKED.value,
+        "acquire_old_book": ObjectiveStatus.LOCKED.value,
+    }
+
+
+def test_unknown_persisted_quest_is_preserved_while_known_quest_normalizes() -> None:
+    unknown_progress = {
+        "status": "future_state",
+        "objectives": {"unrecognized_objective": {"opaque": True}},
+    }
+    state = _fresh_state()
+    state["story"] = {
+        "quests": {
+            QUEST_ID: {
+                "status": "active",
+                "objectives": {
+                    "enter_library": "completed",
+                    "speak_to_library_ghost": "active",
+                    "acquire_old_book": "locked",
+                },
+            },
+            "future_quest": unknown_progress,
+        }
+    }
+
+    story = ensure_story_state(state)
+
+    assert story["quests"]["future_quest"] is unknown_progress
+    assert story["quests"][QUEST_ID] == {
+        "status": QuestStatus.ACTIVE.value,
+        "objectives": {
+            "enter_library": ObjectiveStatus.COMPLETED.value,
+            "speak_to_library_ghost": ObjectiveStatus.ACTIVE.value,
+            "acquire_old_book": ObjectiveStatus.LOCKED.value,
+        },
+    }
 
 
 def test_story_state_json_round_trip_preserves_progress() -> None:

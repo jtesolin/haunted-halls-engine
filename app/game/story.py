@@ -103,13 +103,15 @@ def build_development_quests() -> dict[str, QuestDefinition]:
 def validate_story_definitions(
     quests: dict[str, QuestDefinition] | Iterable[QuestDefinition]
 ) -> None:
-    """Validate that progression conditions are globally unique across quests.
+    """Validate static objective identity, ordering, and trigger invariants.
 
     A progression trigger condition (`signal_type`, `match_value`) must be unique
     across all objectives in the static story definition collection. This enables
     payload-level replay idempotence without requiring event identity; richer
     repeated or shared triggers require future authoritative event identity/consumption
-    semantics.
+    semantics. Objectives in each non-empty quest must also have unique IDs and
+    occupy contiguous orders `0..N-1` in definition order, as required by
+    `_fresh_quest_progress()` and `_next_objective()`.
     """
     quest_list: list[tuple[str, QuestDefinition]] = []
     if isinstance(quests, Mapping):
@@ -121,7 +123,32 @@ def validate_story_definitions(
                 quest_list.append((q_item.id, q_item))
     seen: dict[tuple[StorySignalType, str], tuple[str, str]] = {}
     for quest_id, quest in quest_list:
-        for objective in quest.objectives:
+        objective_ids: dict[str, int] = {}
+        objective_orders: dict[int, ObjectiveDefinition] = {}
+        for position, objective in enumerate(quest.objectives):
+            if objective.id in objective_ids:
+                first_position = objective_ids[objective.id]
+                raise ValueError(
+                    f"Duplicate objective ID '{objective.id}' in quest '{quest_id}' "
+                    f"at positions {first_position} and {position}."
+                )
+            objective_ids[objective.id] = position
+
+            if objective.order in objective_orders:
+                first_objective = objective_orders[objective.order]
+                raise ValueError(
+                    f"Duplicate objective order {objective.order} in quest '{quest_id}' "
+                    f"for objectives '{first_objective.id}' and '{objective.id}'."
+                )
+            objective_orders[objective.order] = objective
+
+            if objective.order != position:
+                raise ValueError(
+                    f"Objective '{objective.id}' in quest '{quest_id}' at position "
+                    f"{position} has order {objective.order}; expected order {position} "
+                    "for contiguous definition ordering."
+                )
+
             key = (objective.signal_type, objective.match_value)
             if key in seen:
                 first_quest, first_obj = seen[key]
@@ -156,11 +183,12 @@ def _derive_quest_status(
 ) -> str | None:
     """Validate the completed/active/locked sequence and derive quest status.
 
-    Returns `None` when the persisted sequence is not a valid
-    completed-prefix / exactly-one-active / locked-suffix sequence (or all
-    locked / all completed), signaling that the caller must fall back to a fresh,
-    safe default rather than trust (and potentially grant progression from or
-    get permanently stuck on) malformed data.
+    An empty quest may be `INACTIVE`; all completed objectives yield
+    `COMPLETED`; and either a completed-prefix plus exactly one active objective
+    plus a locked suffix, or a first active objective plus a locked suffix,
+    yields `ACTIVE`. A non-empty all-locked sequence and a completed-prefix
+    followed only by locked objectives are malformed. `None` signals that the
+    caller must reset malformed persisted data to a fresh safe default.
     """
     if not quest.objectives:
         return QuestStatus.INACTIVE.value
@@ -203,8 +231,6 @@ def _derive_quest_status(
         return QuestStatus.COMPLETED.value
     if active_count == 1:
         return QuestStatus.ACTIVE.value
-    if completed_count == 0 and active_count == 0 and locked_count == len(quest.objectives):
-        return QuestStatus.INACTIVE.value
     return None
 
 
@@ -216,6 +242,8 @@ def _normalize_quest_progress(
         return fresh
     objectives_raw = persisted.get("objectives")
     if not isinstance(objectives_raw, dict):
+        return fresh
+    if set(objectives_raw) != {objective.id for objective in quest.objectives}:
         return fresh
     objective_statuses: dict[str, str] = {}
     for objective in quest.objectives:
@@ -240,12 +268,14 @@ def ensure_story_state(state: dict[str, Any]) -> dict[str, Any]:
     Preserves valid persisted progress, safely resets any single quest whose
     persisted progress is malformed or internally inconsistent back to that
     quest's fresh starting progress (never granting completion from
-    unreadable data), and does not touch any other campaign-state namespace.
-    Legacy campaigns with no `story` key at all are normalized the same way.
+    unreadable data), and retains persisted records for quest IDs unknown to
+    the current static definition collection without interpreting them. It
+    does not touch any other campaign-state namespace. Legacy campaigns with
+    no `story` key at all are normalized the same way.
     """
     raw_story = state.get("story")
     raw_quests = raw_story.get("quests") if isinstance(raw_story, dict) else None
-    normalized_quests: dict[str, dict[str, Any]] = {}
+    normalized_quests = dict(raw_quests) if isinstance(raw_quests, dict) else {}
     for quest_id, quest in STORY_QUESTS.items():
         persisted = raw_quests.get(quest_id) if isinstance(raw_quests, dict) else None
         normalized_quests[quest_id] = _normalize_quest_progress(quest, persisted)
