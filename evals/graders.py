@@ -8,6 +8,7 @@ from app.schemas.director import DirectorProposal, NoActionProposal, WorldAction
 from app.schemas.world import WorldActionType
 
 from evals.schemas import GraderResult, Scenario, ScenarioTarget
+from evals.scenarios import validate_scenario_contract
 
 _DIRECTOR_PROPOSAL_ADAPTER = TypeAdapter(DirectorProposal)
 
@@ -25,6 +26,16 @@ class DirectorDeterministicGrader(DeterministicGrader):
     name = "director-deterministic"
 
     def grade(self, scenario: Scenario) -> list[GraderResult]:
+        # `evals/__init__.py` exports this grader (and its module-level
+        # wrapper functions below) as a PUBLIC API. A direct caller could
+        # otherwise bypass the scenario-contract validation that
+        # load_scenario()/EvalRunner.run()/_run_live_scenario() already
+        # enforce and grade against a malformed contract (e.g.
+        # deterministic_expectations={"require_none": "false"}, which is
+        # truthy under bool()). Validation is deterministic/idempotent, so
+        # re-running it here for scenarios that already passed through the
+        # runner is safe.
+        validate_scenario_contract(scenario)
         actual_output = scenario.actual_output
         if actual_output is None:
             return [
@@ -164,6 +175,11 @@ class NarratorDeterministicGrader(DeterministicGrader):
     name = "narrator-deterministic"
 
     def grade(self, scenario: Scenario) -> list[GraderResult]:
+        # See DirectorDeterministicGrader.grade(): this is also part of the
+        # public grader boundary and must independently enforce the shared
+        # scenario contract (target-specific input validation, deterministic
+        # expectation validation, and Narrator ignored-field detection).
+        validate_scenario_contract(scenario)
         actual_output = scenario.actual_output
         if actual_output is None:
             return [

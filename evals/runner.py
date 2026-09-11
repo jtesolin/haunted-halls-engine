@@ -82,8 +82,14 @@ class EvalRunner:
         # There is no inversion for "expected failure" semantics: negative
         # scenarios must supply a safe fixture_output and are proven by
         # focused unit tests that inject the invalid output directly.
-        scenario_copy.score = _aggregate_score(results)
-        scenario_copy.max_score = _aggregate_max_score(results)
+        # Per-grader scores/max_scores remain exact detailed diagnostics on
+        # each GraderResult; the SCENARIO-level score is normalized onto a
+        # fixed 0.0..1.0 scale (see _normalized_scenario_score) so every
+        # scenario contributes equal weight to aggregate reporting
+        # regardless of how many graders a particular proposal happened to
+        # emit (e.g. a no-op emits fewer applicable checks than a move_npc).
+        scenario_copy.score = _normalized_scenario_score(results)
+        scenario_copy.max_score = 1.0
         scenario_copy.passed = bool(results) and all(result.passed for result in results)
         return ScenarioResult.model_validate(scenario_copy.model_dump())
 
@@ -150,12 +156,23 @@ def run_scenarios(
     return [runner.run(scenario) for scenario in scenarios]
 
 
-def _aggregate_score(results: Sequence[GraderResult]) -> float:
-    return sum(result.score for result in results)
+def _normalized_scenario_score(results: Sequence[GraderResult]) -> float:
+    """Normalize a scenario's score onto a fixed 0.0..1.0 scale.
 
+    The number of applicable deterministic graders varies with the actual
+    proposal/output under test (e.g. a Director no-op emits only contract/
+    expectation checks, while a legal move_npc emits additional vocabulary,
+    NPC, and destination checks). Summing raw grader scores/max_scores would
+    therefore give scenarios that happen to emit more checks a larger
+    aggregate weight in report-level scoring. Normalizing to the fraction of
+    applicable points earned keeps every scenario's contribution equal.
+    """
 
-def _aggregate_max_score(results: Sequence[GraderResult]) -> float:
-    return sum(result.max_score for result in results)
+    raw_max = sum(result.max_score for result in results)
+    if raw_max <= 0:
+        return 0.0
+    raw_score = sum(result.score for result in results)
+    return max(0.0, min(1.0, raw_score / raw_max))
 
 
 def _usage_metadata(usage: ModelUsage | None) -> dict[str, Any] | None:

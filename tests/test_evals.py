@@ -20,6 +20,12 @@ from app.schemas.director import DirectorInput
 
 from evals.graders import grade_scenario
 from evals.graders import _sanitize_error
+from evals.graders import (
+    DirectorDeterministicGrader,
+    NarratorDeterministicGrader,
+    grade_director_output,
+    grade_narrator_output,
+)
 from evals.report import render_report, summarize_results
 from evals.runner import EvalRunner, run_scenarios
 from evals.runner import LiveEvalError, _run_live_scenario, _run_live_scenarios
@@ -292,6 +298,7 @@ def test_narrator_grounding_checks_are_fixture_specific() -> None:
         scenario_id="narrator-grounding",
         description="No false success claim.",
         target=ScenarioTarget.NARRATOR,
+        authoritative_input=_NARRATOR_FIXTURE,
         deterministic_expectations={"must_not_contain": ["the door opens"]},
         actual_output={"reply_text": "The locked door remains shut."},
     )
@@ -308,6 +315,7 @@ def test_narrator_grading_never_reads_expectations_from_fixture_output() -> None
         scenario_id="narrator-fixture-not-expectations",
         description="fixture_output must not be treated as deterministic_expectations.",
         target=ScenarioTarget.NARRATOR,
+        authoritative_input=_NARRATOR_FIXTURE,
         deterministic_expectations={"must_not_contain": ["forbidden phrase"]},
         fixture_output={"reply_text": "This text includes the forbidden phrase anyway."},
         actual_output={"reply_text": "This text includes the forbidden phrase anyway."},
@@ -344,6 +352,7 @@ def test_narrator_output_rejects_empty_and_whitespace_only_text() -> None:
             scenario_id="narrator-empty-output",
             description="Empty/whitespace output must be rejected.",
             target=ScenarioTarget.NARRATOR,
+            authoritative_input=_NARRATOR_FIXTURE,
             actual_output={"reply_text": reply_text},
         )
         results = grade_scenario(scenario)
@@ -2673,3 +2682,203 @@ def test_eval_runner_retains_explicitly_supplied_run_metadata() -> None:
         model_metadata={"target_agent": "director", "model": "real-model"},
     )
     assert result.model_metadata == {"target_agent": "director", "model": "real-model"}
+
+
+# --- Item 1: public grader boundary enforces scenario-contract validation --
+
+
+def test_public_director_grader_class_rejects_malformed_expectation_type() -> None:
+    """A direct DirectorDeterministicGrader().grade() call (bypassing
+    EvalRunner/load_scenario entirely) must still reject
+    deterministic_expectations={"require_none": "false"} rather than
+    grading against bool("false") == True."""
+
+    scenario = Scenario(
+        scenario_id="public-grader-bad-expectation-type",
+        description="d",
+        target=ScenarioTarget.DIRECTOR,
+        authoritative_input=_DIRECTOR_FIXTURE,
+        deterministic_expectations={"require_none": "false"},
+        actual_output={"decision": "none"},
+    )
+    with pytest.raises(ValueError, match="require_none must be a bool"):
+        DirectorDeterministicGrader().grade(scenario)
+
+
+def test_public_director_grader_function_rejects_unknown_expectation_key() -> None:
+    scenario = Scenario(
+        scenario_id="public-grader-unknown-expectation-key",
+        description="d",
+        target=ScenarioTarget.DIRECTOR,
+        authoritative_input=_DIRECTOR_FIXTURE,
+        deterministic_expectations={"require_none_typo": True},
+        actual_output={"decision": "none"},
+    )
+    with pytest.raises(ValueError, match="unsupported Director deterministic_expectations"):
+        grade_director_output(scenario)
+
+
+def test_public_grade_scenario_rejects_malformed_target_specific_input() -> None:
+    scenario = Scenario(
+        scenario_id="public-grader-bad-authoritative-input",
+        description="d",
+        target=ScenarioTarget.DIRECTOR,
+        authoritative_input={
+            "current_player_room_id": "eval_foyer",
+            "clock_tick": 0,
+            "facts": [],
+            "npcs": [],
+        },
+        actual_output={"decision": "none"},
+    )
+    with pytest.raises(ValidationError):
+        grade_scenario(scenario)
+
+
+def test_public_narrator_grader_class_rejects_ignored_extra_field() -> None:
+    scenario = Scenario(
+        scenario_id="public-grader-narrator-ignored-field",
+        description="d",
+        target=ScenarioTarget.NARRATOR,
+        authoritative_input={
+            "player_message": "look",
+            "scene_context": {
+                "current_room": {"id": "eval_foyer", "name": "Eval Foyer", "description": "d"},
+                "nearby_npc": [],
+            },
+        },
+        actual_output={"reply_text": "You see a foyer."},
+    )
+    with pytest.raises(ValueError, match="silently ignored"):
+        NarratorDeterministicGrader().grade(scenario)
+
+
+def test_public_narrator_grader_function_rejects_ignored_extra_field() -> None:
+    scenario = Scenario(
+        scenario_id="public-grader-narrator-ignored-field-fn",
+        description="d",
+        target=ScenarioTarget.NARRATOR,
+        authoritative_input={
+            "player_message": "look",
+            "scene_context": {
+                "current_room": {"id": "eval_foyer", "name": "Eval Foyer", "description": "d"},
+                "nearby_npc": [],
+            },
+        },
+        actual_output={"reply_text": "You see a foyer."},
+    )
+    with pytest.raises(ValueError, match="silently ignored"):
+        grade_narrator_output(scenario)
+
+
+def test_public_graders_still_grade_valid_scenarios_directly() -> None:
+    """Valid direct grader calls must continue to work unchanged."""
+
+    director_scenario = Scenario(
+        scenario_id="public-grader-valid-director",
+        description="d",
+        target=ScenarioTarget.DIRECTOR,
+        authoritative_input=_DIRECTOR_FIXTURE,
+        deterministic_expectations={"require_none": True},
+        actual_output={"decision": "none"},
+    )
+    director_results = DirectorDeterministicGrader().grade(director_scenario)
+    assert director_results and all(result.passed for result in director_results)
+    assert all(result.passed for result in grade_director_output(director_scenario))
+    assert all(result.passed for result in grade_scenario(director_scenario))
+
+    narrator_scenario = Scenario(
+        scenario_id="public-grader-valid-narrator",
+        description="d",
+        target=ScenarioTarget.NARRATOR,
+        authoritative_input=_NARRATOR_FIXTURE,
+        deterministic_expectations={"must_not_contain": ["forbidden phrase"]},
+        actual_output={"reply_text": "A safe description."},
+    )
+    narrator_results = NarratorDeterministicGrader().grade(narrator_scenario)
+    assert narrator_results and all(result.passed for result in narrator_results)
+    assert all(result.passed for result in grade_narrator_output(narrator_scenario))
+    assert all(result.passed for result in grade_scenario(narrator_scenario))
+
+
+# --- Item 2: fixed-scale scenario scoring -----------------------------------
+
+
+def test_passing_director_noop_scenario_scores_are_normalized_to_one() -> None:
+    scenario = Scenario(
+        scenario_id="normalized-score-noop",
+        description="d",
+        target=ScenarioTarget.DIRECTOR,
+        authoritative_input=_DIRECTOR_FIXTURE,
+        deterministic_expectations={"require_none": True},
+        fixture_output={"decision": "none"},
+    )
+    result = EvalRunner().run(scenario)
+    assert result.passed is True
+    assert result.score == 1.0
+    assert result.max_score == 1.0
+
+
+def test_passing_director_legal_move_scenario_scores_are_normalized_to_one() -> None:
+    """A legal move_npc proposal emits MORE applicable graders than a no-op
+    (vocab, referenced-NPC, destination checks) but must still normalize to
+    the same 1.0/1.0 scale, giving every scenario equal report weight."""
+
+    scenarios = {s.scenario_id: s for s in load_scenarios()}
+    scenario = scenarios["director-legal-adjacent-move"]
+    result = EvalRunner().run(scenario)
+    assert result.passed is True
+    assert len(result.grader_results) > 1
+    assert result.score == 1.0
+    assert result.max_score == 1.0
+
+
+def test_partially_failing_director_scenario_score_is_fractional() -> None:
+    scenario = Scenario(
+        scenario_id="normalized-score-partial-fail",
+        description="d",
+        target=ScenarioTarget.DIRECTOR,
+        authoritative_input=_DIRECTOR_FIXTURE,
+        deterministic_expectations={"require_none": True},
+        # Proposal_contract passes (well-formed proposal) but require_none
+        # fails because the proposal is a move_npc, not a no-op -- a mixed
+        # pass/fail result.
+        fixture_output={
+            "decision": "act",
+            "world_action": {
+                "action": "move_npc",
+                "npc_id": "eval_curator",
+                "destination_room_id": "eval_gallery",
+            },
+        },
+    )
+    result = EvalRunner().run(scenario)
+    assert result.passed is False
+    assert result.score is not None
+    assert 0.0 < result.score < 1.0
+    assert result.max_score == 1.0
+
+
+def test_summarize_results_gives_scenarios_equal_weight_regardless_of_grader_count() -> None:
+    """A scenario that emits more applicable graders must not dominate the
+    aggregate report score relative to a scenario that emits fewer."""
+
+    noop_scenario = Scenario(
+        scenario_id="equal-weight-noop",
+        description="d",
+        target=ScenarioTarget.DIRECTOR,
+        authoritative_input=_DIRECTOR_FIXTURE,
+        deterministic_expectations={"require_none": True},
+        fixture_output={"decision": "none"},
+    )
+    scenarios = {s.scenario_id: s for s in load_scenarios()}
+    move_scenario = scenarios["director-legal-adjacent-move"]
+
+    noop_result = EvalRunner().run(noop_scenario)
+    move_result = EvalRunner().run(move_scenario)
+    assert len(noop_result.grader_results) != len(move_result.grader_results)
+    assert noop_result.score == move_result.score == 1.0
+    assert noop_result.max_score == move_result.max_score == 1.0
+
+    summary = summarize_results([noop_result, move_result])
+    assert summary["score"] == 1.0
