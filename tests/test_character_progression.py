@@ -1,17 +1,31 @@
 from __future__ import annotations
 
 import json
+from copy import deepcopy
+from typing import cast
 
+from app.game.abilities import (
+    CANONICAL_ABILITY_DEFINITIONS,
+    MAX_CHECK_DIFFICULTY,
+    VALIDATED_ABILITY_DEFINITIONS,
+    evaluate_ability_availability,
+    resolve_ability_check,
+    validate_ability_definitions,
+)
 from app.game.campaign_state import build_fresh_campaign_state
 from app.game.character_progression import (
     MAX_TRACK_POINTS,
+    MIN_TRACK_POINTS,
     PROGRESSION_TRACK_IDS,
     default_character_progression_state,
     ensure_character_progression_state,
     grant_progress,
+    read_character_progression_state,
     unlock_ability,
 )
+from app.schemas.abilities import AbilityAvailabilityStatus, AbilityCheckOutcome
 from app.schemas.character import CharacterInfo, CharacterList
+from app.schemas.character_progression import ProgressionTrackId
 
 
 def test_default_character_progression_state_is_deterministic() -> None:
@@ -304,3 +318,264 @@ def test_character_info_and_character_list_api_dtos_are_unaffected() -> None:
     assert info.character_id == "pc-1"
     assert info.name == "Investigator"
     assert listing.characters == [info]
+
+
+def test_canonical_ability_definitions_validate_and_registry_is_stable() -> None:
+    assert len(CANONICAL_ABILITY_DEFINITIONS) == 4
+    assert [definition.ability_id for definition in CANONICAL_ABILITY_DEFINITIONS] == [
+        "keen_eye",
+        "steady_nerves",
+        "read_the_room",
+        "occult_insight",
+    ]
+    assert VALIDATED_ABILITY_DEFINITIONS == CANONICAL_ABILITY_DEFINITIONS
+    assert {definition.ability_id: definition.track.value for definition in CANONICAL_ABILITY_DEFINITIONS} == {
+        "keen_eye": "investigation",
+        "steady_nerves": "resolve",
+        "read_the_room": "rapport",
+        "occult_insight": "occult",
+    }
+
+
+def test_ability_definition_validation_rejects_duplicates_and_invalid_values() -> None:
+    duplicate = [
+        CANONICAL_ABILITY_DEFINITIONS[0],
+        CANONICAL_ABILITY_DEFINITIONS[0],
+    ]
+    try:
+        validate_ability_definitions(duplicate)
+    except ValueError as exc:
+        assert "Duplicate ability_id 'keen_eye'" in str(exc)
+    else:
+        raise AssertionError("duplicate ability ids should be rejected")
+
+    invalid_track = [
+        CANONICAL_ABILITY_DEFINITIONS[0],
+        CANONICAL_ABILITY_DEFINITIONS[1],
+        CANONICAL_ABILITY_DEFINITIONS[2],
+        CANONICAL_ABILITY_DEFINITIONS[3].__class__(
+            ability_id="bad_track",
+            display_name="Bad Track",
+            short_description="bad",
+            track=cast(ProgressionTrackId, "not_a_track"),
+            minimum_points=2,
+        ),
+    ]
+    try:
+        validate_ability_definitions(invalid_track)
+    except ValueError as exc:
+        assert "invalid track reference" in str(exc)
+    else:
+        raise AssertionError("invalid track refs should be rejected")
+
+    below_min = [
+        CANONICAL_ABILITY_DEFINITIONS[0].__class__(
+            ability_id="low_min",
+            display_name="Low Min",
+            short_description="low",
+            track=CANONICAL_ABILITY_DEFINITIONS[0].track,
+            minimum_points=MIN_TRACK_POINTS - 1,
+        )
+    ]
+    try:
+        validate_ability_definitions(below_min)
+    except ValueError as exc:
+        assert "outside 0..10" in str(exc)
+    else:
+        raise AssertionError("minimum below bound should be rejected")
+
+    above_max = [
+        CANONICAL_ABILITY_DEFINITIONS[0].__class__(
+            ability_id="high_min",
+            display_name="High Min",
+            short_description="high",
+            track=CANONICAL_ABILITY_DEFINITIONS[0].track,
+            minimum_points=MAX_TRACK_POINTS + 1,
+        )
+    ]
+    try:
+        validate_ability_definitions(above_max)
+    except ValueError as exc:
+        assert "outside 0..10" in str(exc)
+    else:
+        raise AssertionError("minimum above bound should be rejected")
+
+    bool_min = [
+        CANONICAL_ABILITY_DEFINITIONS[0].__class__(
+            ability_id="bool_min",
+            display_name="Bool min",
+            short_description="bool",
+            track=CANONICAL_ABILITY_DEFINITIONS[0].track,
+            minimum_points=True,
+        )
+    ]
+    try:
+        validate_ability_definitions(bool_min)
+    except ValueError as exc:
+        assert "must be an integer" in str(exc)
+    else:
+        raise AssertionError("bool minimum should be rejected")
+
+
+def test_ability_availability_is_deterministic_and_read_only() -> None:
+    state = build_fresh_campaign_state()
+    ensure_character_progression_state(state)
+    grant_progress(state, "investigation", 2)
+    unlock_ability(state, "keen_eye")
+
+    available = evaluate_ability_availability(state, "keen_eye")
+    assert available.status == AbilityAvailabilityStatus.AVAILABLE
+    assert available.available is True
+    assert available.owned is True
+    assert available.track_id is not None
+    assert available.track_id.value == "investigation"
+    assert available.track_points == 2
+    assert available.minimum_points == 2
+
+    locked = evaluate_ability_availability(state, "steady_nerves")
+    assert locked.status == AbilityAvailabilityStatus.LOCKED
+    assert locked.available is False
+    assert locked.owned is False
+
+    insufficient = deepcopy(state)
+    ensure_character_progression_state(insufficient)
+    insufficient["player"]["progression"]["tracks"]["investigation"] = 1
+    insufficient["player"]["progression"]["unlocked_abilities"] = ["keen_eye"]
+    insufficient_result = evaluate_ability_availability(insufficient, "keen_eye")
+    assert insufficient_result.status == AbilityAvailabilityStatus.INSUFFICIENT_PROGRESSION
+    assert insufficient_result.available is False
+
+    unknown = evaluate_ability_availability(state, "not_a_real_ability")
+    assert unknown.status == AbilityAvailabilityStatus.UNKNOWN_ABILITY
+    assert unknown.owned is False
+    assert unknown.available is False
+
+    persisted_unknown = {
+        "player": {
+            "progression": {
+                "version": 999,
+                "tracks": {
+                    "investigation": 5,
+                    "resolve": 0,
+                    "rapport": 0,
+                    "occult": 0,
+                },
+                "unlocked_abilities": ["mystery_ability"],
+            }
+        }
+    }
+    normalized = read_character_progression_state(persisted_unknown)
+    assert normalized["unlocked_abilities"] == ["mystery_ability"]
+    assert evaluate_ability_availability(persisted_unknown, "mystery_ability").status == AbilityAvailabilityStatus.UNKNOWN_ABILITY
+
+    malformed = {
+        "player": {
+            "progression": {
+                "version": 999,
+                "tracks": {
+                    "investigation": 99999,
+                    "resolve": -1,
+                    "rapport": "three",
+                    "occult": True,
+                    "arcana": 7,
+                },
+                "unlocked_abilities": ["keen_eye", 42, "", "   ", "read_the_room"],
+            }
+        }
+    }
+    malformed_result = evaluate_ability_availability(malformed, "keen_eye")
+    assert malformed_result.status == AbilityAvailabilityStatus.INSUFFICIENT_PROGRESSION
+    assert malformed_result.track_points == 0
+    assert malformed_result.minimum_points == 2
+
+    repeated = evaluate_ability_availability(state, "keen_eye")
+    assert repeated == available
+    assert evaluate_ability_availability(state, "keen_eye") == repeated
+
+    deep_state = build_fresh_campaign_state()
+    deep_state["story"] = {
+        "active_quest": "recover_the_map",
+        "notes": ["first clue"],
+        "flags": {"seen_cellar": True},
+    }
+    deep_state["items"]["talisman"] = {"name": "talisman", "value": 1}
+    deep_state["npcs"]["guard"] = {"name": "guard", "mood": "alert"}
+    deep_state["clock"]["tick"] = 5
+    deep_state["facts"].append({"topic": "secret_passage", "resolved": False})
+    deep_state["player"]["progression"] = {
+        "version": 999,
+        "tracks": {"investigation": 2, "resolve": 0, "rapport": 0, "occult": 0},
+        "unlocked_abilities": ["keen_eye"],
+    }
+    before = deepcopy(deep_state)
+    _ = evaluate_ability_availability(deep_state, "keen_eye")
+    assert deep_state == before
+    assert deep_state["story"] == before["story"]
+
+
+def test_ability_check_resolution_is_deterministic_and_pure() -> None:
+    state = build_fresh_campaign_state()
+    ensure_character_progression_state(state)
+    grant_progress(state, "investigation", 5)
+    unlock_ability(state, "keen_eye")
+
+    success = resolve_ability_check(state, "keen_eye", 3)
+    assert success.outcome == AbilityCheckOutcome.SUCCESS
+    assert success.resolved is True
+    assert success.success is True
+    assert success.margin == 2
+
+    tied = resolve_ability_check(state, "keen_eye", 5)
+    assert tied.outcome == AbilityCheckOutcome.SUCCESS
+    assert tied.margin == 0
+    assert tied.success is True
+
+    failed = resolve_ability_check(state, "keen_eye", 7)
+    assert failed.outcome == AbilityCheckOutcome.FAILURE
+    assert failed.resolved is True
+    assert failed.success is False
+    assert failed.margin == -2
+
+    insufficient = build_fresh_campaign_state()
+    ensure_character_progression_state(insufficient)
+    grant_progress(insufficient, "investigation", 1)
+    unlock_ability(insufficient, "keen_eye")
+    unavailable = resolve_ability_check(insufficient, "keen_eye", 2)
+    assert unavailable.outcome == AbilityCheckOutcome.UNAVAILABLE
+    assert unavailable.resolved is False
+    assert unavailable.success is None
+
+    not_owned = resolve_ability_check(state, "steady_nerves", 2)
+    assert not_owned.outcome == AbilityCheckOutcome.UNAVAILABLE
+    assert not_owned.resolved is False
+    assert not_owned.success is None
+
+    unknown = resolve_ability_check(state, "unknown_ability", 2)
+    assert unknown.outcome == AbilityCheckOutcome.UNKNOWN_ABILITY
+    assert unknown.resolved is False
+    assert unknown.success is None
+
+    invalid_difficulty_cases = [
+        True,
+        1.5,
+        "3",
+        None,
+        -1,
+        MAX_CHECK_DIFFICULTY + 1,
+    ]
+    for bad_difficulty in invalid_difficulty_cases:
+        result = resolve_ability_check(state, "keen_eye", bad_difficulty)  # type: ignore[arg-type]
+        assert result.outcome == AbilityCheckOutcome.INVALID_DIFFICULTY
+        assert result.resolved is False
+        assert result.success is None
+
+    assert resolve_ability_check(state, "keen_eye", 0).outcome == AbilityCheckOutcome.SUCCESS
+
+    repeated = resolve_ability_check(state, "keen_eye", 3)
+    assert repeated == success
+    assert resolve_ability_check(state, "keen_eye", 3) == repeated
+
+    before = deepcopy(state)
+    _ = resolve_ability_check(state, "keen_eye", 3)
+    assert state == before
+    assert state["story"] == before["story"] if "story" in state else True
