@@ -132,13 +132,13 @@ def grant_progress(
             reason="Progression grants must be a positive integer amount.",
         )
 
-    progression = ensure_character_progression_state(state)
+    progression, normalization_changed = _normalize_progression_for_operation(state)
     tracks = progression["tracks"]
     prior_points = tracks[resolved_track_id]
     uncapped_points = prior_points + amount
     new_points = min(uncapped_points, MAX_TRACK_POINTS)
     capped = uncapped_points > MAX_TRACK_POINTS
-    changed = new_points != prior_points
+    changed = normalization_changed or new_points != prior_points
 
     if changed:
         tracks[resolved_track_id] = new_points
@@ -173,13 +173,13 @@ def unlock_ability(state: dict[str, Any], ability_id: str) -> AbilityUnlockResul
             reason="Ability ids must be non-empty strings with no surrounding whitespace.",
         )
 
-    progression = ensure_character_progression_state(state)
+    progression, normalization_changed = _normalize_progression_for_operation(state)
     unlocked: list[str] = progression["unlocked_abilities"]
 
     if ability_id in unlocked:
         return AbilityUnlockResult(
             success=True,
-            changed=False,
+            changed=normalization_changed,
             ability_id=ability_id,
             already_unlocked=True,
             error_code=None,
@@ -220,6 +220,15 @@ def _read_normalized_progression(state: dict[str, Any]) -> dict[str, Any]:
     player = state.get("player")
     raw_progression = player.get("progression") if isinstance(player, dict) else None
     return _normalize_progression(raw_progression)
+
+
+def _normalize_progression_for_operation(
+    state: dict[str, Any],
+) -> tuple[dict[str, Any], bool]:
+    player = state.get("player")
+    raw_progression = player.get("progression") if isinstance(player, dict) else None
+    progression = ensure_character_progression_state(state)
+    return progression, raw_progression != progression
 
 
 def _normalize_track_points(raw_value: Any) -> int:

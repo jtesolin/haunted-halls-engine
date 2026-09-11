@@ -106,7 +106,7 @@ def test_invalid_operations_on_legacy_state_do_not_create_progression() -> None:
     assert json.dumps(state, sort_keys=True) == state_before
 
 
-def test_runtime_progression_reaches_and_remains_at_configured_cap() -> None:
+def test_clean_capped_grant_reports_no_change_and_leaves_state_unchanged() -> None:
     state: dict = {}
     ensure_character_progression_state(state)
 
@@ -115,15 +115,53 @@ def test_runtime_progression_reaches_and_remains_at_configured_cap() -> None:
     assert first.new_points == MAX_TRACK_POINTS
     assert first.capped is False
 
+    state_before = json.dumps(state, sort_keys=True)
     overflow = grant_progress(state, "occult", 5)
+
     assert overflow.success is True
     assert overflow.changed is False
     assert overflow.capped is True
     assert overflow.new_points == MAX_TRACK_POINTS
     assert state["player"]["progression"]["tracks"]["occult"] == MAX_TRACK_POINTS
+    assert json.dumps(state, sort_keys=True) == state_before
 
 
-def test_ability_unlock_is_deterministic_and_duplicate_unlock_is_idempotent() -> None:
+def test_capped_grant_reports_normalization_repair_as_change() -> None:
+    state = {
+        "player": {
+            "progression": {
+                "version": 999,
+                "tracks": {
+                    "investigation": MAX_TRACK_POINTS,
+                    "resolve": "malformed",
+                    "rapport": 0,
+                    "occult": 0,
+                },
+                "unlocked_abilities": [],
+            }
+        }
+    }
+
+    result = grant_progress(state, "investigation", 1)
+
+    assert result.success is True
+    assert result.capped is True
+    assert result.changed is True
+    assert result.prior_points == MAX_TRACK_POINTS
+    assert result.new_points == MAX_TRACK_POINTS
+    assert state["player"]["progression"] == {
+        "version": 1,
+        "tracks": {
+            "investigation": MAX_TRACK_POINTS,
+            "resolve": 0,
+            "rapport": 0,
+            "occult": 0,
+        },
+        "unlocked_abilities": [],
+    }
+
+
+def test_clean_duplicate_ability_unlock_reports_no_change() -> None:
     state: dict = {}
     ensure_character_progression_state(state)
 
@@ -137,6 +175,39 @@ def test_ability_unlock_is_deterministic_and_duplicate_unlock_is_idempotent() ->
     assert second.changed is False
     assert second.already_unlocked is True
     assert state["player"]["progression"]["unlocked_abilities"] == ["keen_eye"]
+
+
+def test_duplicate_ability_unlock_reports_normalization_repair_as_change() -> None:
+    state = {
+        "player": {
+            "progression": {
+                "version": 999,
+                "tracks": {
+                    "investigation": 0,
+                    "resolve": 0,
+                    "rapport": "malformed",
+                    "occult": 0,
+                },
+                "unlocked_abilities": ["keen_eye", "keen_eye", 42],
+            }
+        }
+    }
+
+    result = unlock_ability(state, "keen_eye")
+
+    assert result.success is True
+    assert result.already_unlocked is True
+    assert result.changed is True
+    assert state["player"]["progression"] == {
+        "version": 1,
+        "tracks": {
+            "investigation": 0,
+            "resolve": 0,
+            "rapport": 0,
+            "occult": 0,
+        },
+        "unlocked_abilities": ["keen_eye"],
+    }
 
 
 def test_invalid_ability_id_is_rejected_without_mutation() -> None:
