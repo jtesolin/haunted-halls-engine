@@ -30,6 +30,16 @@ from app.services.director_context import build_director_input
 from app.services.world_authority import WorldAuthorityExecutor
 
 
+def _schema_contains_key(schema: object, key: str) -> bool:
+    if isinstance(schema, dict):
+        return key in schema or any(
+            _schema_contains_key(value, key) for value in schema.values()
+        )
+    if isinstance(schema, list):
+        return any(_schema_contains_key(value, key) for value in schema)
+    return False
+
+
 def _director_input(state: dict[str, Any] | None = None) -> DirectorInput:
     return build_director_input(
         state or build_fresh_campaign_state(),
@@ -48,6 +58,12 @@ def _director_input(state: dict[str, Any] | None = None) -> DirectorInput:
 
 def _proposal_response(proposal: dict[str, Any]) -> DirectorProposalResponse:
     return DirectorProposalResponse.model_validate({"proposal": proposal})
+
+
+def test_director_provider_response_schema_contains_no_one_of() -> None:
+    schema = DirectorProposalResponse.model_json_schema()
+
+    assert not _schema_contains_key(schema, "oneOf")
 
 
 def test_director_requires_typed_input() -> None:
@@ -116,26 +132,53 @@ def test_director_returns_no_action_proposal_and_provider_usage(monkeypatch) -> 
 
 
 @pytest.mark.parametrize(
-    "world_action",
+    ("provider_action", "expected_world_action"),
     [
-        MoveNpcWorldAction(
-            npc_id="old_caretaker",
-            destination_room_id="grand_corridor",
+        (
+            {
+                "action": "move_npc",
+                "npc_id": "old_caretaker",
+                "destination_room_id": "grand_corridor",
+            },
+            MoveNpcWorldAction(
+                npc_id="old_caretaker",
+                destination_room_id="grand_corridor",
+            ),
         ),
-        SetNpcStatusWorldAction(npc_id="old_caretaker", status="absent"),
-        AdvanceClockWorldAction(ticks=1),
-        RecordFactWorldAction(fact="The bell rang once."),
+        (
+            {
+                "action": "set_npc_status",
+                "npc_id": "old_caretaker",
+                "status": "absent",
+            },
+            SetNpcStatusWorldAction(npc_id="old_caretaker", status="absent"),
+        ),
+        (
+            {
+                "action": "advance_clock",
+                "ticks": 1,
+            },
+            AdvanceClockWorldAction(ticks=1),
+        ),
+        (
+            {
+                "action": "record_fact",
+                "fact": "The bell rang once.",
+            },
+            RecordFactWorldAction(fact="The bell rang once."),
+        ),
     ],
 )
-def test_director_returns_each_existing_world_action(
+def test_director_provider_actions_adapt_to_authoritative_world_actions(
     monkeypatch,
-    world_action: WorldAction,
+    provider_action: dict[str, Any],
+    expected_world_action: WorldAction,
 ) -> None:
     async def fake_generate_structured(*, messages, **kwargs):  # noqa: ANN202, ARG001
         return _proposal_response(
             {
                 "decision": "act",
-                "world_action": world_action.model_dump(),
+                "world_action": provider_action,
             }
         )
 
@@ -147,7 +190,7 @@ def test_director_returns_each_existing_world_action(
     result = asyncio.run(DirectorAgent().propose(director_input=_director_input()))
 
     assert isinstance(result.proposal, WorldActionProposal)
-    assert result.proposal.world_action == world_action
+    assert result.proposal.world_action == expected_world_action
 
 
 @pytest.mark.parametrize(
@@ -162,6 +205,80 @@ def test_director_provider_wrapper_rejects_unsupported_actions(
 ) -> None:
     with pytest.raises(ValidationError):
         _proposal_response({"decision": "act", "world_action": world_action})
+
+
+@pytest.mark.parametrize(
+    "world_action",
+    [
+        {"action": "move_npc", "npc_id": "old_caretaker"},
+        {"action": "move_npc", "destination_room_id": "grand_corridor"},
+        {"action": "set_npc_status", "npc_id": "old_caretaker"},
+        {"action": "set_npc_status", "status": "absent"},
+        {"action": "advance_clock"},
+        {"action": "record_fact"},
+    ],
+)
+def test_director_provider_action_rejects_missing_required_fields(
+    world_action: dict[str, Any],
+) -> None:
+    response = _proposal_response({"decision": "act", "world_action": world_action})
+
+    with pytest.raises(ValueError):
+        response.to_domain_proposal()
+
+
+def test_director_provider_no_action_rejects_action_payload() -> None:
+    with pytest.raises(ValidationError):
+        _proposal_response(
+            {
+                "decision": "none",
+                "world_action": {
+                    "action": "advance_clock",
+                    "ticks": 1,
+                },
+            }
+        )
+
+
+def test_director_provider_act_requires_action_payload() -> None:
+    with pytest.raises(ValidationError):
+        _proposal_response({"decision": "act"})
+
+
+@pytest.mark.parametrize(
+    "world_action",
+    [
+        {
+            "action": "move_npc",
+            "npc_id": "old_caretaker",
+            "destination_room_id": "grand_corridor",
+            "status": "absent",
+        },
+        {
+            "action": "set_npc_status",
+            "npc_id": "old_caretaker",
+            "status": "absent",
+            "destination_room_id": "grand_corridor",
+        },
+        {
+            "action": "advance_clock",
+            "ticks": 1,
+            "npc_id": "old_caretaker",
+        },
+        {
+            "action": "record_fact",
+            "fact": "The bell rang once.",
+            "ticks": 1,
+        },
+    ],
+)
+def test_director_provider_action_rejects_fields_from_other_actions(
+    world_action: dict[str, Any],
+) -> None:
+    response = _proposal_response({"decision": "act", "world_action": world_action})
+
+    with pytest.raises(ValueError):
+        response.to_domain_proposal()
 
 
 @pytest.mark.parametrize(

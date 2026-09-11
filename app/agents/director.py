@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from typing import Literal
 
 from openai.types.chat import ChatCompletionMessageParam
-from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError, model_validator
 
 from app.agents.base import BaseAgent
 from app.ai.model_client import ModelCallResult, ModelUsage, model_client
@@ -12,6 +13,12 @@ from app.ai.prompts import director_prompt
 from app.guardrails.model_policy import ModelPolicy
 from app.guardrails.token_budget import TokenBudget, estimate_tokens
 from app.schemas.director import DirectorInput, DirectorProposal
+from app.schemas.world import (
+    AdvanceClockWorldAction,
+    MoveNpcWorldAction,
+    RecordFactWorldAction,
+    SetNpcStatusWorldAction,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -19,12 +26,119 @@ logger = logging.getLogger(__name__)
 _DIRECTOR_PROPOSAL_ADAPTER = TypeAdapter(DirectorProposal)
 
 
-class DirectorProposalResponse(BaseModel):
-    """Strict provider wrapper around the existing zero-or-one proposal contract."""
+class DirectorProviderWorldAction(BaseModel):
+    """Provider-facing flattened action DTO for Structured Outputs compatibility."""
 
     model_config = ConfigDict(extra="forbid")
 
-    proposal: DirectorProposal
+    action: Literal["move_npc", "set_npc_status", "advance_clock", "record_fact"]
+    npc_id: str | None = Field(default=None, min_length=1)
+    destination_room_id: str | None = Field(default=None, min_length=1)
+    status: Literal["active", "absent"] | None = None
+    ticks: int | None = Field(default=None, ge=1, le=10)
+    fact: str | None = None
+
+    def to_domain_action(
+        self,
+    ) -> (
+        MoveNpcWorldAction
+        | SetNpcStatusWorldAction
+        | AdvanceClockWorldAction
+        | RecordFactWorldAction
+    ):
+        if self.action == "move_npc":
+            self._require_only("npc_id", "destination_room_id")
+            return MoveNpcWorldAction(
+                npc_id=self._require_string("npc_id"),
+                destination_room_id=self._require_string("destination_room_id"),
+            )
+        if self.action == "set_npc_status":
+            self._require_only("npc_id", "status")
+            status = self.status
+            if status is None:
+                raise ValueError("set_npc_status requires status.")
+            return SetNpcStatusWorldAction(
+                npc_id=self._require_string("npc_id"),
+                status=status,
+            )
+        if self.action == "advance_clock":
+            self._require_only("ticks")
+            ticks = self.ticks
+            if ticks is None:
+                raise ValueError("advance_clock requires ticks.")
+            return AdvanceClockWorldAction(ticks=ticks)
+        if self.action == "record_fact":
+            self._require_only("fact")
+            return RecordFactWorldAction(fact=self._require_string("fact"))
+        raise ValueError(f"Unsupported Director provider world action: {self.action}")
+
+    def _require_only(self, *allowed_fields: str) -> None:
+        allowed = set(allowed_fields)
+        provided = {
+            field_name
+            for field_name in (
+                "npc_id",
+                "destination_room_id",
+                "status",
+                "ticks",
+                "fact",
+            )
+            if getattr(self, field_name) is not None
+        }
+        unexpected = sorted(provided - allowed)
+        if unexpected:
+            raise ValueError(
+                f"{self.action} received fields for another action: "
+                f"{', '.join(unexpected)}."
+            )
+
+    def _require_string(self, field_name: str) -> str:
+        value = getattr(self, field_name)
+        if not isinstance(value, str):
+            raise ValueError(f"{self.action} requires {field_name}.")
+        return value
+
+
+class DirectorProviderProposal(BaseModel):
+    """Provider-facing proposal DTO adapted into the authoritative domain union."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    decision: Literal["none", "act"]
+    world_action: DirectorProviderWorldAction | None = None
+
+    @model_validator(mode="after")
+    def validate_decision_payload(self) -> "DirectorProviderProposal":
+        if self.decision == "none" and self.world_action is not None:
+            raise ValueError("decision='none' must not include a world action.")
+        if self.decision == "act" and self.world_action is None:
+            raise ValueError("decision='act' requires a world action.")
+        return self
+
+    def to_domain_proposal(self) -> DirectorProposal:
+        if self.decision == "none":
+            return _DIRECTOR_PROPOSAL_ADAPTER.validate_python({"decision": "none"})
+
+        if self.world_action is None:
+            raise ValueError("decision='act' requires a world action.")
+
+        return _DIRECTOR_PROPOSAL_ADAPTER.validate_python(
+            {
+                "decision": "act",
+                "world_action": self.world_action.to_domain_action().model_dump(),
+            }
+        )
+
+
+class DirectorProposalResponse(BaseModel):
+    """Strict provider wrapper that avoids schema composition unsupported upstream."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    proposal: DirectorProviderProposal
+
+    def to_domain_proposal(self) -> DirectorProposal:
+        return self.proposal.to_domain_proposal()
 
 
 @dataclass(frozen=True)
@@ -144,7 +258,7 @@ class DirectorAgent(BaseAgent):
 
         try:
             proposal = self._adapt_provider_output(provider_output)
-        except (TypeError, ValidationError) as exc:
+        except (TypeError, ValueError, ValidationError) as exc:
             logger.error(
                 "director_structured_output_invalid model=%s estimated_input_tokens=%s "
                 "error_type=%s error_message=%s",
@@ -164,7 +278,7 @@ class DirectorAgent(BaseAgent):
     def _adapt_provider_output(provider_output: DirectorProposalResponse) -> DirectorProposal:
         if not isinstance(provider_output, DirectorProposalResponse):
             raise TypeError("Director provider output has an unexpected type.")
-        return _DIRECTOR_PROPOSAL_ADAPTER.validate_python(provider_output.proposal)
+        return provider_output.to_domain_proposal()
 
     @staticmethod
     def _require_director_input(director_input: DirectorInput) -> None:
