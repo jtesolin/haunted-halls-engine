@@ -26,6 +26,7 @@ Design invariants:
 
 from __future__ import annotations
 
+from copy import deepcopy
 from typing import Any
 
 from app.schemas.character_progression import (
@@ -195,6 +196,19 @@ def unlock_ability(state: dict[str, Any], ability_id: str) -> AbilityUnlockResul
         error_code=None,
         reason=None,
     )
+
+
+def read_character_progression_state(state: dict[str, Any]) -> dict[str, Any]:
+    """Return a normalized progression snapshot without mutating caller state."""
+    player = state.get("player")
+    raw_progression = player.get("progression") if isinstance(player, dict) else None
+    normalized = _normalize_progression(raw_progression)
+    return deepcopy(normalized)
+
+
+def get_character_progression_snapshot(state: dict[str, Any]) -> dict[str, Any]:
+    """Alias for read-only normalized progression snapshots used by 8C."""
+    return read_character_progression_state(state)
 
 
 def _normalize_progression(raw_progression: Any) -> dict[str, Any]:
