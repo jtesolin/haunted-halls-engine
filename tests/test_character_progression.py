@@ -541,6 +541,28 @@ def test_ability_availability_is_deterministic_and_read_only() -> None:
     assert normalized["unlocked_abilities"] == ["mystery_ability"]
     assert evaluate_ability_availability(persisted_unknown, "mystery_ability").status == AbilityAvailabilityStatus.UNKNOWN_ABILITY
 
+    malformed_ownership = {
+        "player": {
+            "progression": {
+                "version": 999,
+                "tracks": {
+                    "investigation": 5,
+                    "resolve": 0,
+                    "rapport": 0,
+                    "occult": 0,
+                },
+                "unlocked_abilities": [42, "", "   ", None],
+            }
+        }
+    }
+    malformed_ownership_result = evaluate_ability_availability(
+        malformed_ownership, "keen_eye"
+    )
+    assert malformed_ownership_result.status == AbilityAvailabilityStatus.LOCKED
+    assert malformed_ownership_result.owned is False
+    assert malformed_ownership_result.available is False
+    assert malformed_ownership_result.track_points == 5
+
     malformed = {
         "player": {
             "progression": {
