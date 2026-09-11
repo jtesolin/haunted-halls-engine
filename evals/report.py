@@ -23,10 +23,7 @@ _SAFE_DETAIL_KEYS = frozenset(
         "decision",
         "actual_decision",
         "expected_decision",
-        "action",
         "allowed",
-        "npc_id",
-        "destination",
         "legal_destinations",
         "reason",
         "error_type",
@@ -34,6 +31,15 @@ _SAFE_DETAIL_KEYS = frozenset(
         "error_locations",
     }
 )
+# NOTE: `action`, `npc_id`, and `destination` are intentionally NOT on this
+# allowlist. Those keys, when populated by a grader, are typically derived
+# directly from provider-controlled Director output (the proposed action
+# type, NPC identifier, and destination room ID) BEFORE full schema
+# validation has necessarily succeeded. A grader's internal `GraderResult`
+# may still carry them for in-process diagnostics, but the stable report
+# boundary must never persist arbitrary model-controlled identifiers/action
+# strings, even when they are short enough to pass the scalar-length bound
+# below.
 
 # A key on the allowlist above only bounds the KEY NAME; nothing prevents a
 # grader from attaching an arbitrary nested mapping (or other unbounded
@@ -43,6 +49,13 @@ _SAFE_DETAIL_KEYS = frozenset(
 # such safe scalars. Anything else (arbitrary mappings, unbounded strings,
 # nested containers of containers, ...) is dropped rather than serialized.
 _MAX_SAFE_STRING_LENGTH = 200
+# A grader could otherwise attach an arbitrarily large list (for example, an
+# unbounded `legal_destinations` collection copied from a large or malicious
+# world) even though each individual scalar item is short/safe. Bound the
+# ITEM COUNT of any list/tuple diagnostic as well, so no huge payload can be
+# copied into a stable report just because its elements are individually
+# safe.
+MAX_SAFE_DETAIL_LIST_ITEMS = 20
 
 
 def _is_safe_scalar(value: Any) -> bool:
@@ -60,6 +73,11 @@ def _safe_detail_value(value: Any) -> Any:
     if _is_safe_scalar(value):
         return value
     if isinstance(value, (list, tuple)):
+        if len(value) > MAX_SAFE_DETAIL_LIST_ITEMS:
+            # Prefer dropping an oversized collection outright over silently
+            # truncating it: a truncated `legal_destinations` (for example)
+            # could otherwise be misread as a complete/authoritative list.
+            return _DROP
         if all(_is_safe_scalar(item) for item in value):
             return list(value)
         return _DROP

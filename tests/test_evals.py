@@ -5,6 +5,7 @@ import asyncio
 import json
 import sys
 import traceback
+from typing import Any
 
 import pytest
 from pydantic import ValidationError
@@ -13,6 +14,7 @@ from sqlalchemy import select
 from app.agents.narrator import NarratorAgentInput
 from app.db.schema import campaigns, game_events, model_requests, turns
 from app.db.session import get_engine, session
+from app.game.items import PLAYER_INVENTORY_LOCATION
 from app.schemas.director import DirectorInput
 
 from evals.graders import grade_scenario
@@ -251,10 +253,32 @@ def test_director_require_none_string_value_is_rejected_at_load(tmp_path) -> Non
         {"contains": []},
         {"contains": ["ok", ""]},
         {"must_not_contain": False},
+        {"contains": "   "},
+        {"must_not_contain": "   "},
+        {"contains": ["valid", "   "]},
     ],
 )
 def test_malformed_narrator_expectation_values_are_rejected_at_load(tmp_path, expectations) -> None:
     _write_scenario_file(tmp_path, "narrator-malformed-expectation", "narrator", expectations)
+    with pytest.raises(ValueError):
+        load_scenarios(tmp_path)
+
+
+def test_narrator_whitespace_only_scalar_expectation_is_rejected_at_load(tmp_path) -> None:
+    """A whitespace-only string ("   ") is not caught by an empty-string
+    check but is just as meaningless for a substring contains/
+    must_not_contain grader; it must fail scenario loading, not be silently
+    stripped and accepted."""
+
+    _write_scenario_file(tmp_path, "narrator-whitespace-scalar", "narrator", {"contains": "   "})
+    with pytest.raises(ValueError, match="must not be empty or whitespace-only"):
+        load_scenarios(tmp_path)
+
+
+def test_narrator_whitespace_only_list_item_expectation_is_rejected_at_load(tmp_path) -> None:
+    _write_scenario_file(
+        tmp_path, "narrator-whitespace-list-item", "narrator", {"contains": ["valid", "   "]}
+    )
     with pytest.raises(ValueError):
         load_scenarios(tmp_path)
 
@@ -1196,6 +1220,95 @@ def test_render_report_passing_scenario_stays_concise_without_a_failed_line() ->
     assert not any(line.strip().startswith("failed:") for line in scenario_lines)
 
 
+def test_report_omits_provider_controlled_action_npc_id_destination_from_details() -> None:
+    """`action`, `npc_id`, and `destination` are derived from actual
+    (potentially unvalidated/provider-controlled) Director output and must
+    never be persisted into a stable report, even though other bounded
+    diagnostics from the same grader survive."""
+
+    marker = "UNIQUE_PROVIDER_MARKER"
+    result = ScenarioResult(
+        scenario_id="report-no-provider-leak",
+        description="Provider-controlled action/npc_id/destination must be dropped from stable details.",
+        target=ScenarioTarget.DIRECTOR,
+        grader_results=[
+            GraderResult(
+                name="move_npc_destination_valid",
+                passed=False,
+                details={
+                    "action": marker,
+                    "npc_id": marker,
+                    "destination": marker,
+                    "allowed": ["move_npc"],
+                },
+            )
+        ],
+        passed=False,
+        score=0.0,
+        max_score=1.0,
+    )
+
+    summary = summarize_results([result])
+    report_json = json.dumps(summary)
+    assert marker not in report_json
+
+    details = summary["results"][0]["grader_results"][0]["details"]
+    assert "action" not in details
+    assert "npc_id" not in details
+    assert "destination" not in details
+    assert details["allowed"] == ["move_npc"]
+
+    report_text = render_report([result])
+    assert marker not in report_text
+
+
+def test_report_bounds_oversized_diagnostic_list_but_keeps_small_ones() -> None:
+    small_list_result = ScenarioResult(
+        scenario_id="report-small-list",
+        description="A small allowed list must survive report serialization.",
+        target=ScenarioTarget.DIRECTOR,
+        grader_results=[
+            GraderResult(
+                name="move_npc_destination_valid",
+                passed=True,
+                details={"allowed": ["eval_room_a", "eval_room_b"]},
+            )
+        ],
+        passed=True,
+        score=1.0,
+        max_score=1.0,
+    )
+    oversized_list_result = ScenarioResult(
+        scenario_id="report-oversized-list",
+        description="An oversized allowed list must not survive report serialization in full.",
+        target=ScenarioTarget.DIRECTOR,
+        grader_results=[
+            GraderResult(
+                name="move_npc_destination_valid",
+                passed=True,
+                details={
+                    "allowed": [f"eval_room_{i}" for i in range(50)],
+                    "length": 50,
+                },
+            )
+        ],
+        passed=True,
+        score=1.0,
+        max_score=1.0,
+    )
+
+    summary = summarize_results([small_list_result, oversized_list_result])
+    assert json.dumps(summary)  # must remain JSON serializable
+
+    small_details = summary["results"][0]["grader_results"][0]["details"]
+    assert small_details["allowed"] == ["eval_room_a", "eval_room_b"]
+
+    oversized_details = summary["results"][1]["grader_results"][0]["details"]
+    assert "allowed" not in oversized_details
+    # Other safe diagnostics on the same grader result are unaffected.
+    assert oversized_details["length"] == 50
+
+
 def test_report_summary_has_stable_json_fields() -> None:
     scenario = Scenario(
         scenario_id="report-stable-fields",
@@ -1522,6 +1635,76 @@ def _assert_narrator_input_is_synthetic(authoritative_input: dict, *, scenario_i
             if npc_id is not None:
                 _assert_eval_namespaced(npc_id, where=f"{scenario_id}.tool_result.nearby_npcs[].id")
 
+        _assert_state_delta_entity_ids_are_synthetic(
+            tool_result.get("state_delta"), scenario_id=scenario_id
+        )
+
+
+def _assert_state_delta_entity_ids_are_synthetic(state_delta: Any, *, scenario_id: str) -> None:
+    """Cover the known current ToolExecutionResult.state_delta shapes that
+    carry authoritative entity IDs (see app/services/tool_executor.py).
+    This is intentionally NOT a generic recursive walk: state_delta also
+    carries free-form property names/values (e.g. `properties.<name>`),
+    booleans, and counts that are not entity IDs and must not be forced
+    into the eval_ namespace."""
+
+    if not isinstance(state_delta, dict):
+        return
+
+    # state_delta["items"] is keyed by item ID (see take_item/drop_item/
+    # set_item_property in tool_executor.py, e.g.
+    # state_delta={"items": {item_id: {...}}}).
+    items_delta = state_delta.get("items")
+    if isinstance(items_delta, dict):
+        for item_id, item_change in items_delta.items():
+            _assert_eval_namespaced(item_id, where=f"{scenario_id}.tool_result.state_delta.items{{key}}")
+            if not isinstance(item_change, dict):
+                continue
+            location_change = item_change.get("location")
+            if isinstance(location_change, dict):
+                for direction in ("from", "to"):
+                    _assert_state_delta_location_value(
+                        location_change.get(direction),
+                        where=f"{scenario_id}.tool_result.state_delta.items[{item_id}].location.{direction}",
+                    )
+            # item_change["properties"][<name>]["from"/"to"] holds arbitrary
+            # property values (e.g. lit: false -> true), not entity IDs, and
+            # is deliberately not walked here.
+
+    # state_delta["player"]["location"] carries room-ID transitions (see
+    # move_player in tool_executor.py:
+    # state_delta={"player": {"location": {"from": ..., "to": ...}}}).
+    player_delta = state_delta.get("player")
+    if isinstance(player_delta, dict):
+        location_change = player_delta.get("location")
+        if isinstance(location_change, dict):
+            for direction in ("from", "to"):
+                _assert_state_delta_location_value(
+                    location_change.get(direction),
+                    where=f"{scenario_id}.tool_result.state_delta.player.location.{direction}",
+                )
+        # state_delta["player"]["inventory"] carries bare item-ID list
+        # transitions (see take_item/drop_item: state_delta={"player":
+        # {"inventory": {"from": [...], "to": [...]}}}).
+        inventory_change = player_delta.get("inventory")
+        if isinstance(inventory_change, dict):
+            for direction in ("from", "to"):
+                for item_id in inventory_change.get(direction) or []:
+                    if isinstance(item_id, str):
+                        _assert_eval_namespaced(
+                            item_id,
+                            where=f"{scenario_id}.tool_result.state_delta.player.inventory.{direction}[]",
+                        )
+
+
+def _assert_state_delta_location_value(value: Any, *, where: str) -> None:
+    if value is None or value == PLAYER_INVENTORY_LOCATION:
+        # PLAYER_INVENTORY_LOCATION ("player:current") is a fixed production
+        # sentinel, not a room ID, and must not be required to use eval_.
+        return
+    if isinstance(value, str):
+        _assert_eval_namespaced(value, where=where)
+
 
 def _assert_director_world_action_is_synthetic(fixture_output, *, scenario_id: str) -> None:
     if not isinstance(fixture_output, dict) or fixture_output.get("decision") != "act":
@@ -1656,6 +1839,75 @@ def test_tool_result_collection_synthetic_ids_pass_and_reject_production_looking
     NarratorAgentInput.model_validate(fixture)
     with pytest.raises(AssertionError):
         _assert_narrator_input_is_synthetic(fixture, scenario_id="non-eval-tool-result-collection")
+
+
+def _narrator_input_with_state_delta(state_delta: dict) -> dict:
+    fixture = copy.deepcopy(_NARRATOR_TOOL_RESULT_COLLECTIONS_FIXTURE)
+    fixture["tool_result"]["state_delta"] = state_delta
+    return fixture
+
+
+def test_state_delta_item_property_change_with_synthetic_id_passes() -> None:
+    """`state_delta["items"]` is keyed by item ID (see
+    app/services/tool_executor.py's set_item_property/take_item/drop_item);
+    a synthetic eval_-namespaced item ID with an arbitrary (non-entity-ID)
+    property change must pass."""
+
+    fixture = _narrator_input_with_state_delta({"items": {"eval_lantern": {"lit": True}}})
+    NarratorAgentInput.model_validate(fixture)
+    _assert_narrator_input_is_synthetic(fixture, scenario_id="synthetic-state-delta-items")
+
+
+def test_state_delta_item_key_with_production_looking_id_is_rejected() -> None:
+    fixture = _narrator_input_with_state_delta({"items": {"brass_key": {"lit": True}}})
+    NarratorAgentInput.model_validate(fixture)
+    with pytest.raises(AssertionError):
+        _assert_narrator_input_is_synthetic(fixture, scenario_id="non-eval-state-delta-item-key")
+
+
+def test_state_delta_player_location_transition_with_synthetic_ids_passes() -> None:
+    """`state_delta["player"]["location"]["from"/"to"]` carries room-ID
+    transitions (see move_player in app/services/tool_executor.py)."""
+
+    fixture = _narrator_input_with_state_delta(
+        {"player": {"location": {"from": "eval_foyer", "to": "eval_gallery"}}}
+    )
+    NarratorAgentInput.model_validate(fixture)
+    _assert_narrator_input_is_synthetic(fixture, scenario_id="synthetic-state-delta-player-location")
+
+
+@pytest.mark.parametrize("direction", ["from", "to"])
+def test_state_delta_player_location_transition_with_production_looking_id_is_rejected(direction: str) -> None:
+    location_change = {"from": "eval_foyer", "to": "eval_gallery"}
+    location_change[direction] = "entry_hall"
+    fixture = _narrator_input_with_state_delta({"player": {"location": location_change}})
+    NarratorAgentInput.model_validate(fixture)
+    with pytest.raises(AssertionError):
+        _assert_narrator_input_is_synthetic(fixture, scenario_id="non-eval-state-delta-player-location")
+
+
+def test_state_delta_item_location_transition_allows_inventory_sentinel() -> None:
+    """PLAYER_INVENTORY_LOCATION ("player:current") is a fixed production
+    sentinel value used for take_item/drop_item transitions, not a room ID,
+    and must not be required to use the eval_ namespace."""
+
+    fixture = _narrator_input_with_state_delta(
+        {"items": {"eval_lantern": {"location": {"from": "eval_gallery", "to": PLAYER_INVENTORY_LOCATION}}}}
+    )
+    NarratorAgentInput.model_validate(fixture)
+    _assert_narrator_input_is_synthetic(fixture, scenario_id="synthetic-state-delta-item-location")
+
+
+def test_state_delta_player_inventory_transition_rejects_production_looking_id() -> None:
+    """`state_delta["player"]["inventory"]["from"/"to"]` carries bare
+    item-ID list transitions (see take_item/drop_item)."""
+
+    fixture = _narrator_input_with_state_delta(
+        {"player": {"inventory": {"from": [], "to": ["brass_key"]}}}
+    )
+    NarratorAgentInput.model_validate(fixture)
+    with pytest.raises(AssertionError):
+        _assert_narrator_input_is_synthetic(fixture, scenario_id="non-eval-state-delta-inventory")
 
 
 def _run_main_with_argv(monkeypatch, argv: list[str]) -> int:

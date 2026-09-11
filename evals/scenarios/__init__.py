@@ -93,17 +93,23 @@ def _validate_narrator_expectation_value(value: Any, *, key: str, scenario_id: s
     # and neither bool nor int/float/dict is coerced with str(...) merely to
     # make it gradeable; a non-string/non-list-of-strings value fails load.
     if isinstance(value, str):
-        if not value:
-            raise ValueError(f"{scenario_id}: deterministic_expectations.{key} must not be empty")
+        if not value.strip():
+            # A whitespace-only string (" ") is not caught by `not value`
+            # but is just as meaningless for a substring `contains`/
+            # `must_not_contain` check; reject it explicitly at load time
+            # rather than letting it silently pass through and grade
+            # against something misleading. The original (unstripped)
+            # value is retained for grading when it IS meaningful.
+            raise ValueError(f"{scenario_id}: deterministic_expectations.{key} must not be empty or whitespace-only")
         return
     if isinstance(value, list):
         if not value:
             raise ValueError(f"{scenario_id}: deterministic_expectations.{key} must not be empty")
         for item in value:
-            if not isinstance(item, str) or not item:
+            if not isinstance(item, str) or not item.strip():
                 raise ValueError(
-                    f"{scenario_id}: deterministic_expectations.{key} must be a non-empty string "
-                    f"or a list of non-empty strings; got {item!r} in the list"
+                    f"{scenario_id}: deterministic_expectations.{key} must be a non-empty, "
+                    f"non-whitespace-only string or a list of such strings; got {item!r} in the list"
                 )
         return
     raise ValueError(
