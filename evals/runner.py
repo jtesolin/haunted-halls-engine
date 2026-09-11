@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import argparse
+import inspect
 import json
 import sys
 from collections.abc import Awaitable, Callable, Sequence
@@ -15,7 +16,7 @@ from app.guardrails.model_policy import ModelPolicy
 from app.schemas.director import DirectorInput
 from evals.graders import grade_scenario
 from evals.report import render_report, summarize_results
-from evals.scenarios import filter_scenarios, load_scenarios
+from evals.scenarios import filter_scenarios, load_scenarios, validate_scenario_contract
 from evals.schemas import GraderResult, Scenario, ScenarioResult, ScenarioTarget
 
 # Sentinel distinguishing "caller omitted actual_output" (offline fallback to
@@ -62,6 +63,13 @@ class EvalRunner:
             scenario_copy.actual_output = scenario_copy.fixture_output
         if model_metadata is not None:
             scenario_copy.model_metadata = model_metadata
+        # `Scenario` is also the public PROGRAMMATIC contract: callers can
+        # construct one directly (bypassing load_scenario()/JSON fixtures
+        # entirely) and hand it straight to EvalRunner.run(). The SAME
+        # contract rules the loader enforces must be enforced here too, or
+        # a malformed/ignored-field scenario could be graded as a false
+        # green. This must run before grading.
+        validate_scenario_contract(scenario_copy)
         results = self.evaluator(scenario_copy)
         scenario_copy.grader_results = results
         # A scenario passes when all applicable deterministic graders pass.
@@ -91,8 +99,25 @@ def run_scenario(
     evaluator: Callable[[Scenario], list[GraderResult]] | None = None,
 ) -> ScenarioResult:
     if actual_output is _OUTPUT_NOT_SUPPLIED and invoke is not None:
+        # Reject an async callable BEFORE ever invoking it: calling an
+        # `async def` function does not run its body, it only constructs a
+        # coroutine object. If that coroutine were then discarded without
+        # being awaited or closed (as a bare `raise` after the call would
+        # do), Python emits a "coroutine was never awaited" RuntimeWarning,
+        # which can fail callers/tests that treat warnings as errors. No
+        # event loop is created in this synchronous helper; async callables
+        # must go through `run_scenario_async` instead.
+        if inspect.iscoroutinefunction(invoke):
+            raise TypeError("Use run_scenario_async when the scenario callable is async.")
         result = invoke()
-        if asyncio.iscoroutine(result):
+        # A nominally synchronous callable can still itself return an
+        # awaitable/coroutine (e.g. `lambda: some_async_fn()`). Detect that
+        # case too, and close any coroutine object that was actually
+        # created before raising, so nothing is left dangling unawaited.
+        if inspect.isawaitable(result):
+            close = getattr(result, "close", None)
+            if callable(close):
+                close()
             raise TypeError("Use run_scenario_async when the scenario callable is async.")
         actual_output = result
     return EvalRunner(evaluator=evaluator).run(scenario, actual_output=actual_output)

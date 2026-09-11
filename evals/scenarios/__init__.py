@@ -25,9 +25,25 @@ def load_scenario(path: str | Path) -> Scenario:
     with Path(path).open("r", encoding="utf-8") as handle:
         payload = json.load(handle)
     scenario = Scenario.model_validate(payload)
+    validate_scenario_contract(scenario)
+    return scenario
+
+
+def validate_scenario_contract(scenario: Scenario) -> None:
+    """The single shared scenario-contract validation entry point.
+
+    `Scenario` is also the public PROGRAMMATIC contract: code can construct
+    one directly and pass it straight to `EvalRunner.run()` without ever
+    going through `load_scenario()`/a JSON fixture file. Both entry points
+    must therefore enforce exactly the same rules -- target-specific
+    authoritative-input validation, deterministic-expectation validation,
+    and (for Narrator) the no-silently-ignored-fields invariant -- from this
+    one place, rather than duplicating them between the loader and the
+    runner.
+    """
+
     _validate_target_specific_input(scenario)
     _validate_deterministic_expectations(scenario)
-    return scenario
 
 
 def _validate_target_specific_input(scenario: Scenario) -> None:
@@ -44,6 +60,71 @@ def _validate_target_specific_input(scenario: Scenario) -> None:
         DirectorInput.model_validate(scenario.authoritative_input)
     elif scenario.target == ScenarioTarget.NARRATOR:
         NarratorAgentInput.model_validate(scenario.authoritative_input)
+        _validate_no_ignored_narrator_fields(scenario)
+
+
+def _validate_no_ignored_narrator_fields(scenario: Scenario) -> None:
+    """A Narrator scenario's declared authoritative_input must equal the
+    context the live Narrator would actually receive.
+
+    NarratorAgentInput and its nested production models (NarratorSceneContext,
+    NarratorItem, NearbyNPC, ToolExecutionResult, ParsedAction, ...) use
+    ordinary Pydantic extra-ignore behavior (the production default), NOT
+    extra="forbid" -- and that default must not change, since it is
+    production behavior out of scope for this eval harness. A fixture typo
+    (e.g. scene_context.nearby_npc instead of nearby_npcs) would otherwise
+    validate successfully, remain present in the raw fixture JSON, and then
+    be silently discarded when NarratorAgentInput is actually constructed --
+    meaning the checked-in scenario would claim one context while a live
+    run receives a different, silently-narrower one.
+
+    This performs a structural diff between the ORIGINAL fixture dict and a
+    JSON-safe dump of only the fields Pydantic actually accepted
+    (exclude_unset=True, so unset defaults are not mistaken for "accepted"
+    fields the fixture never declared). Any fixture key that does not
+    survive that round trip was silently ignored, and the scenario is
+    rejected with a clear error naming the offending path.
+    """
+
+    validated = NarratorAgentInput.model_validate(scenario.authoritative_input)
+    accepted = validated.model_dump(mode="json", exclude_unset=True)
+    ignored_paths = _find_ignored_fields(scenario.authoritative_input, accepted)
+    if ignored_paths:
+        raise ValueError(
+            f"{scenario.scenario_id}: authoritative_input field(s) would be silently "
+            f"ignored by NarratorAgentInput and never reach the live Narrator: "
+            f"{', '.join(sorted(ignored_paths))}"
+        )
+
+
+def _find_ignored_fields(original: Any, accepted: Any, *, path: str = "") -> list[str]:
+    """Recursively find keys present in `original` that do not survive in
+    `accepted`. This is a generic structural diff (not a duplicate schema):
+    it only needs to know how to walk dicts/lists, never the specific
+    production field names/types."""
+
+    if isinstance(original, dict):
+        if not isinstance(accepted, dict):
+            return [path or "<root>"]
+        ignored: list[str] = []
+        for key, value in original.items():
+            child_path = f"{path}.{key}" if path else key
+            if key not in accepted:
+                ignored.append(child_path)
+                continue
+            ignored.extend(_find_ignored_fields(value, accepted[key], path=child_path))
+        return ignored
+    if isinstance(original, list):
+        if not isinstance(accepted, list) or len(accepted) != len(original):
+            # A length/shape mismatch here is not itself a "silently
+            # ignored field"; the earlier NarratorAgentInput.model_validate
+            # call above already enforces list-item shape/type validity.
+            return []
+        ignored = []
+        for index, (original_item, accepted_item) in enumerate(zip(original, accepted)):
+            ignored.extend(_find_ignored_fields(original_item, accepted_item, path=f"{path}[{index}]"))
+        return ignored
+    return []
 
 
 def _validate_deterministic_expectations(scenario: Scenario) -> None:

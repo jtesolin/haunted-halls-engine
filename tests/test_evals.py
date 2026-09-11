@@ -5,6 +5,7 @@ import asyncio
 import json
 import sys
 import traceback
+import warnings
 from typing import Any
 
 import pytest
@@ -22,6 +23,7 @@ from evals.graders import _sanitize_error
 from evals.report import render_report, summarize_results
 from evals.runner import EvalRunner, run_scenarios
 from evals.runner import LiveEvalError, _run_live_scenario, _run_live_scenarios
+from evals.runner import run_scenario, run_scenario_async
 import evals.runner as runner_module
 from evals.scenarios import filter_scenarios, load_scenarios
 from evals.schemas import GraderResult, Scenario, ScenarioResult, ScenarioTarget
@@ -916,6 +918,7 @@ def test_report_excludes_raw_actual_output_field() -> None:
         scenario_id="report-actual-output-exclusion",
         description="Top-level actual_output must not be serialized.",
         target=ScenarioTarget.NARRATOR,
+        authoritative_input=_NARRATOR_FIXTURE,
     )
     marker = "UNIQUE_RAW_OUTPUT_MARKER_7Q1"
     result = EvalRunner().run(scenario, actual_output={"reply_text": f"Contains {marker}."})
@@ -935,6 +938,7 @@ def test_report_excludes_raw_fixture_output_field() -> None:
         scenario_id="report-fixture-output-exclusion",
         description="Top-level fixture_output must not be serialized.",
         target=ScenarioTarget.NARRATOR,
+        authoritative_input=_NARRATOR_FIXTURE,
         fixture_output=marker,
     )
     result = EvalRunner().run(scenario, actual_output={"reply_text": "safe narration"})
@@ -949,6 +953,7 @@ def test_report_strips_raw_reply_text_from_grader_details() -> None:
         scenario_id="report-sanitize-details",
         description="Grader details must never embed raw reply text.",
         target=ScenarioTarget.NARRATOR,
+        authoritative_input=_NARRATOR_FIXTURE,
     )
     result = EvalRunner().run(scenario, actual_output={"reply_text": f"Some narration containing {marker}."})
     summary = summarize_results([result])
@@ -2078,3 +2083,239 @@ def test_cli_main_live_without_credentials_fails_closed(monkeypatch, capsys) -> 
     assert captured.out == ""
     assert "live eval failed" in captured.err
     assert "Traceback" not in captured.err
+
+
+# --- Item 1: run_scenario() async-invoke lifecycle -------------------------
+
+
+def _noop_scenario() -> Scenario:
+    return Scenario(
+        scenario_id="run-scenario-lifecycle",
+        description="run_scenario() sync/async invoke boundary checks.",
+        target=ScenarioTarget.DIRECTOR,
+        authoritative_input=_DIRECTOR_FIXTURE,
+        deterministic_expectations={"require_none": True},
+        fixture_output={"decision": "none"},
+    )
+
+
+def test_run_scenario_rejects_async_def_invoke_without_runtime_warning() -> None:
+    """An `async def` invoke must be rejected before it is ever called, so no
+    coroutine object is constructed and discarded -- that would otherwise
+    trigger a "coroutine was never awaited" RuntimeWarning."""
+
+    async def invoke() -> dict[str, str]:
+        return {"decision": "none"}
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        with pytest.raises(TypeError, match="run_scenario_async"):
+            run_scenario(_noop_scenario(), invoke=invoke)
+
+
+def test_run_scenario_rejects_sync_callable_returning_coroutine_without_runtime_warning() -> None:
+    """A nominally synchronous callable that itself returns an
+    awaitable/coroutine must also be rejected, and the coroutine object it
+    creates must be closed rather than left dangling unawaited."""
+
+    async def _coro() -> dict[str, str]:
+        return {"decision": "none"}
+
+    def invoke() -> Any:
+        return _coro()
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        with pytest.raises(TypeError, match="run_scenario_async"):
+            run_scenario(_noop_scenario(), invoke=invoke)
+
+
+def test_run_scenario_ordinary_sync_invoke_still_works() -> None:
+    def invoke() -> dict[str, str]:
+        return {"decision": "none"}
+
+    result = run_scenario(_noop_scenario(), invoke=invoke)
+    assert result.passed is True
+
+
+def test_run_scenario_async_still_supports_async_invoke() -> None:
+    async def invoke() -> dict[str, str]:
+        return {"decision": "none"}
+
+    result = asyncio.run(run_scenario_async(_noop_scenario(), invoke=invoke))
+    assert result.passed is True
+
+
+# --- Item 2: Narrator scenario fixtures reject silently-ignored fields -----
+
+
+def test_narrator_unknown_top_level_field_is_rejected_at_load(tmp_path) -> None:
+    malformed = {
+        "scenario_id": "narrator-unknown-top-level-field",
+        "description": "Typo'd top-level NarratorAgentInput field must not be silently dropped.",
+        "target": "narrator",
+        "authoritative_input": {
+            **_NARRATOR_FIXTURE,
+            "unknown_field": "should not be silently ignored",
+        },
+    }
+    (tmp_path / "malformed.json").write_text(json.dumps(malformed), encoding="utf-8")
+    with pytest.raises(ValueError, match="silently ignored"):
+        load_scenarios(tmp_path)
+
+
+def test_narrator_unknown_scene_context_field_is_rejected_at_load(tmp_path) -> None:
+    malformed = {
+        "scenario_id": "narrator-unknown-scene-context-field",
+        "description": "Typo'd scene_context field (nearby_npc instead of nearby_npcs).",
+        "target": "narrator",
+        "authoritative_input": {
+            "player_message": "look",
+            "scene_context": {
+                "current_room": {"id": "eval_foyer", "name": "Eval Foyer", "description": "d"},
+                "nearby_npc": [],
+            },
+        },
+    }
+    (tmp_path / "malformed.json").write_text(json.dumps(malformed), encoding="utf-8")
+    with pytest.raises(ValueError, match="silently ignored"):
+        load_scenarios(tmp_path)
+
+
+def test_narrator_unknown_nearby_item_field_is_rejected_at_load(tmp_path) -> None:
+    malformed = {
+        "scenario_id": "narrator-unknown-item-field",
+        "description": "Typo'd property on a nested NarratorItem.",
+        "target": "narrator",
+        "authoritative_input": {
+            "player_message": "look",
+            "scene_context": {
+                "current_room": {"id": "eval_foyer", "name": "Eval Foyer", "description": "d"},
+                "nearby_items": [
+                    {
+                        "id": "eval_lantern",
+                        "name": "Lantern",
+                        "unknown_property": "should not be silently ignored",
+                    }
+                ],
+                "nearby_npcs": [],
+            },
+        },
+    }
+    (tmp_path / "malformed.json").write_text(json.dumps(malformed), encoding="utf-8")
+    with pytest.raises(ValueError, match="silently ignored"):
+        load_scenarios(tmp_path)
+
+
+def test_narrator_unknown_tool_result_field_is_rejected_at_load(tmp_path) -> None:
+    malformed = {
+        "scenario_id": "narrator-unknown-tool-result-field",
+        "description": "Typo'd field inside tool_result.",
+        "target": "narrator",
+        "authoritative_input": {
+            **_NARRATOR_FIXTURE,
+            "tool_result": {
+                "success": True,
+                "summary": "did a thing",
+                "unknown_tool_field": "should not be silently ignored",
+            },
+        },
+    }
+    (tmp_path / "malformed.json").write_text(json.dumps(malformed), encoding="utf-8")
+    with pytest.raises(ValueError, match="silently ignored"):
+        load_scenarios(tmp_path)
+
+
+def test_all_checked_in_narrator_scenarios_have_no_ignored_fields() -> None:
+    """No false positives: every checked-in Narrator scenario must still
+    load successfully under the new no-ignored-fields check."""
+
+    scenarios = load_scenarios()
+    narrator_scenarios = [s for s in scenarios if s.target == ScenarioTarget.NARRATOR]
+    assert narrator_scenarios
+
+
+# --- Item 3: shared scenario-contract validation used by EvalRunner.run() -
+
+
+def test_eval_runner_rejects_programmatic_malformed_director_expectation_type() -> None:
+    scenario = Scenario(
+        scenario_id="programmatic-director-bad-expectation-type",
+        description="require_none must be a bool, even for a programmatic Scenario.",
+        target=ScenarioTarget.DIRECTOR,
+        authoritative_input=_DIRECTOR_FIXTURE,
+        deterministic_expectations={"require_none": "false"},
+        fixture_output={"decision": "none"},
+    )
+    with pytest.raises(ValueError, match="require_none must be a bool"):
+        EvalRunner().run(scenario)
+
+
+def test_eval_runner_rejects_programmatic_unknown_expectation_key() -> None:
+    scenario = Scenario(
+        scenario_id="programmatic-director-unknown-expectation-key",
+        description="A typo'd expectation key must not be silently ignored by the grader.",
+        target=ScenarioTarget.DIRECTOR,
+        authoritative_input=_DIRECTOR_FIXTURE,
+        deterministic_expectations={"require_none_typo": True},
+        fixture_output={"decision": "none"},
+    )
+    with pytest.raises(ValueError, match="unsupported Director deterministic_expectations"):
+        EvalRunner().run(scenario)
+
+
+def test_eval_runner_rejects_programmatic_malformed_director_authoritative_input() -> None:
+    scenario = Scenario(
+        scenario_id="programmatic-director-bad-input",
+        description="Missing required player_action must be rejected before grading.",
+        target=ScenarioTarget.DIRECTOR,
+        authoritative_input={
+            "current_player_room_id": "eval_foyer",
+            "clock_tick": 0,
+            "facts": [],
+            "npcs": [],
+        },
+    )
+    with pytest.raises(ValidationError):
+        EvalRunner().run(scenario)
+
+
+def test_eval_runner_rejects_programmatic_malformed_narrator_authoritative_input() -> None:
+    scenario = Scenario(
+        scenario_id="programmatic-narrator-bad-input",
+        description="Missing required scene_context must be rejected before grading.",
+        target=ScenarioTarget.NARRATOR,
+        authoritative_input={"player_message": "look around"},
+    )
+    with pytest.raises(ValidationError):
+        EvalRunner().run(scenario)
+
+
+def test_eval_runner_rejects_programmatic_narrator_ignored_extra_field() -> None:
+    scenario = Scenario(
+        scenario_id="programmatic-narrator-ignored-field",
+        description="A programmatic Scenario with a typo'd nested field must be rejected too.",
+        target=ScenarioTarget.NARRATOR,
+        authoritative_input={
+            "player_message": "look",
+            "scene_context": {
+                "current_room": {"id": "eval_foyer", "name": "Eval Foyer", "description": "d"},
+                "nearby_npc": [],
+            },
+        },
+    )
+    with pytest.raises(ValueError, match="silently ignored"):
+        EvalRunner().run(scenario)
+
+
+def test_eval_runner_still_runs_a_valid_programmatic_scenario() -> None:
+    scenario = Scenario(
+        scenario_id="programmatic-valid-scenario",
+        description="A well-formed programmatic Scenario must still run end-to-end.",
+        target=ScenarioTarget.DIRECTOR,
+        authoritative_input=_DIRECTOR_FIXTURE,
+        deterministic_expectations={"require_none": True},
+        fixture_output={"decision": "none"},
+    )
+    result = EvalRunner().run(scenario)
+    assert result.passed is True
