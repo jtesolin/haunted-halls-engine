@@ -1,0 +1,30 @@
+{
+  "scenario_id": "director-absent-off-room-npc",
+  "description": "An absent off-room NPC remains represented in bounded Director context; any proposal must remain within the supplied entity/destination bounds. This scenario does not assert that a live Director must return decision=none merely because a referenced NPC's status is absent -- WorldAuthorityExecutor's MOVE_NPC bounds checks (NPC exists, valid location, destination exists and is exactly one hop away) do not reject a move based on NPC status.",
+  "target": "director",
+  "tags": ["director", "context", "absent-npc"],
+  "authoritative_input": {
+    "current_player_room_id": "eval_gallery",
+    "clock_tick": 1,
+    "facts": ["The steward left the gallery some time ago."],
+    "npcs": [
+      {
+        "npc_id": "eval_npc_a",
+        "location_id": "eval_foyer",
+        "status": "absent",
+        "one_hop_destination_room_ids": ["eval_gallery"]
+      }
+    ],
+    "player_action": {
+      "action": "observe",
+      "target": null,
+      "parse_status": "ok",
+      "succeeded": true,
+      "result_summary": "The player looks down the empty gallery.",
+      "applied_tools": ["observe_room"],
+      "error_code": null
+    }
+  },
+  "deterministic_expectations": {},
+  "fixture_output": {"decision": "none"}
+}

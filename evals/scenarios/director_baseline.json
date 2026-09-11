@@ -1,0 +1,23 @@
+{
+  "scenario_id": "director-baseline-noop",
+  "description": "Baseline Director behavior when there is no valid world-state change and no obvious privileged movement opportunity.",
+  "target": "director",
+  "tags": ["director", "baseline", "phase-7"],
+  "authoritative_input": {
+    "current_player_room_id": "eval_foyer",
+    "clock_tick": 0,
+    "facts": [],
+    "npcs": [],
+    "player_action": {
+      "action": "observe",
+      "target": null,
+      "parse_status": "ok",
+      "succeeded": true,
+      "result_summary": "The player takes stock of the evaluation foyer.",
+      "applied_tools": ["observe_room"],
+      "error_code": null
+    }
+  },
+  "deterministic_expectations": {"require_none": true},
+  "fixture_output": {"decision": "none"}
+}
