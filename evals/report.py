@@ -25,10 +25,8 @@ _SAFE_DETAIL_KEYS = frozenset(
         "expected_decision",
         "allowed",
         "legal_destinations",
-        "reason",
         "error_type",
         "error_count",
-        "error_locations",
     }
 )
 # NOTE: `action`, `npc_id`, and `destination` are intentionally NOT on this
@@ -40,6 +38,22 @@ _SAFE_DETAIL_KEYS = frozenset(
 # boundary must never persist arbitrary model-controlled identifiers/action
 # strings, even when they are short enough to pass the scalar-length bound
 # below.
+#
+# NOTE: `reason` is also intentionally NOT on this allowlist. `details` is an
+# arbitrary `dict[str, Any]`, and a future/custom grader could attach raw
+# provider/model content under `reason` and have it serialized simply
+# because it happens to be a short string. A grader may still set `reason`
+# on its in-process `GraderResult` for diagnostics; it just never crosses
+# the stable JSON/human report boundary.
+#
+# NOTE: `error_locations` is also intentionally NOT on this allowlist.
+# `_sanitize_error()` derives it from `ValidationError.errors()[].loc`, and
+# for malformed provider/model output an extra/unexpected field NAME is
+# itself provider-controlled and can appear in that location path. Keeping
+# only `error_type`/`error_count` provides sufficient bounded diagnostics for
+# 8E1 while guaranteeing no provider-controlled field name can escape into a
+# stable report. `_sanitize_error()` may still compute `error_locations`
+# internally if useful; the report projection below simply never emits it.
 
 # A key on the allowlist above only bounds the KEY NAME; nothing prevents a
 # grader from attaching an arbitrary nested mapping (or other unbounded

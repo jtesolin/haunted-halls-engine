@@ -18,6 +18,7 @@ from app.game.items import PLAYER_INVENTORY_LOCATION
 from app.schemas.director import DirectorInput
 
 from evals.graders import grade_scenario
+from evals.graders import _sanitize_error
 from evals.report import render_report, summarize_results
 from evals.runner import EvalRunner, run_scenarios
 from evals.runner import LiveEvalError, _run_live_scenario, _run_live_scenarios
@@ -1257,6 +1258,102 @@ def test_report_omits_provider_controlled_action_npc_id_destination_from_details
     assert "npc_id" not in details
     assert "destination" not in details
     assert details["allowed"] == ["move_npc"]
+
+    report_text = render_report([result])
+    assert marker not in report_text
+
+
+def test_report_omits_arbitrary_reason_content_from_details() -> None:
+    """`details["reason"]` is intentionally generic (`GraderResult.details`
+    is `dict[str, Any]`); a future/custom grader could attach raw
+    provider/model content there. The stable report boundary must drop it
+    even though it is a short string, while safe diagnostics such as
+    `error_type` survive."""
+
+    marker = "UNIQUE_RAW_REASON_MARKER"
+    result = ScenarioResult(
+        scenario_id="report-no-reason-leak",
+        description="Arbitrary reason content must be dropped from stable details.",
+        target=ScenarioTarget.NARRATOR,
+        grader_results=[
+            GraderResult(
+                name="narrator-output-present",
+                passed=False,
+                details={"reason": marker, "error_type": "validation_error"},
+            )
+        ],
+        passed=False,
+        score=0.0,
+        max_score=1.0,
+    )
+
+    summary = summarize_results([result])
+    report_json = json.dumps(summary)
+    assert marker not in report_json
+
+    details = summary["results"][0]["grader_results"][0]["details"]
+    assert "reason" not in details
+    assert details["error_type"] == "validation_error"
+
+    report_text = render_report([result])
+    assert marker not in report_text
+
+
+def test_report_omits_provider_controlled_validation_error_locations() -> None:
+    """An extra/unexpected field NAME supplied in malformed provider output
+    is itself provider-controlled and can appear inside
+    `ValidationError.errors()[].loc`. `error_locations` must never cross the
+    stable report boundary, even though `error_type`/`error_count` (bounded,
+    safe diagnostics) do."""
+
+    marker = "UNIQUE_RAW_FIELD_MARKER"
+    try:
+        DirectorInput.model_validate(
+            {
+                "current_player_room_id": "eval_gallery",
+                "clock_tick": 1,
+                "facts": [],
+                "npcs": [],
+                "player_action": {
+                    "action": "observe",
+                    "parse_status": "ok",
+                    "applied_tools": [],
+                    "succeeded": True,
+                    "result_summary": "ok",
+                    "error_code": None,
+                    "target": None,
+                },
+                marker: "unexpected-extra-field",
+            }
+        )
+    except ValidationError as exc:
+        details = _sanitize_error(exc)
+    else:
+        pytest.fail("expected a ValidationError from the malformed extra-field input")
+
+    # Sanity check: prove the raw marker really does appear in the
+    # UNSANITIZED validation-error internals, so this regression is
+    # actually exercising the leak path it claims to close.
+    assert any(marker in str(location) for location in details.get("error_locations", []))
+
+    result = ScenarioResult(
+        scenario_id="report-no-validation-location-leak",
+        description="Provider-controlled extra-field names must not leak via error_locations.",
+        target=ScenarioTarget.DIRECTOR,
+        grader_results=[GraderResult(name="director_input_is_valid", passed=False, details=details)],
+        passed=False,
+        score=0.0,
+        max_score=1.0,
+    )
+
+    summary = summarize_results([result])
+    report_json = json.dumps(summary)
+    assert marker not in report_json
+
+    safe_details = summary["results"][0]["grader_results"][0]["details"]
+    assert "error_locations" not in safe_details
+    assert safe_details["error_type"] == "validation_error"
+    assert safe_details["error_count"] == details["error_count"]
 
     report_text = render_report([result])
     assert marker not in report_text
