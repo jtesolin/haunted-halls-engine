@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 from openai.types.chat import ChatCompletionMessageParam
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError, model_validator
+from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError, model_validator
 
 from app.agents.base import BaseAgent
 from app.ai.model_client import ModelCallResult, ModelUsage, model_client
@@ -32,10 +32,10 @@ class DirectorProviderWorldAction(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     action: Literal["move_npc", "set_npc_status", "advance_clock", "record_fact"]
-    npc_id: str | None = Field(default=None, min_length=1)
-    destination_room_id: str | None = Field(default=None, min_length=1)
+    npc_id: str | None = None
+    destination_room_id: str | None = None
     status: Literal["active", "absent"] | None = None
-    ticks: int | None = Field(default=None, ge=1, le=10)
+    ticks: int | None = None
     fact: str | None = None
 
     def to_domain_action(

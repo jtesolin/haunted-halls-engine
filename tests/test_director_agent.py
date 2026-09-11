@@ -30,14 +30,21 @@ from app.services.director_context import build_director_input
 from app.services.world_authority import WorldAuthorityExecutor
 
 
-def _schema_contains_key(schema: object, key: str) -> bool:
-    if isinstance(schema, dict):
-        return key in schema or any(
-            _schema_contains_key(value, key) for value in schema.values()
-        )
-    if isinstance(schema, list):
-        return any(_schema_contains_key(value, key) for value in schema)
-    return False
+def _find_schema_keywords(schema: object, keywords: set[str]) -> dict[str, int]:
+    counts = dict.fromkeys(keywords, 0)
+
+    def scan(value: object) -> None:
+        if isinstance(value, dict):
+            for key, child_value in value.items():
+                if key in counts:
+                    counts[key] += 1
+                scan(child_value)
+        elif isinstance(value, list):
+            for child_value in value:
+                scan(child_value)
+
+    scan(schema)
+    return counts
 
 
 def _director_input(state: dict[str, Any] | None = None) -> DirectorInput:
@@ -60,10 +67,18 @@ def _proposal_response(proposal: dict[str, Any]) -> DirectorProposalResponse:
     return DirectorProposalResponse.model_validate({"proposal": proposal})
 
 
-def test_director_provider_response_schema_contains_no_one_of() -> None:
+def test_director_provider_response_schema_avoids_provider_sensitive_keywords() -> None:
     schema = DirectorProposalResponse.model_json_schema()
 
-    assert not _schema_contains_key(schema, "oneOf")
+    assert _find_schema_keywords(
+        schema,
+        {"oneOf", "minLength", "minimum", "maximum"},
+    ) == {
+        "oneOf": 0,
+        "minLength": 0,
+        "minimum": 0,
+        "maximum": 0,
+    }
 
 
 def test_director_requires_typed_input() -> None:
@@ -278,6 +293,32 @@ def test_director_provider_action_rejects_fields_from_other_actions(
     response = _proposal_response({"decision": "act", "world_action": world_action})
 
     with pytest.raises(ValueError):
+        response.to_domain_proposal()
+
+
+@pytest.mark.parametrize(
+    "world_action",
+    [
+        {"action": "advance_clock", "ticks": 0},
+        {"action": "advance_clock", "ticks": 11},
+        {
+            "action": "move_npc",
+            "npc_id": "",
+            "destination_room_id": "grand_corridor",
+        },
+        {
+            "action": "move_npc",
+            "npc_id": "old_caretaker",
+            "destination_room_id": "",
+        },
+    ],
+)
+def test_director_provider_action_delegates_value_bounds_to_domain_models(
+    world_action: dict[str, Any],
+) -> None:
+    response = _proposal_response({"decision": "act", "world_action": world_action})
+
+    with pytest.raises(ValidationError):
         response.to_domain_proposal()
 
 
