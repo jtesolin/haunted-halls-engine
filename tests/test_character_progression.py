@@ -90,7 +90,23 @@ def test_unknown_track_id_is_rejected_without_mutation() -> None:
     assert state["player"]["progression"] == default_character_progression_state()
 
 
-def test_progression_cannot_exceed_configured_cap() -> None:
+def test_invalid_operations_on_legacy_state_do_not_create_progression() -> None:
+    state = {"player": {"location": "entry_hall", "inventory": []}}
+    state_before = json.dumps(state, sort_keys=True)
+
+    invalid_track = grant_progress(state, ["investigation"], 1)  # type: ignore[arg-type]
+    invalid_amount = grant_progress(state, "investigation", 0)
+    invalid_ability = unlock_ability(state, "")
+
+    assert invalid_track.error_code == "unknown_track"
+    assert invalid_amount.error_code == "invalid_amount"
+    assert invalid_amount.prior_points == 0
+    assert invalid_ability.error_code == "invalid_ability_id"
+    assert "progression" not in state["player"]
+    assert json.dumps(state, sort_keys=True) == state_before
+
+
+def test_runtime_progression_reaches_and_remains_at_configured_cap() -> None:
     state: dict = {}
     ensure_character_progression_state(state)
 
@@ -160,7 +176,7 @@ def test_malformed_persisted_progression_does_not_grant_elevated_ranks_or_abilit
     progression = ensure_character_progression_state(state)
 
     assert progression["version"] == 1
-    assert progression["tracks"]["investigation"] == MAX_TRACK_POINTS
+    assert progression["tracks"]["investigation"] == 0
     assert progression["tracks"]["resolve"] == 0
     assert progression["tracks"]["rapport"] == 0
     assert progression["tracks"]["occult"] == 0

@@ -81,7 +81,7 @@ def ensure_character_progression_state(state: dict[str, Any]) -> dict[str, Any]:
 
 
 def grant_progress(
-    state: dict[str, Any], track_id: str, amount: int
+    state: dict[str, Any], track_id: str | ProgressionTrackId, amount: int
 ) -> ProgressionGrantResult:
     """Deterministically grant `amount` points to `track_id`.
 
@@ -90,13 +90,12 @@ def grant_progress(
     grant that would exceed the cap still succeeds but reports `capped=True`
     and `changed=False` once the track is already at its cap.
     """
-    progression = ensure_character_progression_state(state)
-    tracks = progression["tracks"]
-
-    resolved_track_id = track_id.value if isinstance(track_id, ProgressionTrackId) else track_id
-    track_id_str = resolved_track_id if isinstance(resolved_track_id, str) else str(resolved_track_id)
-
-    if resolved_track_id not in tracks:
+    if isinstance(track_id, ProgressionTrackId):
+        resolved_track_id = track_id.value
+    elif isinstance(track_id, str):
+        resolved_track_id = track_id
+    else:
+        track_id_str = str(track_id)
         return ProgressionGrantResult(
             success=False,
             changed=False,
@@ -108,8 +107,20 @@ def grant_progress(
             reason=f"'{track_id_str}' is not a supported progression track.",
         )
 
+    if resolved_track_id not in PROGRESSION_TRACK_IDS:
+        return ProgressionGrantResult(
+            success=False,
+            changed=False,
+            track_id=resolved_track_id,
+            prior_points=0,
+            new_points=0,
+            capped=False,
+            error_code="unknown_track",
+            reason=f"'{resolved_track_id}' is not a supported progression track.",
+        )
+
     if isinstance(amount, bool) or not isinstance(amount, int) or amount <= 0:
-        prior_points = tracks[resolved_track_id]
+        prior_points = _read_normalized_progression(state)["tracks"][resolved_track_id]
         return ProgressionGrantResult(
             success=False,
             changed=False,
@@ -121,6 +132,8 @@ def grant_progress(
             reason="Progression grants must be a positive integer amount.",
         )
 
+    progression = ensure_character_progression_state(state)
+    tracks = progression["tracks"]
     prior_points = tracks[resolved_track_id]
     uncapped_points = prior_points + amount
     new_points = min(uncapped_points, MAX_TRACK_POINTS)
@@ -149,9 +162,6 @@ def unlock_ability(state: dict[str, Any], ability_id: str) -> AbilityUnlockResul
     ability ids are rejected without mutation. Ability *resolution* rules
     belong to Phase 8C; this only tracks ownership metadata.
     """
-    progression = ensure_character_progression_state(state)
-    unlocked: list[str] = progression["unlocked_abilities"]
-
     if not isinstance(ability_id, str) or ability_id.strip() != ability_id or not ability_id:
         ability_id_str = ability_id if isinstance(ability_id, str) else str(ability_id)
         return AbilityUnlockResult(
@@ -162,6 +172,9 @@ def unlock_ability(state: dict[str, Any], ability_id: str) -> AbilityUnlockResul
             error_code="invalid_ability_id",
             reason="Ability ids must be non-empty strings with no surrounding whitespace.",
         )
+
+    progression = ensure_character_progression_state(state)
+    unlocked: list[str] = progression["unlocked_abilities"]
 
     if ability_id in unlocked:
         return AbilityUnlockResult(
@@ -203,13 +216,17 @@ def _normalize_progression(raw_progression: Any) -> dict[str, Any]:
     }
 
 
+def _read_normalized_progression(state: dict[str, Any]) -> dict[str, Any]:
+    player = state.get("player")
+    raw_progression = player.get("progression") if isinstance(player, dict) else None
+    return _normalize_progression(raw_progression)
+
+
 def _normalize_track_points(raw_value: Any) -> int:
     if isinstance(raw_value, bool) or not isinstance(raw_value, int):
         return DEFAULT_TRACK_POINTS
-    if raw_value < MIN_TRACK_POINTS:
-        return MIN_TRACK_POINTS
-    if raw_value > MAX_TRACK_POINTS:
-        return MAX_TRACK_POINTS
+    if not MIN_TRACK_POINTS <= raw_value <= MAX_TRACK_POINTS:
+        return DEFAULT_TRACK_POINTS
     return raw_value
 
 

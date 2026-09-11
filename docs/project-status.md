@@ -471,16 +471,17 @@ ability/check resolution, without designing the system around combat.
 * `ensure_character_progression_state()` is a lazy normalization helper: it
   safely defaults legacy campaign state with no progression namespace,
   re-derives the persisted version marker, drops arbitrary/unknown track
-  ids, clamps out-of-range or malformed rank values to safe defaults, and
+  ids, resets out-of-range or malformed rank values to the safe zero-point
+  default rather than granting elevated ranks, and
   dedupes/filters unlocked-ability ids to non-empty strings, all without
   regenerating unrelated `items`/`npcs`/`clock`/`facts` state.
 * `grant_progress()` and `unlock_ability()` return structured
   `ProgressionGrantResult` / `AbilityUnlockResult` outcomes (see
   `app/schemas/character_progression.py`) reporting success/failure,
-  whether state changed, prior/new points, cap status, and idempotent
-  duplicate-unlock detection. Negative/zero/non-integer grants and unknown
-  track ids are rejected without mutation; duplicate ability unlocks are a
-  successful no-op.
+  whether a domain mutation occurred, prior/new points, cap status, and
+  idempotent duplicate-unlock detection. Invalid grants, unknown track ids,
+  and invalid ability ids are rejected without mutation; duplicate ability
+  unlocks are a successful no-op.
 * No database migration was required; progression persists as part of the
   existing authoritative campaign-state JSON document, consistent with
   current persistence architecture.
