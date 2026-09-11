@@ -2319,3 +2319,213 @@ def test_eval_runner_still_runs_a_valid_programmatic_scenario() -> None:
     )
     result = EvalRunner().run(scenario)
     assert result.passed is True
+
+
+# --- Item 1: reject non-finite score values at the schema boundary --------
+
+
+@pytest.mark.parametrize("bad_value", [float("nan"), float("inf"), float("-inf")])
+def test_grader_result_rejects_non_finite_score(bad_value) -> None:
+    with pytest.raises(ValidationError):
+        GraderResult(name="check", passed=True, score=bad_value)
+
+
+@pytest.mark.parametrize("bad_value", [float("nan"), float("inf"), float("-inf")])
+def test_grader_result_rejects_non_finite_max_score(bad_value) -> None:
+    with pytest.raises(ValidationError):
+        GraderResult(name="check", passed=True, max_score=bad_value)
+
+
+@pytest.mark.parametrize("bad_value", [float("nan"), float("inf"), float("-inf")])
+def test_scenario_rejects_non_finite_score(bad_value) -> None:
+    with pytest.raises(ValidationError):
+        Scenario(
+            scenario_id="non-finite-score",
+            description="d",
+            target=ScenarioTarget.DIRECTOR,
+            score=bad_value,
+        )
+
+
+@pytest.mark.parametrize("bad_value", [float("nan"), float("inf"), float("-inf")])
+def test_scenario_result_rejects_non_finite_max_score(bad_value) -> None:
+    with pytest.raises(ValidationError):
+        ScenarioResult(
+            scenario_id="non-finite-max-score",
+            description="d",
+            target=ScenarioTarget.DIRECTOR,
+            max_score=bad_value,
+        )
+
+
+# --- Item 2: reject non-finite report-safe numeric values ------------------
+
+
+def test_report_drops_non_finite_grader_detail_numeric_values() -> None:
+    result = ScenarioResult(
+        scenario_id="report-non-finite-detail",
+        description="d",
+        target=ScenarioTarget.DIRECTOR,
+        passed=False,
+        score=0.0,
+        max_score=1.0,
+        grader_results=[
+            GraderResult(
+                name="check",
+                passed=False,
+                details={
+                    "length": float("nan"),
+                    "actual_length": float("inf"),
+                    "expected": 5,
+                },
+            )
+        ],
+    )
+    summary = summarize_results([result])
+    details = summary["results"][0]["grader_results"][0]["details"]
+    assert "length" not in details
+    assert "actual_length" not in details
+    assert details["expected"] == 5
+    serialized = json.dumps(summary)
+    assert "NaN" not in serialized
+    assert "Infinity" not in serialized
+    # json.dumps with the default allow_nan=True would silently accept the
+    # summary even if a non-finite value had slipped through; prove strict
+    # (standards-compliant) JSON encoding also succeeds.
+    json.dumps(summary, allow_nan=False)
+
+
+def test_report_drops_non_finite_model_metadata_usage_values() -> None:
+    result = ScenarioResult(
+        scenario_id="report-non-finite-usage",
+        description="d",
+        target=ScenarioTarget.DIRECTOR,
+        passed=True,
+        score=1.0,
+        max_score=1.0,
+        model_metadata={
+            "target_agent": "director",
+            "model": "gpt-test",
+            "usage": {
+                "input_tokens": float("nan"),
+                "output_tokens": float("inf"),
+                "total_tokens": 16,
+            },
+        },
+    )
+    summary = summarize_results([result])
+    usage = summary["results"][0]["model_metadata"]["usage"]
+    assert "input_tokens" not in usage
+    assert "output_tokens" not in usage
+    assert usage["total_tokens"] == 16
+    serialized = json.dumps(summary)
+    assert "NaN" not in serialized
+    assert "Infinity" not in serialized
+    json.dumps(summary, allow_nan=False)
+
+
+def test_summarize_results_output_is_strict_json_serializable() -> None:
+    results = run_scenarios(load_scenarios())
+    summary = summarize_results(results)
+    # allow_nan=False raises on any bare NaN/Infinity/-Infinity token,
+    # ensuring the report is valid standards-compliant JSON, not merely
+    # something Python's lenient default json.dumps() would accept.
+    json.dumps(summary, allow_nan=False)
+
+
+# --- Item 3: shared scenario contract validated on the direct live path ---
+
+
+def test_run_live_scenario_rejects_malformed_programmatic_director_input(monkeypatch) -> None:
+    """A malformed programmatic Scenario passed directly to
+    _run_live_scenario() must be rejected before any agent is invoked."""
+
+    def fail_if_called(*args, **kwargs):
+        raise AssertionError("agent must not be called for a malformed scenario")
+
+    monkeypatch.setattr("evals.runner.settings.AI_ENABLED", True)
+    monkeypatch.setattr("evals.runner.settings.OPENAI_API_KEY", "present")
+    monkeypatch.setattr("app.agents.director.DirectorAgent.propose", fail_if_called)
+    scenario = Scenario(
+        scenario_id="live-malformed-director-input",
+        description="Missing required player_action.",
+        target=ScenarioTarget.DIRECTOR,
+        authoritative_input={
+            "current_player_room_id": "eval_foyer",
+            "clock_tick": 0,
+            "facts": [],
+            "npcs": [],
+        },
+    )
+    with pytest.raises(ValidationError):
+        asyncio.run(_run_live_scenario(scenario))
+
+
+def test_run_live_scenario_rejects_malformed_programmatic_expectation(monkeypatch) -> None:
+    def fail_if_called(*args, **kwargs):
+        raise AssertionError("agent must not be called for a malformed scenario")
+
+    monkeypatch.setattr("evals.runner.settings.AI_ENABLED", True)
+    monkeypatch.setattr("evals.runner.settings.OPENAI_API_KEY", "present")
+    monkeypatch.setattr("app.agents.director.DirectorAgent.propose", fail_if_called)
+    scenario = Scenario(
+        scenario_id="live-malformed-expectation",
+        description="require_none must be a bool.",
+        target=ScenarioTarget.DIRECTOR,
+        authoritative_input=_DIRECTOR_FIXTURE,
+        deterministic_expectations={"require_none": "false"},
+    )
+    with pytest.raises(ValueError, match="require_none must be a bool"):
+        asyncio.run(_run_live_scenario(scenario))
+
+
+def test_run_live_scenario_rejects_narrator_ignored_field(monkeypatch) -> None:
+    def fail_if_called(*args, **kwargs):
+        raise AssertionError("agent must not be called for a malformed scenario")
+
+    monkeypatch.setattr("evals.runner.settings.AI_ENABLED", True)
+    monkeypatch.setattr("evals.runner.settings.OPENAI_API_KEY", "present")
+    monkeypatch.setattr("app.agents.narrator.NarratorAgent.generate", fail_if_called)
+    scenario = Scenario(
+        scenario_id="live-narrator-ignored-field",
+        description="Typo'd nested field must be rejected before any provider call.",
+        target=ScenarioTarget.NARRATOR,
+        authoritative_input={
+            "player_message": "look",
+            "scene_context": {
+                "current_room": {"id": "eval_foyer", "name": "Eval Foyer", "description": "d"},
+                "nearby_npc": [],
+            },
+        },
+    )
+    with pytest.raises(ValueError, match="silently ignored"):
+        asyncio.run(_run_live_scenario(scenario))
+
+
+def test_run_live_scenario_still_runs_valid_programmatic_director_scenario(monkeypatch) -> None:
+    """A well-formed programmatic scenario must still reach the (mocked)
+    agent -- the new contract validation must not reject valid input."""
+
+    class FakeProposal:
+        def model_dump(self):
+            return {"decision": "none"}
+
+    class FakeResult:
+        proposal = FakeProposal()
+        usage = None
+
+    class FakeDirector:
+        async def propose(self, *, director_input, model=None):
+            return FakeResult()
+
+    monkeypatch.setattr("evals.runner.settings.AI_ENABLED", True)
+    monkeypatch.setattr("evals.runner.settings.OPENAI_API_KEY", "present")
+    monkeypatch.setattr("evals.runner.DirectorAgent", FakeDirector)
+    scenario = Scenario(
+        scenario_id="live-valid-programmatic-director",
+        description="A valid programmatic scenario must still run.",
+        target=ScenarioTarget.DIRECTOR,
+        authoritative_input=_DIRECTOR_FIXTURE,
+    )
+    output, _ = asyncio.run(_run_live_scenario(scenario))
+    assert output == {"decision": "none"}

@@ -181,6 +181,15 @@ def _require_live_credentials() -> None:
 
 async def _run_live_scenario(scenario: Scenario) -> tuple[Any, dict[str, Any]]:
     _require_live_credentials()
+    # `Scenario` is also the public PROGRAMMATIC contract, and
+    # `_run_live_scenario()` can be invoked directly (not only via
+    # `load_scenarios()`/`EvalRunner.run()`). Validate the same shared
+    # contract -- target-specific authoritative-input validation,
+    # deterministic-expectation validation, and Narrator ignored-field
+    # detection -- before constructing DirectorInput/NarratorAgentInput or
+    # invoking an agent, so a malformed programmatic live scenario is
+    # rejected before ever reaching a provider/agent call.
+    validate_scenario_contract(scenario)
 
     if scenario.target == ScenarioTarget.DIRECTOR:
         director_input = DirectorInput.model_validate(scenario.authoritative_input)
@@ -304,7 +313,14 @@ def main() -> int:
         results = run_scenarios(scenarios)
 
     if args.json_output:
-        print(json.dumps(summarize_results(results), sort_keys=True, separators=(",", ":")))
+        print(
+            json.dumps(
+                summarize_results(results),
+                sort_keys=True,
+                separators=(",", ":"),
+                allow_nan=False,
+            )
+        )
     else:
         print(render_report(results))
     return 0 if all(result.passed for result in results) else 1

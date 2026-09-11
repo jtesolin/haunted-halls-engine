@@ -16,8 +16,8 @@ class GraderResult(BaseModel):
 
     name: str = Field(min_length=1)
     passed: bool
-    score: float = 0.0
-    max_score: float = 1.0
+    score: float = Field(default=0.0, allow_inf_nan=False)
+    max_score: float = Field(default=1.0, allow_inf_nan=False)
     details: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -45,8 +45,8 @@ class Scenario(BaseModel):
     actual_output: Any | None = None
     grader_results: list[GraderResult] = Field(default_factory=list)
     passed: bool | None = None
-    score: float | None = None
-    max_score: float | None = None
+    score: float | None = Field(default=None, allow_inf_nan=False)
+    max_score: float | None = Field(default=None, allow_inf_nan=False)
     model_metadata: dict[str, Any] = Field(default_factory=dict)
 
     @property

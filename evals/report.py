@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 from collections.abc import Sequence
 from typing import Any
 
@@ -73,8 +74,16 @@ MAX_SAFE_DETAIL_LIST_ITEMS = 20
 
 
 def _is_safe_scalar(value: Any) -> bool:
-    if value is None or isinstance(value, (bool, int, float)):
+    if value is None or isinstance(value, bool):
         return True
+    if isinstance(value, int):
+        return True
+    if isinstance(value, float):
+        # NaN/Infinity are not standard JSON; Python's json module will
+        # nonetheless silently emit them as bare NaN/Infinity/-Infinity
+        # tokens unless explicitly rejected. A grader-supplied non-finite
+        # diagnostic value must never reach a stable report.
+        return math.isfinite(value)
     if isinstance(value, str):
         return "\n" not in value and len(value) <= _MAX_SAFE_STRING_LENGTH
     return False
@@ -137,6 +146,20 @@ _SAFE_USAGE_KEYS = frozenset(
 )
 
 
+def _is_safe_usage_value(value: Any) -> bool:
+    # bool is a subclass of int; a token count must be a genuine numeric
+    # value (or None), never a bool.
+    if value is None:
+        return True
+    if isinstance(value, bool):
+        return False
+    if isinstance(value, int):
+        return True
+    if isinstance(value, float):
+        return math.isfinite(value)
+    return False
+
+
 def _safe_model_metadata(model_metadata: dict[str, Any]) -> dict[str, Any]:
     safe: dict[str, Any] = {}
 
@@ -156,10 +179,7 @@ def _safe_model_metadata(model_metadata: dict[str, Any]) -> dict[str, Any]:
         safe_usage = {
             key: value
             for key, value in usage.items()
-            # bool is a subclass of int; a token count must be a genuine
-            # numeric value (or None), never a bool.
-            if key in _SAFE_USAGE_KEYS
-            and (value is None or (isinstance(value, (int, float)) and not isinstance(value, bool)))
+            if key in _SAFE_USAGE_KEYS and _is_safe_usage_value(value)
         }
         if safe_usage:
             safe["usage"] = safe_usage
@@ -201,11 +221,13 @@ def summarize_results(results: Sequence[ScenarioResult]) -> dict[str, Any]:
         "results": serialized_results,
     }
     # Belt-and-suspenders: prove the sanitized summary is actually encodable
-    # before returning it, rather than trusting the projections above to
-    # have covered every path. If this ever raises, that is a bug in the
-    # sanitizer (an unbounded/unsafe value escaped it), not something to
-    # paper over by stringifying unknown content.
-    json.dumps(summary)
+    # as STRICT JSON (no bare NaN/Infinity/-Infinity tokens, which Python's
+    # json module would otherwise silently emit since they are not valid
+    # JSON) before returning it, rather than trusting the projections above
+    # to have covered every path. If this ever raises, that is a bug in the
+    # sanitizer (an unbounded/unsafe/non-finite value escaped it), not
+    # something to paper over by stringifying unknown content.
+    json.dumps(summary, allow_nan=False)
     return summary
 
 
