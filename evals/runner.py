@@ -193,6 +193,30 @@ async def _run_live_scenario(scenario: Scenario) -> tuple[Any, dict[str, Any]]:
     raise ValueError(f"Unsupported live scenario target: {scenario.target}")
 
 
+async def _run_live_scenarios(scenarios: Sequence[Scenario]) -> list[ScenarioResult]:
+    """Run an entire selected scenario batch under a single event loop.
+
+    The production model client caches an `AsyncOpenAI` client; calling
+    `asyncio.run()` once per scenario would create and tear down a new event
+    loop per scenario, risking reuse of a cached async client bound to a now
+    closed loop. Owning the whole batch inside one `asyncio.run()` call
+    avoids that hazard without changing production model-client lifecycle
+    behavior.
+    """
+
+    results: list[ScenarioResult] = []
+    for scenario in scenarios:
+        actual_output, model_metadata = await _run_live_scenario(scenario)
+        results.append(
+            EvalRunner().run(
+                scenario,
+                actual_output=actual_output,
+                model_metadata=model_metadata,
+            )
+        )
+    return results
+
+
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run Haunted Halls agent evaluations.")
     parser.add_argument("--live", action="store_true", help="Explicitly call configured agents.")
@@ -216,16 +240,7 @@ def main() -> int:
 
     if args.live:
         try:
-            results = []
-            for scenario in scenarios:
-                actual_output, model_metadata = asyncio.run(_run_live_scenario(scenario))
-                results.append(
-                    EvalRunner().run(
-                        scenario,
-                        actual_output=actual_output,
-                        model_metadata=model_metadata,
-                    )
-                )
+            results = asyncio.run(_run_live_scenarios(scenarios))
         except RuntimeError as exc:
             # Both the credential guard and LiveEvalError are RuntimeError
             # subclasses that already carry only a safe, sanitized message;

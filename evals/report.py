@@ -7,14 +7,19 @@ from evals.schemas import ScenarioResult
 
 # Defensive guard: keys that must never carry raw provider/model response text
 # into a serialized report, even if a grader accidentally attaches one.
-# `actual_output` is excluded structurally below; these are extra nested-key
-# names that historically carried raw reply text in grader details, plus the
-# same response-bearing keys `_extract_reply_text` understands
-# (`reply_text`, `text`, `output`, `reply`), since `GraderResult.details` is
-# intentionally generic and a grader could attach any of them.
+# `actual_output` and `fixture_output` are excluded structurally below via
+# `exclude=` on `model_dump`; these are extra nested-key names that
+# historically carried raw reply text in grader details, plus the same
+# response-bearing keys `_extract_reply_text` understands (`reply_text`,
+# `text`, `output`, `reply`), since `GraderResult.details` is intentionally
+# generic and a grader could attach any of them. `fixture_output` and
+# `actual_output` are repeated here as well because `details` is a bare
+# `dict[str, Any]` and nothing prevents a grader from copying either field
+# into it under its own name.
 _RAW_OUTPUT_KEYS = frozenset(
     {
         "actual_output",
+        "fixture_output",
         "actual",
         "raw_response",
         "raw_output",
@@ -51,7 +56,9 @@ def summarize_results(results: Sequence[ScenarioResult]) -> dict[str, Any]:
         "pass_rate": 0.0 if total == 0 else passed / total,
         "score": 0.0 if max_total == 0 else score_total / max_total,
         "results": [
-            _strip_raw_output_fields(result.model_dump(mode="json", exclude={"actual_output"}))
+            _strip_raw_output_fields(
+                result.model_dump(mode="json", exclude={"actual_output", "fixture_output"})
+            )
             for result in results
         ],
     }

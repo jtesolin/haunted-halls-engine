@@ -31,6 +31,6 @@
       "error_code": null
     }
   },
-  "deterministic_expectations": {"require_none": true},
+  "deterministic_expectations": {},
   "fixture_output": {"decision": "none"}
 }

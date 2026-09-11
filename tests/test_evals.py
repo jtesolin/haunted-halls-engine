@@ -6,27 +6,30 @@ import json
 
 import pytest
 from pydantic import ValidationError
+from sqlalchemy import func, select
 
 from app.agents.narrator import NarratorAgentInput
+from app.db.schema import campaigns, game_events, model_requests, turns
+from app.db.session import get_engine
 from app.schemas.director import DirectorInput
 
 from evals.graders import grade_scenario
 from evals.report import summarize_results
 from evals.runner import EvalRunner, run_scenarios
-from evals.runner import LiveEvalError, _run_live_scenario
+from evals.runner import LiveEvalError, _run_live_scenario, _run_live_scenarios
 from evals.scenarios import filter_scenarios, load_scenarios
 from evals.schemas import GraderResult, Scenario, ScenarioResult, ScenarioTarget
 
 _DIRECTOR_FIXTURE = {
-    "current_player_room_id": "entry_hall",
+    "current_player_room_id": "eval_foyer",
     "clock_tick": 0,
     "facts": [],
     "npcs": [
         {
-            "npc_id": "old_caretaker",
-            "location_id": "entry_hall",
+            "npc_id": "eval_npc_a",
+            "location_id": "eval_foyer",
             "status": "active",
-            "one_hop_destination_room_ids": ["grand_corridor"],
+            "one_hop_destination_room_ids": ["eval_gallery"],
         }
     ],
     "player_action": {
@@ -244,21 +247,21 @@ def test_move_npc_destination_legal_for_other_npc_is_still_rejected() -> None:
     """A destination legal for NPC B must not make it legal for NPC A."""
 
     authoritative_input = {
-        "current_player_room_id": "entry_hall",
+        "current_player_room_id": "eval_foyer",
         "clock_tick": 0,
         "facts": [],
         "npcs": [
             {
                 "npc_id": "npc_a",
-                "location_id": "entry_hall",
+                "location_id": "eval_foyer",
                 "status": "active",
-                "one_hop_destination_room_ids": ["grand_corridor"],
+                "one_hop_destination_room_ids": ["eval_gallery"],
             },
             {
                 "npc_id": "npc_b",
-                "location_id": "library",
+                "location_id": "eval_vault",
                 "status": "active",
-                "one_hop_destination_room_ids": ["cellar"],
+                "one_hop_destination_room_ids": ["eval_archive"],
             },
         ],
         "player_action": {
@@ -277,7 +280,7 @@ def test_move_npc_destination_legal_for_other_npc_is_still_rejected() -> None:
         authoritative_input=authoritative_input,
         actual_output={
             "decision": "act",
-            "world_action": {"action": "move_npc", "npc_id": "npc_a", "destination_room_id": "cellar"},
+            "world_action": {"action": "move_npc", "npc_id": "npc_a", "destination_room_id": "eval_archive"},
         },
     )
     results = grade_scenario(scenario)
@@ -287,15 +290,15 @@ def test_move_npc_destination_legal_for_other_npc_is_still_rejected() -> None:
 
 def test_move_npc_destination_legal_for_own_npc_passes() -> None:
     authoritative_input = {
-        "current_player_room_id": "entry_hall",
+        "current_player_room_id": "eval_foyer",
         "clock_tick": 0,
         "facts": [],
         "npcs": [
             {
                 "npc_id": "npc_a",
-                "location_id": "entry_hall",
+                "location_id": "eval_foyer",
                 "status": "active",
-                "one_hop_destination_room_ids": ["grand_corridor"],
+                "one_hop_destination_room_ids": ["eval_gallery"],
             }
         ],
         "player_action": {
@@ -315,7 +318,7 @@ def test_move_npc_destination_legal_for_own_npc_passes() -> None:
             "world_action": {
                 "action": "move_npc",
                 "npc_id": "npc_a",
-                "destination_room_id": "grand_corridor",
+                "destination_room_id": "eval_gallery",
             },
         },
     )
@@ -336,7 +339,7 @@ def test_move_npc_rejects_unknown_npc_id() -> None:
             "world_action": {
                 "action": "move_npc",
                 "npc_id": "ghost_not_in_context",
-                "destination_room_id": "grand_corridor",
+                "destination_room_id": "eval_gallery",
             },
         },
     )
@@ -408,6 +411,32 @@ def test_safe_decision_none_passes_illegal_move_and_unsupported_action_scenarios
     ):
         result = EvalRunner().run(scenarios[scenario_id])
         assert result.passed is True
+
+
+def test_illegal_move_scenario_no_longer_requires_blanket_no_op() -> None:
+    """The illegal-move scenario only tests that a destination legal for
+    NPC B is not treated as legal for NPC A; a live Director choosing a
+    DIFFERENT valid bounded proposal (here, NPC B's own legal one-hop move)
+    must not fail solely because it isn't decision=none."""
+
+    scenarios = {s.scenario_id: s for s in load_scenarios()}
+    scenario = scenarios["director-illegal-non-one-hop-move"].model_copy(deep=True)
+    assert "require_none" not in scenario.deterministic_expectations
+
+    npc_b_context = next(
+        npc for npc in scenario.authoritative_input["npcs"] if npc["npc_id"] == "eval_npc_b"
+    )
+    legal_destination = npc_b_context["one_hop_destination_room_ids"][0]
+    scenario.actual_output = {
+        "decision": "act",
+        "world_action": {
+            "action": "move_npc",
+            "npc_id": "eval_npc_b",
+            "destination_room_id": legal_destination,
+        },
+    }
+    results = grade_scenario(scenario)
+    assert all(result.passed for result in results)
 
 
 def test_explicit_none_actual_output_does_not_fall_back_to_fixture_output() -> None:
@@ -570,7 +599,7 @@ def test_mocked_live_director_failure_is_sanitized(monkeypatch) -> None:
 _NARRATOR_FIXTURE = {
     "player_message": "look",
     "scene_context": {
-        "current_room": {"id": "entry_hall", "name": "Entry Hall", "description": "A dusty hall."},
+        "current_room": {"id": "eval_foyer", "name": "Eval Foyer", "description": "A synthetic test room."},
         "nearby_npcs": [],
     },
 }
@@ -682,6 +711,72 @@ def test_mocked_live_narrator_failure_is_sanitized(monkeypatch) -> None:
     assert secret_marker not in str(exc_info.value)
 
 
+def test_mocked_live_batch_runs_multiple_scenarios_in_one_event_loop(monkeypatch) -> None:
+    """The production model client caches an AsyncOpenAI client; running one
+    asyncio.run() per scenario would create/tear down a new event loop per
+    scenario and risk reusing a cached async client bound to a closed loop.
+    _run_live_scenarios() must own the whole batch inside a single event
+    loop, invoked via exactly one asyncio.run() call by the caller."""
+
+    loop_ids: list[int] = []
+
+    class FakeDirectorProposal:
+        def model_dump(self):
+            return {"decision": "none"}
+
+    class FakeDirectorResult:
+        proposal = FakeDirectorProposal()
+        usage = None
+
+    class FakeDirector:
+        async def propose(self, *, director_input, model=None):
+            loop_ids.append(id(asyncio.get_running_loop()))
+            return FakeDirectorResult()
+
+    class FakeNarratorOutput:
+        reply_text = "grounded"
+        input_tokens = None
+        cached_input_tokens = None
+        cache_write_input_tokens = None
+        output_tokens = None
+        reasoning_output_tokens = None
+        total_tokens = None
+
+        def model_dump(self):
+            return {"reply_text": self.reply_text}
+
+    class FakeNarrator:
+        async def generate(self, *, payload, model=None):
+            loop_ids.append(id(asyncio.get_running_loop()))
+            return FakeNarratorOutput()
+
+    monkeypatch.setattr("evals.runner.settings.AI_ENABLED", True)
+    monkeypatch.setattr("evals.runner.settings.OPENAI_API_KEY", "present")
+    monkeypatch.setattr("evals.runner.DirectorAgent", FakeDirector)
+    monkeypatch.setattr("evals.runner.NarratorAgent", FakeNarrator)
+
+    director_scenario = Scenario(
+        scenario_id="live-batch-director",
+        description="First scenario in the batch.",
+        target=ScenarioTarget.DIRECTOR,
+        authoritative_input=_DIRECTOR_FIXTURE,
+    )
+    narrator_scenario = Scenario(
+        scenario_id="live-batch-narrator",
+        description="Second scenario in the batch.",
+        target=ScenarioTarget.NARRATOR,
+        authoritative_input=_NARRATOR_FIXTURE,
+    )
+
+    results = asyncio.run(_run_live_scenarios([director_scenario, narrator_scenario]))
+
+    assert len(results) == 2
+    assert {result.scenario_id for result in results} == {"live-batch-director", "live-batch-narrator"}
+    # Both scenario calls ran under the exact same running event loop.
+    assert len(loop_ids) == 2
+    assert loop_ids[0] == loop_ids[1]
+
+
 def test_report_excludes_raw_actual_output_field() -> None:
     scenario = Scenario(
         scenario_id="report-actual-output-exclusion",
@@ -690,6 +785,25 @@ def test_report_excludes_raw_actual_output_field() -> None:
     )
     marker = "UNIQUE_RAW_OUTPUT_MARKER_7Q1"
     result = EvalRunner().run(scenario, actual_output={"reply_text": f"Contains {marker}."})
+    summary = summarize_results([result])
+    serialized = json.dumps(summary)
+    assert marker not in serialized
+
+
+def test_report_excludes_raw_fixture_output_field() -> None:
+    """fixture_output is arbitrary scenario output and may itself be a bare
+    raw response string, which recursive key-stripping alone cannot sanitize
+    since there is no nested key to strip. It must be excluded structurally,
+    just like actual_output."""
+
+    marker = "UNIQUE_RAW_FIXTURE_OUTPUT_MARKER_2X8"
+    scenario = Scenario(
+        scenario_id="report-fixture-output-exclusion",
+        description="Top-level fixture_output must not be serialized.",
+        target=ScenarioTarget.NARRATOR,
+        fixture_output=marker,
+    )
+    result = EvalRunner().run(scenario, actual_output={"reply_text": "safe narration"})
     summary = summarize_results([result])
     serialized = json.dumps(summary)
     assert marker not in serialized
@@ -833,6 +947,67 @@ def test_offline_results_have_empty_model_metadata() -> None:
     scenario = load_scenarios()[0]
     result = EvalRunner().run(scenario)
     assert result.model_metadata == {}
+
+
+def _persistence_row_counts() -> dict[str, int]:
+    engine = get_engine()
+    with engine.connect() as connection:
+        return {
+            "campaigns": connection.execute(select(func.count()).select_from(campaigns)).scalar_one(),
+            "turns": connection.execute(select(func.count()).select_from(turns)).scalar_one(),
+            "game_events": connection.execute(select(func.count()).select_from(game_events)).scalar_one(),
+            "model_requests": connection.execute(
+                select(func.count()).select_from(model_requests)
+            ).scalar_one(),
+        }
+
+
+def test_offline_eval_execution_does_not_mutate_campaign_or_telemetry_persistence() -> None:
+    """Issue #55 requires proof that eval execution does not mutate campaign
+    or database state. Running the whole checked-in offline corpus must not
+    create/update any campaign, turn, game-event, or model-request row."""
+
+    before = _persistence_row_counts()
+    results = run_scenarios(load_scenarios())
+    assert len(results) == 8
+    after = _persistence_row_counts()
+    assert after == before
+
+
+def test_mocked_live_eval_execution_does_not_mutate_campaign_or_telemetry_persistence(
+    monkeypatch,
+) -> None:
+    """The live harness invokes the real Director/Narrator agent
+    abstractions; even a mocked live run must not touch persistence."""
+
+    class FakeProposal:
+        def model_dump(self):
+            return {"decision": "none"}
+
+    class FakeResult:
+        proposal = FakeProposal()
+        usage = None
+
+    class FakeDirector:
+        async def propose(self, *, director_input, model=None):
+            return FakeResult()
+
+    monkeypatch.setattr("evals.runner.settings.AI_ENABLED", True)
+    monkeypatch.setattr("evals.runner.settings.OPENAI_API_KEY", "present")
+    monkeypatch.setattr("evals.runner.DirectorAgent", FakeDirector)
+
+    scenario = Scenario(
+        scenario_id="live-no-persistence",
+        description="Mocked live Director run must not touch persistence.",
+        target=ScenarioTarget.DIRECTOR,
+        authoritative_input=_DIRECTOR_FIXTURE,
+    )
+
+    before = _persistence_row_counts()
+    output, model_metadata = asyncio.run(_run_live_scenario(scenario))
+    EvalRunner().run(scenario, actual_output=output, model_metadata=model_metadata)
+    after = _persistence_row_counts()
+    assert after == before
 
 
 def test_readme_documented_scenarios_and_tags_exist_in_corpus() -> None:
