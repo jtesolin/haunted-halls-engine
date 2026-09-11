@@ -17,8 +17,8 @@ from app.schemas.abilities import (
 )
 from app.schemas.character_progression import ProgressionTrackId
 
-MIN_CHECK_DIFFICULTY = 0
-MAX_CHECK_DIFFICULTY = 10
+MIN_CHECK_DIFFICULTY = MIN_TRACK_POINTS
+MAX_CHECK_DIFFICULTY = MAX_TRACK_POINTS
 
 
 @dataclass(frozen=True)
@@ -75,6 +75,11 @@ def validate_ability_definitions(
             raise ValueError(f"Ability definition at index {index} is not an AbilityDefinition.")
         if not isinstance(definition.ability_id, str) or not definition.ability_id:
             raise ValueError(f"Ability definition at index {index} has an invalid ability_id.")
+        if definition.ability_id.strip() != definition.ability_id:
+            raise ValueError(
+                f"Ability definition at index {index} has an ability_id with leading or "
+                f"trailing whitespace: {definition.ability_id!r}."
+            )
         if definition.ability_id in seen:
             raise ValueError(f"Duplicate ability_id '{definition.ability_id}' in ability definitions.")
         if not isinstance(definition.track, ProgressionTrackId):
@@ -189,7 +194,10 @@ def resolve_ability_check(
             difficulty=None,
             margin=None,
             error_code="invalid_difficulty",
-            reason="Difficulty must be an integer between 0 and 10.",
+            reason=(
+                f"Difficulty must be an integer between {MIN_CHECK_DIFFICULTY} and "
+                f"{MAX_CHECK_DIFFICULTY}."
+            ),
         )
     if difficulty < MIN_CHECK_DIFFICULTY or difficulty > MAX_CHECK_DIFFICULTY:
         return AbilityCheckResult(

@@ -9,6 +9,7 @@ from app.game.abilities import (
     AbilityDefinition,
     CANONICAL_ABILITY_DEFINITIONS,
     MAX_CHECK_DIFFICULTY,
+    MIN_CHECK_DIFFICULTY,
     VALIDATED_ABILITY_DEFINITIONS,
     evaluate_ability_availability,
     resolve_ability_check,
@@ -450,6 +451,43 @@ def test_ability_definition_validation_rejects_duplicates_and_invalid_values() -
         assert "must be an integer" in str(exc)
     else:
         raise AssertionError("bool minimum should be rejected")
+
+
+def test_check_difficulty_bounds_derive_from_progression_bounds() -> None:
+    assert MIN_CHECK_DIFFICULTY == MIN_TRACK_POINTS
+    assert MAX_CHECK_DIFFICULTY == MAX_TRACK_POINTS
+
+
+def test_ability_definition_validation_rejects_whitespace_ability_ids() -> None:
+    canonical = CANONICAL_ABILITY_DEFINITIONS[0]
+
+    for bad_ability_id in ("", "   ", " keen_eye", "keen_eye ", " keen_eye "):
+        tampered = [
+            canonical.__class__(
+                ability_id=bad_ability_id,
+                display_name=canonical.display_name,
+                short_description=canonical.short_description,
+                track=canonical.track,
+                minimum_points=canonical.minimum_points,
+            )
+        ]
+        try:
+            validate_ability_definitions(tampered)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(
+                f"ability_id {bad_ability_id!r} should be rejected by validation"
+            )
+
+    # Canonical four IDs must still validate unchanged.
+    validated = validate_ability_definitions(CANONICAL_ABILITY_DEFINITIONS)
+    assert tuple(definition.ability_id for definition in validated) == (
+        "keen_eye",
+        "steady_nerves",
+        "read_the_room",
+        "occult_insight",
+    )
 
 
 def test_ability_availability_is_deterministic_and_read_only() -> None:
