@@ -1,12 +1,35 @@
 {
   "scenario_id": "director-illegal-non-one-hop-move",
-  "description": "A movement proposal outside the bounded one-hop destinations fails grading.",
+  "description": "A destination that is legal for a different NPC must not be treated as legal for the proposed NPC.",
   "target": "director",
   "tags": ["director", "movement", "failure"],
   "authoritative_input": {
     "current_player_room_id": "entry_hall",
-    "legal_destinations": ["grand_corridor"],
-    "npcs": {"old_caretaker": {"location_id": "entry_hall"}}
+    "clock_tick": 5,
+    "facts": [],
+    "npcs": [
+      {
+        "npc_id": "old_caretaker",
+        "location_id": "entry_hall",
+        "status": "active",
+        "one_hop_destination_room_ids": ["grand_corridor"]
+      },
+      {
+        "npc_id": "library_ghost",
+        "location_id": "library",
+        "status": "active",
+        "one_hop_destination_room_ids": ["cellar"]
+      }
+    ],
+    "player_action": {
+      "action": "wait",
+      "target": null,
+      "parse_status": "ok",
+      "succeeded": true,
+      "result_summary": "The player waits quietly.",
+      "applied_tools": [],
+      "error_code": null
+    }
   },
   "deterministic_expectations": {"require_failure": true},
   "fixture_output": {

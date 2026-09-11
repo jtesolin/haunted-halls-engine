@@ -1,12 +1,29 @@
 {
   "scenario_id": "director-legal-adjacent-move",
-  "description": "An active NPC may move to one supplied legal destination.",
+  "description": "An active NPC may move to one of its own bounded one-hop destinations.",
   "target": "director",
   "tags": ["director", "movement", "bounded"],
   "authoritative_input": {
     "current_player_room_id": "entry_hall",
-    "legal_destinations": ["grand_corridor"],
-    "npcs": {"old_caretaker": {"location_id": "entry_hall"}}
+    "clock_tick": 3,
+    "facts": ["The caretaker has been idle for several turns."],
+    "npcs": [
+      {
+        "npc_id": "old_caretaker",
+        "location_id": "entry_hall",
+        "status": "active",
+        "one_hop_destination_room_ids": ["grand_corridor"]
+      }
+    ],
+    "player_action": {
+      "action": "wait",
+      "target": null,
+      "parse_status": "ok",
+      "succeeded": true,
+      "result_summary": "The player waits quietly.",
+      "applied_tools": [],
+      "error_code": null
+    }
   },
   "fixture_output": {
     "decision": "act",

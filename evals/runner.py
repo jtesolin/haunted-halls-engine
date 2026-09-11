@@ -9,13 +9,14 @@ from typing import Any
 
 from app.agents.director import DirectorAgent
 from app.agents.narrator import NarratorAgent, NarratorAgentInput
+from app.ai.model_client import ModelUsage
 from app.core.config import settings
-from app.schemas.chat import NarratorSceneContext
+from app.guardrails.model_policy import ModelPolicy
 from app.schemas.director import DirectorInput
 from evals.graders import grade_scenario
 from evals.report import render_report, summarize_results
 from evals.scenarios import filter_scenarios, load_scenarios
-from evals.schemas import GraderResult, Scenario, ScenarioResult
+from evals.schemas import GraderResult, Scenario, ScenarioResult, ScenarioTarget
 
 
 class EvalRunner:
@@ -24,12 +25,20 @@ class EvalRunner:
     def __init__(self, *, evaluator: Callable[[Scenario], list[GraderResult]] | None = None) -> None:
         self.evaluator = evaluator or grade_scenario
 
-    def run(self, scenario: Scenario, *, actual_output: Any | None = None) -> ScenarioResult:
+    def run(
+        self,
+        scenario: Scenario,
+        *,
+        actual_output: Any | None = None,
+        model_metadata: dict[str, Any] | None = None,
+    ) -> ScenarioResult:
         scenario_copy = scenario.model_copy(deep=True)
         if actual_output is not None:
             scenario_copy.actual_output = actual_output
         elif scenario_copy.actual_output is None:
             scenario_copy.actual_output = scenario_copy.fixture_output
+        if model_metadata is not None:
+            scenario_copy.model_metadata = model_metadata
         results = self.evaluator(scenario_copy)
         scenario_copy.grader_results = results
         if scenario_copy.deterministic_expectations.get("require_failure"):
@@ -49,8 +58,9 @@ class EvalRunner:
         scenario: Scenario,
         *,
         actual_output: Any | None = None,
+        model_metadata: dict[str, Any] | None = None,
     ) -> ScenarioResult:
-        return self.run(scenario, actual_output=actual_output)
+        return self.run(scenario, actual_output=actual_output, model_metadata=model_metadata)
 
 
 def run_scenario(
@@ -97,30 +107,65 @@ def _aggregate_max_score(results: Sequence[GraderResult]) -> float:
     return sum(result.max_score for result in results)
 
 
-async def _run_live_scenario(scenario: Scenario) -> Any:
-    if not settings.AI_ENABLED or not settings.OPENAI_API_KEY:
+def _usage_metadata(usage: ModelUsage | None) -> dict[str, Any] | None:
+    """Reduce provider usage metadata to token counters only (no raw content)."""
+
+    if usage is None:
+        return None
+    return {
+        "input_tokens": usage.input_tokens,
+        "cached_input_tokens": usage.cached_input_tokens,
+        "cache_write_input_tokens": usage.cache_write_input_tokens,
+        "output_tokens": usage.output_tokens,
+        "reasoning_output_tokens": usage.reasoning_output_tokens,
+        "total_tokens": usage.total_tokens,
+    }
+
+
+def _require_live_credentials() -> None:
+    # A missing, empty, OR whitespace-only key must fail closed; credentials
+    # alone (even if present) never activate live execution without --live,
+    # which is enforced by callers only invoking this from the --live path.
+    api_key = (settings.OPENAI_API_KEY or "").strip()
+    if not settings.AI_ENABLED or not api_key:
         raise RuntimeError(
-            "Live evals require AI_ENABLED=true and OPENAI_API_KEY; "
-            "offline mode is the default."
+            "Live evals require AI_ENABLED=true and a non-empty, non-whitespace "
+            "OPENAI_API_KEY; offline mode is the default."
         )
-    if scenario.target.value == "director":
-        return (
-            await DirectorAgent().propose(
-                director_input=DirectorInput.model_validate(scenario.authoritative_input)
+
+
+async def _run_live_scenario(scenario: Scenario) -> tuple[Any, dict[str, Any]]:
+    _require_live_credentials()
+
+    if scenario.target == ScenarioTarget.DIRECTOR:
+        director_input = DirectorInput.model_validate(scenario.authoritative_input)
+        selected_model = ModelPolicy.director_model()
+        result = await DirectorAgent().propose(director_input=director_input, model=selected_model)
+        metadata: dict[str, Any] = {"target_agent": "director", "model": selected_model}
+        usage = _usage_metadata(getattr(result, "usage", None))
+        if usage is not None:
+            metadata["usage"] = usage
+        return result.proposal.model_dump(), metadata
+
+    if scenario.target == ScenarioTarget.NARRATOR:
+        narrator_input = NarratorAgentInput.model_validate(scenario.authoritative_input)
+        selected_model = ModelPolicy.narrator_model()
+        output = await NarratorAgent().generate(payload=narrator_input, model=selected_model)
+        metadata = {"target_agent": "narrator", "model": selected_model}
+        usage = _usage_metadata(
+            ModelUsage(
+                input_tokens=output.input_tokens,
+                cached_input_tokens=output.cached_input_tokens,
+                cache_write_input_tokens=output.cache_write_input_tokens,
+                output_tokens=output.output_tokens,
+                reasoning_output_tokens=output.reasoning_output_tokens,
+                total_tokens=output.total_tokens,
             )
-        ).proposal.model_dump()
-    if scenario.target.value == "narrator":
-        payload = scenario.authoritative_input
-        return (
-            await NarratorAgent().generate(
-                payload=NarratorAgentInput(
-                    player_message=str(payload.get("player_message", "")),
-                    scene_context=NarratorSceneContext.model_validate(
-                        payload.get("scene_context", {})
-                    ),
-                )
-            )
-        ).model_dump()
+        )
+        if usage is not None:
+            metadata["usage"] = usage
+        return output.model_dump(), metadata
+
     raise ValueError(f"Unsupported live scenario target: {scenario.target}")
 
 
@@ -147,13 +192,16 @@ def main() -> int:
 
     if args.live:
         try:
-            results = [
-                EvalRunner().run(
-                    scenario,
-                    actual_output=asyncio.run(_run_live_scenario(scenario)),
+            results = []
+            for scenario in scenarios:
+                actual_output, model_metadata = asyncio.run(_run_live_scenario(scenario))
+                results.append(
+                    EvalRunner().run(
+                        scenario,
+                        actual_output=actual_output,
+                        model_metadata=model_metadata,
+                    )
                 )
-                for scenario in scenarios
-            ]
         except RuntimeError as exc:
             print(f"live eval unavailable: {exc}", file=sys.stderr)
             return 2

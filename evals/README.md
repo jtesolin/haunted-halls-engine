@@ -27,7 +27,25 @@ scenario = Scenario(
     scenario_id="director-baseline-noop",
     description="No action when nothing needs changing.",
     target=ScenarioTarget.DIRECTOR,
-    authoritative_input={"current_player_room_id": "entry_hall", "legal_destinations": ["grand_corridor"]},
+    authoritative_input={
+        "current_player_room_id": "entry_hall",
+        "clock_tick": 0,
+        "facts": [],
+        "npcs": [
+            {
+                "npc_id": "old_caretaker",
+                "location_id": "entry_hall",
+                "status": "active",
+                "one_hop_destination_room_ids": ["grand_corridor"],
+            }
+        ],
+        "player_action": {
+            "action": "observe",
+            "parse_status": "ok",
+            "succeeded": True,
+            "result_summary": "The player looks around.",
+        },
+    },
     deterministic_expectations={"require_none": True},
     actual_output={"decision": "none"},
 )
@@ -44,12 +62,23 @@ authoritative input, deterministic expectations, and an optional fixture
 output. Duplicate IDs are rejected when the corpus is loaded. Do not add
 secrets, real users, production campaign IDs, or conversation dumps.
 
+Director `authoritative_input` must validate as the real, production
+`app.schemas.director.DirectorInput` contract (`current_player_room_id`,
+`clock_tick`, `facts`, `npcs: list[DirectorNPCContext]`, and
+`player_action: DirectorPlayerActionContext`). Narrator `authoritative_input`
+must validate as the real, production
+`app.agents.narrator.NarratorAgentInput` contract (`player_message`,
+`scene_context`, and optionally `recent_turns`, `campaign_summary`,
+`relevant_memories`, `parsed_action`, `tool_result`). The harness does not
+define a second, competing input schema; tests assert every checked-in
+scenario validates against these production contracts.
+
 Run the corpus offline:
 
 ```sh
 python -m evals.runner
-python -m evals.runner --agent director --tag grounding --json
-python -m evals.runner --scenario-id narrator-observable-item
+python -m evals.runner --agent director --tag movement --json
+python -m evals.runner --scenario-id narrator-observable-item-state
 ```
 
 The JSON report is stable (`sort_keys=True`, compact separators) and excludes
@@ -76,12 +105,20 @@ Provider-backed execution is opt-in only:
 python -m evals.runner --live --scenario-id director-legal-adjacent-move
 ```
 
-Live mode requires both `AI_ENABLED=true` and `OPENAI_API_KEY`. Missing
-configuration fails closed with a developer-facing error. It reuses the
-existing `DirectorAgent` and `NarratorAgent` contracts and performs no
-gameplay or persistence mutation. Credentials alone never enable live mode.
-Automated tests must mock provider calls; normal CI never runs live mode and
-must not make network calls.
+Live mode requires both `AI_ENABLED=true` and a non-empty, non-whitespace
+`OPENAI_API_KEY`. Missing, empty, or whitespace-only configuration fails
+closed with a developer-facing error. It reuses the existing `DirectorAgent`
+and `NarratorAgent` contracts and the same `ModelPolicy` the production agents
+use (`ModelPolicy.director_model()` / `ModelPolicy.narrator_model()`), and
+performs no gameplay or persistence mutation. Credentials alone never enable
+live mode; `--live` is always required explicitly. Automated tests must mock
+provider calls; normal CI never runs live mode and must not make network
+calls.
+
+Live results populate `ScenarioResult.model_metadata` with the target agent,
+the selected model, and available provider token/usage counts (never raw
+provider response content). This metadata is surfaced in both the JSON report
+and the human-readable report. Offline results leave `model_metadata` empty.
 
 ## Extending the harness
 

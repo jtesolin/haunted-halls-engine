@@ -8,10 +8,28 @@
     "clock_tick": 0,
     "facts": [],
     "npcs": [
-      {"npc_id": "old_caretaker", "location_id": "entry_hall", "status": "active"},
-      {"npc_id": "library_ghost", "location_id": "library", "status": "active"}
+      {
+        "npc_id": "old_caretaker",
+        "location_id": "entry_hall",
+        "status": "active",
+        "one_hop_destination_room_ids": ["grand_corridor"]
+      },
+      {
+        "npc_id": "library_ghost",
+        "location_id": "library",
+        "status": "active",
+        "one_hop_destination_room_ids": ["grand_corridor"]
+      }
     ],
-    "legal_destinations": ["grand_corridor", "library"]
+    "player_action": {
+      "action": "observe",
+      "target": null,
+      "parse_status": "ok",
+      "succeeded": true,
+      "result_summary": "The player takes stock of the Entry Hall.",
+      "applied_tools": ["observe_room"],
+      "error_code": null
+    }
   },
   "deterministic_expectations": {"require_none": true},
   "fixture_output": {"decision": "none"}

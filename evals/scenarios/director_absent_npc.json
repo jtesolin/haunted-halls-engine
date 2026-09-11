@@ -1,16 +1,28 @@
 {
   "scenario_id": "director-absent-off-room-npc",
-  "description": "An absent NPC remains represented at its authoritative off-room location.",
+  "description": "An absent NPC remains represented at its authoritative off-room location and does not trigger a proposal.",
   "target": "director",
   "tags": ["director", "context", "absent-npc"],
   "authoritative_input": {
     "current_player_room_id": "grand_corridor",
-    "legal_destinations": ["entry_hall"],
-    "npcs": {
-      "old_caretaker": {
+    "clock_tick": 1,
+    "facts": ["The caretaker left the corridor some time ago."],
+    "npcs": [
+      {
+        "npc_id": "old_caretaker",
         "location_id": "entry_hall",
-        "status": "absent"
+        "status": "absent",
+        "one_hop_destination_room_ids": ["grand_corridor"]
       }
+    ],
+    "player_action": {
+      "action": "observe",
+      "target": null,
+      "parse_status": "ok",
+      "succeeded": true,
+      "result_summary": "The player looks down the empty corridor.",
+      "applied_tools": ["observe_room"],
+      "error_code": null
     }
   },
   "deterministic_expectations": {"require_none": true},

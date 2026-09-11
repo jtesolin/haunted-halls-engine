@@ -965,12 +965,28 @@ PostgreSQL, vector databases, deployment infrastructure, additional agents, and 
 
 ### Phase 8E1 — AI evaluation harness foundation
 
-**Status: In progress**
+**Status: Complete (issue #55)**
 
-* A lightweight provider-free eval harness is being introduced under `evals/` to validate deterministic agent behavior without modifying production gameplay authority.
-* The initial structure supports typed scenario contracts, deterministic Director/Narrator graders, scenario execution, and aggregate reporting.
-* Director validation begins from the existing strict proposal schema and bounded-authority contracts already enforced by the engine.
-* This foundation is intentionally limited to offline, reviewable evaluations and should stay independent from live production provider execution.
+* A provider-free eval harness lives under `evals/` and validates deterministic
+  Director/Narrator agent behavior without modifying production gameplay
+  authority (Director/Narrator agents, Director/WorldAction schemas,
+  `ChatOrchestrator`, persistence, story/quest, or character-progression code
+  are all untouched).
+* Offline, zero-provider-call scenario evaluation is the default and the mode
+  used in CI: it loads a small, version-controlled synthetic JSON scenario
+  corpus, validates each fixture against the real production
+  `DirectorInput`/`NarratorAgentInput` contracts, runs deterministic graders,
+  and produces a stable aggregate report (JSON and human-readable) with raw
+  provider/actual output excluded from serialization.
+* An explicit opt-in `--live` path also exists for local developer use. It
+  requires `AI_ENABLED=true` and a non-empty, non-whitespace
+  `OPENAI_API_KEY`; credentials alone never enable it. Live runs reuse the
+  same `DirectorAgent`/`NarratorAgent` contracts and the same `ModelPolicy`
+  the production agents use, and populate `model_metadata` (target agent,
+  selected model, token usage) without persisting raw provider content.
+* Model-judged/subjective scoring remains explicitly deferred: a
+  `SubjectiveGrader` protocol establishes the future extension boundary, but
+  no LLM-judge grading is implemented in this phase.
 
 # Next Step
 
@@ -982,11 +998,13 @@ through the deterministic `WorldAuthorityExecutor`, and both narrator scene
 projection and memory maintenance ground in the resulting final authoritative
 state.
 
-The next roadmap milestone has not yet been selected. See **Explicit
-Deferrals** above and tracking issue #43 for the backlog of candidate areas
-(for example combat/damage, doors/locks/keys/cellar progression, further
-Director capabilities, semantic-memory redesign, or D7 observability). A
-dedicated issue should scope the next milestone before implementation begins.
+Phase 8E1 — AI evaluation harness foundation (issue #55) is complete. Ongoing
+Phase 8 work is tracked under roadmap issue #52; consult that issue for the
+current sequence of Phase 8 milestones before starting further Phase 8 work.
+See **Explicit Deferrals** above and tracking issue #43 for the separate
+backlog of pre-Phase-8 candidate areas (for example combat/damage,
+doors/locks/keys/cellar progression, further Director capabilities,
+semantic-memory redesign, or D7 observability).
 
 Phase 5 should be considered closed as of engine commit:
 

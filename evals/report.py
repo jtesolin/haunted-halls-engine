@@ -5,6 +5,24 @@ from typing import Any
 
 from evals.schemas import ScenarioResult
 
+# Defensive guard: keys that must never carry raw provider/model response text
+# into a serialized report, even if a grader accidentally attaches one.
+# `actual_output` is excluded structurally below; these are extra nested-key
+# names that historically carried raw reply text in grader details.
+_RAW_OUTPUT_KEYS = frozenset({"actual_output", "actual", "raw_response", "raw_output"})
+
+
+def _strip_raw_output_fields(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {
+            key: _strip_raw_output_fields(inner)
+            for key, inner in value.items()
+            if key not in _RAW_OUTPUT_KEYS
+        }
+    if isinstance(value, list):
+        return [_strip_raw_output_fields(item) for item in value]
+    return value
+
 
 def summarize_results(results: Sequence[ScenarioResult]) -> dict[str, Any]:
     total = len(results)
@@ -19,7 +37,7 @@ def summarize_results(results: Sequence[ScenarioResult]) -> dict[str, Any]:
         "pass_rate": 0.0 if total == 0 else passed / total,
         "score": 0.0 if max_total == 0 else score_total / max_total,
         "results": [
-            result.model_dump(mode="json", exclude={"actual_output"})
+            _strip_raw_output_fields(result.model_dump(mode="json", exclude={"actual_output"}))
             for result in results
         ],
     }
@@ -40,5 +58,10 @@ def render_report(results: Sequence[ScenarioResult]) -> str:
     for result in results:
         status = "PASS" if result.passed is True else "FAIL"
         score = 0.0 if result.max_score in (None, 0) else (result.score or 0.0) / result.max_score
-        lines.append(f"- {result.scenario_id}: {status} ({score:.2%})")
+        model_note = ""
+        target_agent = result.model_metadata.get("target_agent")
+        model_id = result.model_metadata.get("model")
+        if target_agent and model_id:
+            model_note = f" [{target_agent}:{model_id}]"
+        lines.append(f"- {result.scenario_id}: {status} ({score:.2%}){model_note}")
     return "\n".join(lines)

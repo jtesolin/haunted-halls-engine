@@ -5,8 +5,18 @@
   "tags": ["director", "safety", "failure"],
   "authoritative_input": {
     "current_player_room_id": "entry_hall",
-    "legal_destinations": ["grand_corridor"],
-    "npcs": {}
+    "clock_tick": 2,
+    "facts": [],
+    "npcs": [],
+    "player_action": {
+      "action": "wait",
+      "target": null,
+      "parse_status": "ok",
+      "succeeded": true,
+      "result_summary": "The player waits quietly.",
+      "applied_tools": [],
+      "error_code": null
+    }
   },
   "deterministic_expectations": {"require_failure": true},
   "fixture_output": {

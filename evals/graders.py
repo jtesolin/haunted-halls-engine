@@ -63,7 +63,7 @@ class DirectorDeterministicGrader(DeterministicGrader):
                     passed=False,
                     score=0.0,
                     max_score=1.0,
-                    details={"error": str(exc)},
+                    details=_sanitize_error(exc),
                 )
             )
             return results
@@ -119,28 +119,9 @@ class DirectorDeterministicGrader(DeterministicGrader):
                 return results
 
             if action.action == "move_npc":
-                legal_destinations = _get_legal_destinations(scenario.authoritative_input)
-                destination = getattr(action, "destination_room_id", None)
-                destination_ok = bool(destination) and destination in legal_destinations
-                results.append(
-                    GraderResult(
-                        name="move_npc_destination_valid",
-                        passed=destination_ok,
-                        score=1.0 if destination_ok else 0.0,
-                        max_score=1.0,
-                        details={
-                            "destination": destination,
-                            "legal_destinations": legal_destinations,
-                        },
-                    )
-                )
-
                 npc_id = getattr(action, "npc_id", None)
-                npc_ok = isinstance(npc_id, str) and _entity_exists(
-                    scenario.authoritative_input,
-                    npc_id,
-                    field_name="npcs",
-                )
+                npc_context = _find_npc_context(scenario.authoritative_input, npc_id)
+                npc_ok = npc_context is not None
                 results.append(
                     GraderResult(
                         name="referenced_npc_exists",
@@ -151,33 +132,42 @@ class DirectorDeterministicGrader(DeterministicGrader):
                     )
                 )
 
-            if getattr(action, "npc_id", None) is not None:
-                npc_ok = _entity_exists(scenario.authoritative_input, getattr(action, "npc_id"), "npcs")
-                if not npc_ok:
-                    results.append(
-                        GraderResult(
-                            name="entity_in_bounded_context",
-                            passed=False,
-                            score=0.0,
-                            max_score=1.0,
-                            details={"npc_id": getattr(action, "npc_id")},
-                        )
+                # Legality is scoped strictly to the proposed NPC's own bounded
+                # one-hop destinations. A destination that is legal for a
+                # different NPC (or the player's current room) must never be
+                # accepted here.
+                legal_destinations = (
+                    _npc_one_hop_destinations(npc_context) if npc_context is not None else []
+                )
+                destination = getattr(action, "destination_room_id", None)
+                destination_ok = (
+                    npc_ok and isinstance(destination, str) and destination in legal_destinations
+                )
+                results.append(
+                    GraderResult(
+                        name="move_npc_destination_valid",
+                        passed=destination_ok,
+                        score=1.0 if destination_ok else 0.0,
+                        max_score=1.0,
+                        details={
+                            "npc_id": npc_id,
+                            "destination": destination,
+                            "legal_destinations": legal_destinations,
+                        },
                     )
-            if getattr(action, "destination_room_id", None) is not None:
-                legal_destinations = _get_legal_destinations(scenario.authoritative_input)
-                if legal_destinations and getattr(action, "destination_room_id") not in legal_destinations:
-                    results.append(
-                        GraderResult(
-                            name="destination_in_bounded_context",
-                            passed=False,
-                            score=0.0,
-                            max_score=1.0,
-                            details={
-                                "destination_room_id": getattr(action, "destination_room_id"),
-                                "legal_destinations": legal_destinations,
-                            },
-                        )
+                )
+            elif getattr(action, "npc_id", None) is not None:
+                npc_id = getattr(action, "npc_id")
+                npc_ok = _find_npc_context(scenario.authoritative_input, npc_id) is not None
+                results.append(
+                    GraderResult(
+                        name="entity_in_bounded_context",
+                        passed=npc_ok,
+                        score=1.0 if npc_ok else 0.0,
+                        max_score=1.0,
+                        details={"npc_id": npc_id},
                     )
+                )
 
         return results
 
@@ -194,19 +184,22 @@ class NarratorDeterministicGrader(DeterministicGrader):
                     passed=False,
                     score=0.0,
                     max_score=1.0,
-                    details={"error": "No narrator output was produced."},
+                    details={"reason": "no_output_produced"},
                 )
             ]
 
         reply_text = _extract_reply_text(actual_output)
-        if reply_text is None:
+        if reply_text is None or not reply_text.strip():
             return [
                 GraderResult(
                     name="narrator_output_present",
                     passed=False,
                     score=0.0,
                     max_score=1.0,
-                    details={"actual_output": actual_output},
+                    details={
+                        "reason": "missing_or_blank_reply_text",
+                        "length": 0 if reply_text is None else len(reply_text),
+                    },
                 )
             ]
 
@@ -220,47 +213,44 @@ class NarratorDeterministicGrader(DeterministicGrader):
             )
         ]
 
-        expected_output = scenario.fixture_output if scenario.fixture_output is not None else scenario.deterministic_expectations
-        if isinstance(expected_output, dict):
-            expected_contains = expected_output.get("contains")
-            if expected_contains is not None:
-                contains = [str(item) for item in expected_contains] if isinstance(expected_contains, list) else [str(expected_contains)]
-                passed = all(item.lower() in reply_text.lower() for item in contains)
-                results.append(
-                    GraderResult(
-                        name="expected_content",
-                        passed=passed,
-                        score=1.0 if passed else 0.0,
-                        max_score=1.0,
-                        details={"expected": contains, "actual": reply_text},
-                    )
-                )
+        # Grading expectations always come from the scenario's declared
+        # deterministic_expectations. fixture_output is the offline actual
+        # output (what the grader is evaluating), never the source of truth
+        # for what "should" be true.
+        expectations = scenario.deterministic_expectations
+        text_lower = reply_text.lower()
 
-            forbidden = expected_output.get("must_not_contain")
-            if forbidden is not None:
-                forbidden_values = [str(item) for item in forbidden] if isinstance(forbidden, list) else [str(forbidden)]
-                text_lower = reply_text.lower()
-                passed = not any(item.lower() in text_lower for item in forbidden_values)
-                results.append(
-                    GraderResult(
-                        name="forbidden_content",
-                        passed=passed,
-                        score=1.0 if passed else 0.0,
-                        max_score=1.0,
-                        details={"forbidden": forbidden_values, "actual": reply_text},
-                    )
-                )
-
-        elif expected_output is not None:
-            expected_value = str(expected_output)
-            passed = expected_value.lower() in reply_text.lower()
+        expected_contains = expectations.get("contains")
+        if expected_contains is not None:
+            contains = (
+                [str(item) for item in expected_contains]
+                if isinstance(expected_contains, list)
+                else [str(expected_contains)]
+            )
+            passed = all(item.lower() in text_lower for item in contains)
             results.append(
                 GraderResult(
                     name="expected_content",
                     passed=passed,
                     score=1.0 if passed else 0.0,
                     max_score=1.0,
-                    details={"expected": expected_value, "actual": reply_text},
+                    details={"expected": contains, "actual_length": len(reply_text)},
+                )
+            )
+
+        forbidden = expectations.get("must_not_contain")
+        if forbidden is not None:
+            forbidden_values = (
+                [str(item) for item in forbidden] if isinstance(forbidden, list) else [str(forbidden)]
+            )
+            passed = not any(item.lower() in text_lower for item in forbidden_values)
+            results.append(
+                GraderResult(
+                    name="forbidden_content",
+                    passed=passed,
+                    score=1.0 if passed else 0.0,
+                    max_score=1.0,
+                    details={"forbidden": forbidden_values, "actual_length": len(reply_text)},
                 )
             )
 
@@ -307,40 +297,46 @@ def _extract_reply_text(actual_output: Any) -> str | None:
     return None
 
 
-def _get_legal_destinations(input_payload: dict[str, Any]) -> list[str]:
-    if not isinstance(input_payload, dict):
+def _find_npc_context(input_payload: dict[str, Any], npc_id: Any) -> dict[str, Any] | None:
+    """Resolve the authoritative DirectorNPCContext-shaped record for npc_id.
+
+    Only the production `npcs: list[DirectorNPCContext]` shape is honored;
+    there is no fallback to eval-only dict-keyed or top-level shapes.
+    """
+
+    if not isinstance(input_payload, dict) or not isinstance(npc_id, str):
+        return None
+    npcs = input_payload.get("npcs")
+    if not isinstance(npcs, list):
+        return None
+    for npc in npcs:
+        if isinstance(npc, dict) and npc.get("npc_id") == npc_id:
+            return npc
+    return None
+
+
+def _npc_one_hop_destinations(npc_context: dict[str, Any]) -> list[str]:
+    destinations = npc_context.get("one_hop_destination_room_ids")
+    if not isinstance(destinations, list):
         return []
-    room_ids: list[str] = []
-    for key in ("legal_destinations", "allowed_destinations", "available_destinations"):
-        value = input_payload.get(key)
-        if isinstance(value, list):
-            room_ids = [str(item) for item in value if item is not None]
-            if room_ids:
-                return room_ids
-    current_room = input_payload.get("current_player_room_id")
-    if isinstance(current_room, str):
-        room_ids = [current_room]
-    npc_list = input_payload.get("npcs")
-    if isinstance(npc_list, list):
-        for npc in npc_list:
-            if isinstance(npc, dict):
-                loc = npc.get("location_id") or npc.get("location")
-                if isinstance(loc, str):
-                    room_ids.append(loc)
-    return list(dict.fromkeys(room_ids))
+    return [str(item) for item in destinations if isinstance(item, str)]
 
 
-def _entity_exists(input_payload: dict[str, Any], entity_id: Any, field_name: str) -> bool:
-    if not isinstance(entity_id, str):
-        return False
-    entities = input_payload.get(field_name)
-    if isinstance(entities, list):
-        for item in entities:
-            if isinstance(item, dict):
-                item_id = item.get("npc_id") or item.get("id")
-                if item_id == entity_id:
-                    return True
-        return False
-    if isinstance(entities, dict):
-        return entity_id in entities
-    return False
+def _sanitize_error(exc: Exception) -> dict[str, Any]:
+    """Summarize a validation error without embedding raw provider content.
+
+    Pydantic's default ValidationError string representation can include the
+    invalid input values verbatim, which for a live agent call could be raw
+    provider output. Only structural details (error locations/count) are
+    reported.
+    """
+
+    if isinstance(exc, ValidationError):
+        return {
+            "error_type": "validation_error",
+            "error_count": exc.error_count(),
+            "error_locations": sorted(
+                {".".join(str(part) for part in error["loc"]) for error in exc.errors()}
+            ),
+        }
+    return {"error_type": type(exc).__name__}

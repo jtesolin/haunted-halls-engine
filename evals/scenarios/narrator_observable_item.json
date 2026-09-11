@@ -1,21 +1,26 @@
 {
   "scenario_id": "narrator-observable-item-state",
-  "description": "Observable item state can be reflected without exposing internal capabilities.",
+  "description": "Observable item state (is_open/lit) can be reflected without exposing internal capability/property fields.",
   "target": "narrator",
   "tags": ["narrator", "items", "grounding"],
   "authoritative_input": {
+    "player_message": "look at the lamp",
     "scene_context": {
       "current_room": {"id": "entry_hall", "name": "Entry Hall", "description": "A dusty hall."},
       "nearby_items": [
-        {"id": "brass_key", "name": "Brass key", "description": "A tarnished key.", "observable_state": {"condition": "tarnished"}}
+        {
+          "id": "brass_lamp",
+          "name": "Brass Lamp",
+          "description": "An old brass oil lamp.",
+          "observable_state": {"lit": true}
+        }
       ],
       "nearby_npcs": []
-    },
-    "player_message": "look at the key"
+    }
   },
   "deterministic_expectations": {
-    "contains": ["brass key", "tarnished"],
-    "must_not_contain": ["unlock_capability", "internal_item_id"]
+    "contains": ["brass lamp", "lit"],
+    "must_not_contain": ["lightable", "openable", "properties", "opens"]
   },
-  "fixture_output": {"reply_text": "The brass key is tarnished but catches the light."}
+  "fixture_output": {"reply_text": "The brass lamp is lit, casting a warm glow across the hall."}
 }
