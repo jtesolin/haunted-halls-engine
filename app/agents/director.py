@@ -223,7 +223,7 @@ class DirectorAgent(BaseAgent):
                 response_model=DirectorProposalResponse,
                 model=selected_model,
                 max_output_tokens=TokenBudget.director_max_output_tokens(),
-                reasoning_effort="minimal",
+                reasoning_effort=ModelPolicy.director_reasoning_effort(),
                 timeout=15,
                 return_usage=True,
             )

@@ -66,7 +66,7 @@ class NarratorAgent(BaseAgent):
             messages=messages,
             model=model or ModelPolicy.narrator_model(),
             max_output_tokens=TokenBudget.narrator_max_output_tokens(),
-            reasoning_effort="medium",
+            reasoning_effort=ModelPolicy.narrator_reasoning_effort(),
             timeout=20,
             return_usage=True,
         )

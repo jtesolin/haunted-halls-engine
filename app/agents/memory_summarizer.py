@@ -50,7 +50,7 @@ class MemorySummarizerAgent(BaseAgent):
                 messages=messages,
                 model=model or ModelPolicy.summarizer_model(),
                 max_output_tokens=TokenBudget.summarizer_max_output_tokens(),
-                reasoning_effort="minimal",
+                reasoning_effort=ModelPolicy.summarizer_reasoning_effort(),
                 timeout=15,
                 return_usage=True,
             )

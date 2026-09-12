@@ -115,7 +115,7 @@ class ActionParserAgent(BaseAgent):
                 response_model=ActionParserOutput,
                 model=model or ModelPolicy.action_parser_model(),
                 max_output_tokens=TokenBudget.action_parser_max_output_tokens(),
-                reasoning_effort="minimal",
+                reasoning_effort=ModelPolicy.action_parser_reasoning_effort(),
                 timeout=15,
                 return_usage=True,
             )

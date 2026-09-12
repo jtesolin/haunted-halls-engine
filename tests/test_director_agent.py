@@ -356,7 +356,7 @@ def test_director_uses_policy_model_or_explicit_override(
     assert captured_kwargs["max_output_tokens"] == (
         TokenBudget.director_max_output_tokens()
     )
-    assert captured_kwargs["reasoning_effort"] == "minimal"
+    assert captured_kwargs["reasoning_effort"] == "none"
     assert captured_kwargs["return_usage"] is True
 
 

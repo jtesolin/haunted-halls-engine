@@ -54,7 +54,8 @@ class MemoryReflectionAgent(BaseAgent):
                 messages=messages,
                 model=model or ModelPolicy.memory_reflection_model(),
                 max_output_tokens=TokenBudget.memory_reflection_max_output_tokens(),
-                reasoning_effort="minimal",
+                reasoning_effort=ModelPolicy.memory_reflection_reasoning_effort(),
+                retry_reasoning_effort=ModelPolicy.memory_reflection_reasoning_effort(),
                 timeout=15,
                 return_usage=True,
             )
