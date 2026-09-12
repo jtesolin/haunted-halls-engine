@@ -75,6 +75,7 @@ Stable cross-repository architecture and authority invariants are maintained in 
 * Responses API used for model execution.
 * Narrator Agent separated from model transport.
 * Model policies and token budgets implemented.
+* Production model selections and reasoning-effort pairings are centralized in `ModelPolicy`: Director and Memory Reflection use `gpt-5.4-nano` with `none` (including Memory Reflection's max-output retry); Action Parser and Memory Summarizer use `gpt-5-nano` with `minimal`; Narrator uses `gpt-5-nano` with `medium`.
 * Input validation, rate limiting, usage limits, and model guardrails implemented.
 * Model request/usage information persisted.
 * Daily usage accounting now counts authenticated user turns at the top level while preserving model-call telemetry for internal agent requests and provider usage when available.
