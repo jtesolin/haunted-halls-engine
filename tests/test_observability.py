@@ -16,7 +16,13 @@ from starlette.background import BackgroundTask
 
 from app.core import observability as observability_module
 from app.core.config import Settings, settings
-from app.core.observability import Observability, _google_exporter, _JsonFormatter
+from app.core.observability import (
+    Observability,
+    _google_exporter,
+    _JsonFormatter,
+    _MAX_STACK_TRACE_CHARS,
+    _STACK_TRACE_TRUNCATION_MARKER,
+)
 
 
 def _app() -> FastAPI:
@@ -565,16 +571,21 @@ def test_reinitialize_after_shutdown_preserves_trace_log_correlation(
         assert "logging.googleapis.com/spanId" in payload
 
 
-def test_shutdown_restores_prior_logger_level_and_propagation() -> None:
+def test_enabled_logging_restores_prior_disabled_level_handlers_and_propagation(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
     logger = logging.getLogger("app")
-    logger.disabled = False
+    original_disabled = logger.disabled
+    logger.disabled = True
     original_level = logger.level
     original_propagate = logger.propagate
+    original_handlers = list(logger.handlers)
     logger.setLevel(logging.DEBUG)
     logger.propagate = True
     try:
         prior_level = logger.level
         prior_propagate = logger.propagate
+        prior_handlers = list(logger.handlers)
 
         observability = Observability()
         observability.initialize(
@@ -584,24 +595,32 @@ def test_shutdown_restores_prior_logger_level_and_propagation() -> None:
         )
         assert logger.level == logging.INFO
         assert logger.propagate is False
+        assert logger.disabled is False
+
+        logger.info("disabled-state-structured-log")
+        log_line = next(
+            line
+            for line in capsys.readouterr().out.splitlines()
+            if "disabled-state-structured-log" in line
+        )
+        payload = json.loads(log_line)
+        assert payload["logger"] == "app"
+        assert payload["message"] == "disabled-state-structured-log"
 
         observability.shutdown()
         assert logger.level == prior_level
         assert logger.propagate == prior_propagate
+        assert logger.disabled is True
+        assert logger.handlers == prior_handlers
     finally:
+        logger.disabled = original_disabled
         logger.setLevel(original_level)
         logger.propagate = original_propagate
+        logger.handlers = original_handlers
 
 
-@pytest.mark.parametrize("failure_step", ["uninstrument", "provider_shutdown"])
-def test_teardown_is_best_effort_and_state_is_cleared_on_partial_failure(
-    failure_step: str,
-) -> None:
-    """Each teardown step (FastAPI uninstrumentation, tracer-provider/exporter
-    shutdown, logger cleanup) is attempted independently. A raised exception
-    in one step must not skip the remaining steps, and every internal
-    ownership field plus the shared logger's prior state must be fully
-    restored even though a step failed, so a later retry is not blocked."""
+def test_provider_shutdown_failure_still_restores_logger_and_clears_state() -> None:
+    """Provider/exporter shutdown failure must not skip safe logger cleanup."""
     app = _app()
     observability = Observability()
     settings = Settings(OTEL_ENABLED=True, OTEL_GCP_PROJECT_ID="test-project")
@@ -616,19 +635,11 @@ def test_teardown_is_best_effort_and_state_is_cleared_on_partial_failure(
     provider = observability._provider
     assert provider is not None
 
-    if failure_step == "uninstrument":
-        failure_patch = patch(
-            "app.core.observability.FastAPIInstrumentor.uninstrument_app",
-            side_effect=RuntimeError("simulated uninstrument failure"),
-        )
-    else:
-        failure_patch = patch.object(
-            provider,
-            "shutdown",
-            side_effect=RuntimeError("simulated provider shutdown failure"),
-        )
-
-    with failure_patch:
+    with patch.object(
+        provider,
+        "shutdown",
+        side_effect=RuntimeError("simulated provider shutdown failure"),
+    ):
         observability.shutdown()
 
     assert observability._instrumented is False
@@ -638,6 +649,7 @@ def test_teardown_is_best_effort_and_state_is_cleared_on_partial_failure(
     assert observability._logging_handler is None
     assert observability._prior_logger_level is None
     assert observability._prior_logger_propagate is None
+    assert observability._prior_logger_disabled is None
     assert logger.level == prior_level
     assert logger.propagate == prior_propagate
     assert logger.handlers == prior_handlers
@@ -664,7 +676,7 @@ def test_teardown_is_best_effort_and_state_is_cleared_on_partial_failure(
     assert logger.handlers == prior_handlers
 
 
-def test_initialization_failure_is_isolated_and_allows_retry() -> None:
+def test_uninstrumentation_failure_retains_live_ownership_until_retry() -> None:
     app = _app()
     observability = Observability()
     settings = Settings(OTEL_ENABLED=True, OTEL_GCP_PROJECT_ID="test-project")
@@ -673,6 +685,93 @@ def test_initialization_failure_is_isolated_and_allows_retry() -> None:
     prior_level = logger.level
     prior_propagate = logger.propagate
     prior_handlers = list(logger.handlers)
+    first_exporter = InMemorySpanExporter()
+
+    observability.initialize(app, settings, lambda _: first_exporter)
+    provider = observability._provider
+    processor = observability._processor
+    handler = observability._logging_handler
+    assert provider is not None
+    assert processor is not None
+    assert handler is not None
+
+    with patch(
+        "app.core.observability.FastAPIInstrumentor.uninstrument_app",
+        side_effect=RuntimeError("simulated uninstrument failure"),
+    ), patch.object(provider, "shutdown", wraps=provider.shutdown) as shutdown_provider:
+        observability.shutdown()
+        shutdown_provider.assert_not_called()
+
+    # The middleware is still live, so its provider and atomic ownership
+    # claim must remain live too. In particular, logger cleanup cannot make a
+    # second owner believe the process-local D7A resources are unclaimed.
+    assert observability._instrumented is True
+    assert observability._app is app
+    assert observability._provider is provider
+    assert observability._processor is processor
+    assert observability._logging_handler is handler
+    assert handler in logger.handlers
+    assert app._is_instrumented_by_opentelemetry is True  # type: ignore[attr-defined]
+
+    competing_owner = Observability()
+    competing_owner.initialize(_app(), settings, lambda _: InMemorySpanExporter())
+    assert competing_owner._provider is None
+    assert competing_owner._instrumented is False
+    competing_owner.shutdown()
+
+    with TestClient(app) as client:
+        assert client.get("/hello").status_code == 200
+    assert processor.force_flush()
+    assert len(
+        [
+            span
+            for span in first_exporter.get_finished_spans()
+            if span.kind == trace.SpanKind.SERVER
+        ]
+    ) == 1
+
+    # Public uninstrumentation is retried on the same owner before its
+    # provider and logger claim are released.
+    observability.shutdown()
+    assert observability._instrumented is False
+    assert observability._app is None
+    assert observability._provider is None
+    assert observability._processor is None
+    assert observability._logging_handler is None
+    assert logger.level == prior_level
+    assert logger.propagate == prior_propagate
+    assert logger.handlers == prior_handlers
+
+    # The same app can now be initialized again, with exactly one valid server
+    # span rather than stale/duplicate middleware tied to the old provider.
+    retry_exporter = InMemorySpanExporter()
+    observability.initialize(app, settings, lambda _: retry_exporter)
+    try:
+        with TestClient(app) as client:
+            assert client.get("/hello").status_code == 200
+        assert observability._processor is not None
+        assert observability._processor.force_flush()
+        server_spans = [
+            span
+            for span in retry_exporter.get_finished_spans()
+            if span.kind == trace.SpanKind.SERVER
+        ]
+        assert len(server_spans) == 1
+    finally:
+        observability.shutdown()
+
+
+def test_initialization_failure_is_isolated_and_allows_retry() -> None:
+    app = _app()
+    observability = Observability()
+    settings = Settings(OTEL_ENABLED=True, OTEL_GCP_PROJECT_ID="test-project")
+    logger = logging.getLogger("app")
+    original_disabled = logger.disabled
+    logger.disabled = True
+    prior_level = logger.level
+    prior_propagate = logger.propagate
+    prior_handlers = list(logger.handlers)
+    prior_disabled = logger.disabled
 
     def failing_factory(_: Settings) -> SpanExporter:
         raise RuntimeError("simulated ADC/exporter failure")
@@ -686,6 +785,7 @@ def test_initialization_failure_is_isolated_and_allows_retry() -> None:
     assert logger.level == prior_level
     assert logger.propagate == prior_propagate
     assert logger.handlers == prior_handlers
+    assert logger.disabled == prior_disabled
 
     with TestClient(app) as client:
         assert client.get("/hello").status_code == 200
@@ -710,6 +810,8 @@ def test_initialization_failure_is_isolated_and_allows_retry() -> None:
     assert logger.level == prior_level
     assert logger.propagate == prior_propagate
     assert logger.handlers == prior_handlers
+    assert logger.disabled == prior_disabled
+    logger.disabled = original_disabled
 
 
 def test_instrumentation_failure_during_initialize_cleans_up_state() -> None:
@@ -820,6 +922,41 @@ def test_exception_log_preserves_type_message_and_traceback() -> None:
     assert payload["exception.message"] == "distinctive-failure-message"
     assert "ValueError: distinctive-failure-message" in payload["stack_trace"]
     assert "Traceback" in payload["stack_trace"]
+
+
+def test_oversized_exception_diagnostics_are_bounded_and_valid_json() -> None:
+    formatter = _JsonFormatter(Settings(OTEL_GCP_PROJECT_ID="test-project"))
+    oversized_message = "distinctive-oversized-message-" + (
+        "x" * (_MAX_STACK_TRACE_CHARS * 2)
+    )
+    try:
+        raise ValueError(oversized_message)
+    except ValueError:
+        import sys
+
+        record = logging.LogRecord(
+            "app.test", logging.ERROR, "", 0, "operation failed", (), sys.exc_info()
+        )
+    record.__dict__["private_extra"] = "must-not-be-serialized"
+
+    serialized = formatter.format(record)
+    payload = json.loads(serialized)
+
+    assert set(payload) == {
+        "severity",
+        "message",
+        "logger",
+        "timestamp",
+        "exception.type",
+        "exception.message",
+        "stack_trace",
+    }
+    assert payload["exception.type"] == "ValueError"
+    assert len(payload["exception.message"]) == _MAX_STACK_TRACE_CHARS
+    assert payload["exception.message"].endswith(_STACK_TRACE_TRUNCATION_MARKER)
+    assert len(payload["stack_trace"]) == _MAX_STACK_TRACE_CHARS
+    assert payload["stack_trace"].endswith(_STACK_TRACE_TRUNCATION_MARKER)
+    assert "must-not-be-serialized" not in serialized
 
 
 def test_log_without_exc_info_omits_exception_fields() -> None:

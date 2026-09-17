@@ -61,6 +61,14 @@ _OWNERSHIP_LOCK = threading.RLock()
 _MODULE_LOGGER = logging.getLogger(__name__)
 
 
+def _truncate_diagnostic(value: str) -> str:
+    """Bound a structured exception diagnostic with an explicit marker."""
+    if len(value) <= _MAX_STACK_TRACE_CHARS:
+        return value
+    retained_chars = _MAX_STACK_TRACE_CHARS - len(_STACK_TRACE_TRUNCATION_MARKER)
+    return value[:retained_chars] + _STACK_TRACE_TRUNCATION_MARKER
+
+
 class _JsonFormatter(logging.Formatter):
     def __init__(self, settings_: Settings) -> None:
         super().__init__()
@@ -89,14 +97,10 @@ class _JsonFormatter(logging.Formatter):
             if exc_type is not None:
                 payload["exception.type"] = exc_type.__name__
             if exc_value is not None:
-                payload["exception.message"] = str(exc_value)
-            stack_trace = "".join(traceback.format_exception(*record.exc_info))
-            if len(stack_trace) > _MAX_STACK_TRACE_CHARS:
-                stack_trace = (
-                    stack_trace[:_MAX_STACK_TRACE_CHARS]
-                    + _STACK_TRACE_TRUNCATION_MARKER
-                )
-            payload["stack_trace"] = stack_trace
+                payload["exception.message"] = _truncate_diagnostic(str(exc_value))
+            payload["stack_trace"] = _truncate_diagnostic(
+                "".join(traceback.format_exception(*record.exc_info))
+            )
         return json.dumps(payload, separators=(",", ":"))
 
 
@@ -113,10 +117,12 @@ class _LoggingConfiguration:
         handler: logging.Handler,
         prior_level: int,
         prior_propagate: bool,
+        prior_disabled: bool,
     ) -> None:
         self.handler = handler
         self.prior_level = prior_level
         self.prior_propagate = prior_propagate
+        self.prior_disabled = prior_disabled
 
 
 def _logging_owned_elsewhere() -> bool:
@@ -142,13 +148,15 @@ def _configure_logging(settings_: Settings) -> _LoggingConfiguration:
     logger = logging.getLogger(_LOGGER_NAME)
     prior_level = logger.level
     prior_propagate = logger.propagate
+    prior_disabled = logger.disabled
     handler = logging.StreamHandler(sys.stdout)
     handler.setFormatter(_JsonFormatter(settings_))
     handler._haunted_halls_observability = True  # type: ignore[attr-defined]
     logger.addHandler(handler)
     logger.setLevel(logging.INFO)
     logger.propagate = False
-    return _LoggingConfiguration(handler, prior_level, prior_propagate)
+    logger.disabled = False
+    return _LoggingConfiguration(handler, prior_level, prior_propagate, prior_disabled)
 
 
 def _google_exporter(settings_: Settings) -> SpanExporter:
@@ -216,6 +224,7 @@ class Observability:
         self._logging_handler: logging.Handler | None = None
         self._prior_logger_level: int | None = None
         self._prior_logger_propagate: bool | None = None
+        self._prior_logger_disabled: bool | None = None
 
     def initialize(
         self,
@@ -244,6 +253,7 @@ class Observability:
                 self._logging_handler = logging_configuration.handler
                 self._prior_logger_level = logging_configuration.prior_level
                 self._prior_logger_propagate = logging_configuration.prior_propagate
+                self._prior_logger_disabled = logging_configuration.prior_disabled
 
                 attributes: dict[str, str] = {"service.name": settings_.OTEL_SERVICE_NAME}
                 optional_attributes = {
@@ -310,12 +320,15 @@ class Observability:
         and any FastAPI mutation detected below are only ever attributable to
         this instance being the sole owner.
 
-        Each teardown step (FastAPI uninstrumentation, tracer-provider/exporter
-        shutdown, logger handler cleanup) is attempted independently: a
-        failure in one step is logged and does not skip the remaining steps,
-        and every internal ownership field is always cleared afterward so a
-        cleanup failure can never leave D7A permanently initialized or block
-        a later retry.
+        FastAPI middleware remains bound to the owned provider until public
+        uninstrumentation succeeds. If that first step fails, all ownership
+        is retained so a later shutdown can safely retry without exposing
+        stale middleware backed by a closed provider or permitting another
+        owner to claim the process-local D7A resources.
+
+        Once uninstrumentation succeeds, provider and logger cleanup remain
+        best-effort: a provider shutdown failure does not prevent exact logger
+        restoration and release of the process-local ownership claim.
         """
         if self._app is not None and getattr(
             self._app, "_is_instrumented_by_opentelemetry", False
@@ -325,9 +338,11 @@ class Observability:
             except Exception:
                 _MODULE_LOGGER.warning(
                     "Observability FastAPI uninstrumentation failed during "
-                    "teardown; continuing cleanup",
+                    "teardown; retaining ownership for retry",
                     exc_info=True,
                 )
+                self._instrumented = True
+                return
 
         if self._provider is not None:
             try:
@@ -355,6 +370,8 @@ class Observability:
                     logger.setLevel(self._prior_logger_level)
                 if self._prior_logger_propagate is not None:
                     logger.propagate = self._prior_logger_propagate
+                if self._prior_logger_disabled is not None:
+                    logger.disabled = self._prior_logger_disabled
 
         self._app = None
         self._processor = None
@@ -363,6 +380,7 @@ class Observability:
         self._logging_handler = None
         self._prior_logger_level = None
         self._prior_logger_propagate = None
+        self._prior_logger_disabled = None
 
 
 observability = Observability()
