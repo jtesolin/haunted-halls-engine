@@ -27,6 +27,7 @@ from app.game.campaign_state import (
     validate_persisted_campaign_state_json,
 )
 from app.game.narrator_scene import build_narrator_scene_context
+from app.game.story import apply_story_signal, derive_story_signal
 from app.guardrails.input_validation import validate_chat_request
 from app.guardrails.limit_errors import usage_limit_error
 from app.guardrails.model_policy import ModelPolicy
@@ -533,19 +534,46 @@ class ChatOrchestrator:
                             reason=tool_result.summary,
                         ),
                     )
+            else:
+                try:
+                    updated_state = load_authoritative_campaign_state(campaign_state)
+                except InvalidCampaignStateError as exc:
+                    logger.error(
+                        "campaign_state_integrity_failure owner_user_id=%s campaign_id=%s turn_id=%s error_type=%s",
+                        owner_user_id,
+                        campaign_id,
+                        player_turn_id,
+                        type(exc).__name__,
+                    )
+                    raise HTTPException(
+                        status_code=500,
+                        detail="Campaign state could not be processed.",
+                    ) from exc
 
-                if tool_result.state_delta or campaign_state == "No campaign state yet.":
-                    db.update_campaign_state(campaign_id, updated_state)
-                    db.add_event(
-                        event_id=f"evt_{uuid4().hex}",
-                        campaign_id=campaign_id,
-                        turn_id=player_turn_id,
-                        type="game_state_updated",
-                        payload=GameStateUpdatedPayload(state=updated_state),
-                    )
-                    campaign_state = memory_service.build_campaign_state(
-                        owner_user_id=owner_user_id, campaign_id=campaign_id
-                    )
+            story_signal = derive_story_signal(tool_result)
+            story_result = None
+            story_state_changed = False
+            if story_signal is not None:
+                story_result = apply_story_signal(updated_state, story_signal)
+                story_state_changed = bool(story_result.changed)
+
+            authoritative_state_changed = (
+                bool(tool_result.state_delta)
+                or campaign_state == "No campaign state yet."
+                or story_state_changed
+            )
+            if authoritative_state_changed:
+                db.update_campaign_state(campaign_id, updated_state)
+                db.add_event(
+                    event_id=f"evt_{uuid4().hex}",
+                    campaign_id=campaign_id,
+                    turn_id=player_turn_id,
+                    type="game_state_updated",
+                    payload=GameStateUpdatedPayload(state=updated_state),
+                )
+                campaign_state = memory_service.build_campaign_state(
+                    owner_user_id=owner_user_id, campaign_id=campaign_id
+                )
 
             if provider_model_enabled:
                 campaign_state = await self._run_director_step(

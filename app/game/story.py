@@ -29,6 +29,7 @@ from typing import Any, Iterable
 
 from pydantic import ValidationError
 
+from app.schemas.chat import ToolExecutionResult
 from app.schemas.story import (
     FactRecordedSignal,
     ItemAcquiredSignal,
@@ -317,6 +318,34 @@ def _signal_match_value(signal: StorySignal) -> str:
 
 def _signal_type(signal: StorySignal) -> StorySignalType:
     return signal.signal_type
+
+
+def derive_story_signal(tool_result: ToolExecutionResult) -> StorySignal | None:
+    """Map a successful authoritative tool result into the next deterministic story signal.
+
+    Only the authoritative `ToolExecutionResult` can produce a phase-8 story signal;
+    parser context and raw action text are intentionally ignored.
+    """
+    if not tool_result.success:
+        return None
+
+    if "move_player" in tool_result.applied_tools:
+        destination = tool_result.resolved_exit
+        if destination:
+            return RoomEnteredSignal(room_id=destination)
+        return None
+
+    if "talk_to_npc" in tool_result.applied_tools:
+        if tool_result.npc_id:
+            return NpcSpokenToSignal(npc_id=tool_result.npc_id)
+        return None
+
+    if "take_item" in tool_result.applied_tools:
+        if tool_result.item_id:
+            return ItemAcquiredSignal(item_id=tool_result.item_id)
+        return None
+
+    return None
 
 
 def _not_applicable(reason: str) -> StoryProgressionResult:
