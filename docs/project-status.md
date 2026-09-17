@@ -1008,7 +1008,7 @@ The following remain explicitly deferred and are kept out of the completed Phase
 * Narrator output validation and retry framework.
 * Cross-browser and visual-regression E2E expansion.
 * Production E2E testing against live Google OAuth or live OpenAI endpoints.
-* Unrelated infrastructure and observability work (D7).
+* Remaining D7 observability slices and production activation beyond D7A.
 
 # Architectural Principles
 

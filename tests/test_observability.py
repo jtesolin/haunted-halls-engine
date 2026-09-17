@@ -3,15 +3,18 @@ import logging
 from unittest.mock import Mock, patch, sentinel
 
 import pytest
-from fastapi import FastAPI
+from fastapi import BackgroundTasks, FastAPI
 from fastapi.responses import JSONResponse
 from fastapi.testclient import TestClient
 from opentelemetry import trace
+from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import SpanExporter
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor, SpanExporter
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+from starlette.background import BackgroundTask
 
-from app.core.config import Settings
+from app.core import observability as observability_module
+from app.core.config import Settings, settings
 from app.core.observability import Observability, _google_exporter, _JsonFormatter
 
 
@@ -28,6 +31,14 @@ def _app() -> FastAPI:
 
     @app.get("/health")
     async def health() -> dict[str, str]:
+        return {"status": "ok"}
+
+    @app.get("/health/live")
+    async def health_live() -> dict[str, str]:
+        return {"status": "ok"}
+
+    @app.get("/healthcheck")
+    async def healthcheck() -> dict[str, str]:
         return {"status": "ok"}
 
     return app
@@ -226,6 +237,9 @@ def test_request_spans_health_exclusion_and_w3c_propagation() -> None:
             headers={"traceparent": f"00-{trace_id}-b7ad6b7169203331-01"},
         ).status_code == 200
         assert client.get("/health").status_code == 200
+        assert client.get("/health?probe=1").status_code == 200
+        assert client.get("/health/live?probe=1").status_code == 200
+        assert client.get("/healthcheck?probe=1").status_code == 200
     assert observability._processor is not None
     observability._processor.force_flush()
     spans = exporter.get_finished_spans()
@@ -241,6 +255,8 @@ def test_request_spans_health_exclusion_and_w3c_propagation() -> None:
     assert context is not None
     assert f"{context.trace_id:032x}" == trace_id
     assert not any(span.name == "GET /health" for span in spans)
+    assert not any(span.name == "GET /health/live" for span in spans)
+    assert any(span.name == "GET /healthcheck" for span in spans)
     observability.shutdown()
 
 
@@ -264,6 +280,10 @@ def test_sensitive_request_values_are_not_recorded(
         "cookie": "distinctive-private-cookie-marker",
         "response": "distinctive-private-response-marker",
         "set_cookie": "distinctive-private-set-cookie-marker",
+        "query": "distinctive-private-query-marker",
+        "user_agent": "distinctive-private-user-agent-marker",
+        "forwarded": "distinctive-private-forwarded-marker",
+        "client": "distinctive-private-client-marker",
     }
 
     @app.post("/private")
@@ -284,13 +304,16 @@ def test_sensitive_request_values_are_not_recorded(
         lambda _: exporter,
     )
     try:
-        with TestClient(app) as client:
+        with TestClient(app, client=(markers["client"], 45678)) as client:
             response = client.post(
-                "/private",
+                f"/private?probe={markers['query']}",
                 json={"message": markers["body"]},
                 headers={
                     "Authorization": f"Bearer {markers['authorization']}",
                     "Cookie": f"session={markers['cookie']}",
+                    "User-Agent": markers["user_agent"],
+                    "Forwarded": f"for={markers['forwarded']}",
+                    "X-Forwarded-For": markers["forwarded"],
                 },
             )
             assert response.status_code == 200
@@ -305,6 +328,9 @@ def test_sensitive_request_values_are_not_recorded(
         assert all(marker not in serialized_spans for marker in markers.values())
         assert "http.request.header." not in serialized_spans
         assert "http.response.header." not in serialized_spans
+        server_span = next(span for span in spans if span.kind == trace.SpanKind.SERVER)
+        assert server_span.attributes is not None
+        assert server_span.attributes["http.target"] == "/private"
     finally:
         observability.shutdown()
 
@@ -678,6 +704,98 @@ def test_second_logging_owner_degrades_and_cannot_disturb_first_owner() -> None:
         owner2.shutdown()
         logger.setLevel(original_level)
         logger.propagate = original_propagate
+
+
+def test_shutdown_preserves_process_wide_background_task_patch_for_other_app() -> None:
+    external_app = _app()
+    external_exporter = InMemorySpanExporter()
+    external_provider = TracerProvider()
+    external_provider.add_span_processor(SimpleSpanProcessor(external_exporter))
+    background_events: list[str] = []
+
+    @external_app.get("/background")
+    async def background(background_tasks: BackgroundTasks) -> dict[str, bool]:
+        background_tasks.add_task(background_events.append, "ran")
+        return {"ok": True}
+
+    owned_app = _app()
+    owner = Observability()
+    settings = Settings(OTEL_ENABLED=True, OTEL_GCP_PROJECT_ID="test-project")
+    original_background_call = BackgroundTask.__call__
+
+    FastAPIInstrumentor.instrument_app(
+        external_app,
+        tracer_provider=external_provider,
+        http_capture_headers_server_request=[r"(?!)"],
+        http_capture_headers_server_response=[r"(?!)"],
+    )
+    patched_background_call = BackgroundTask.__call__
+    assert patched_background_call is not original_background_call
+
+    try:
+        owner.initialize(owned_app, settings, lambda _: InMemorySpanExporter())
+        assert owner._instrumented is True
+        assert BackgroundTask.__call__ is patched_background_call
+
+        owner.shutdown()
+        assert owner._instrumented is False
+        assert BackgroundTask.__call__ is patched_background_call
+
+        with TestClient(external_app) as client:
+            assert client.get("/background").status_code == 200
+        assert background_events == ["ran"]
+        external_provider.force_flush()
+        span_names = {span.name for span in external_exporter.get_finished_spans()}
+        assert "GET /background" in span_names
+        assert "BackgroundTask append" in span_names
+    finally:
+        owner.shutdown()
+        FastAPIInstrumentor.uninstrument_app(external_app)
+        external_provider.shutdown()
+        assert BackgroundTask.__call__ is original_background_call
+
+
+def test_auth_startup_failure_does_not_claim_observability_and_retry_is_clean(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app import main as main_module
+
+    app = main_module.app
+    observability = Observability()
+    exporter = InMemorySpanExporter()
+    monkeypatch.setattr(main_module, "observability", observability)
+    monkeypatch.setattr(settings, "OTEL_ENABLED", True)
+    monkeypatch.setattr(settings, "OTEL_GCP_PROJECT_ID", "test-project")
+    monkeypatch.setattr(settings, "INTERNAL_ENGINE_SERVICE_TOKEN", None)
+    monkeypatch.setattr(observability_module, "_google_exporter", lambda _: exporter)
+
+    with pytest.raises(RuntimeError, match="INTERNAL_ENGINE_SERVICE_TOKEN"):
+        with TestClient(app):
+            pass
+
+    assert observability._provider is None
+    assert observability._processor is None
+    assert observability._instrumented is False
+    assert observability._logging_handler is None
+
+    monkeypatch.setattr(
+        settings,
+        "INTERNAL_ENGINE_SERVICE_TOKEN",
+        "test-internal-engine-service-token-0000000000000000000000000000000000",
+    )
+    with TestClient(app) as client:
+        assert client.get("/").status_code == 200
+
+    assert observability._provider is None
+    assert observability._processor is None
+    assert observability._instrumented is False
+    assert observability._logging_handler is None
+    server_spans = [
+        span for span in exporter.get_finished_spans()
+        if span.kind == trace.SpanKind.SERVER
+    ]
+    assert len(server_spans) == 1
+    assert server_spans[0].name == "GET /"
 
 
 def test_fastapi_instrumentation_does_not_claim_pre_instrumented_app() -> None:

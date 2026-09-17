@@ -29,13 +29,13 @@ app.include_router(internal_auth.router)
 
 
 @app.on_event("startup")
-async def initialize_observability() -> None:
-    observability.initialize(app)
+async def validate_internal_service_auth_configuration() -> None:
+    get_internal_engine_service_token()
 
 
 @app.on_event("startup")
-async def validate_internal_service_auth_configuration() -> None:
-    get_internal_engine_service_token()
+async def initialize_observability() -> None:
+    observability.initialize(app)
 
 
 @app.on_event("shutdown")

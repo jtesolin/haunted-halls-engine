@@ -7,7 +7,7 @@ import logging
 import os
 import sys
 import traceback
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
 from typing import Any
 
@@ -17,12 +17,17 @@ from fastapi import FastAPI
 from google.auth.transport.grpc import AuthMetadataPlugin
 from google.auth.transport.requests import Request
 from opentelemetry import trace
+from opentelemetry.trace import Span
 from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
-from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+from opentelemetry.instrumentation.fastapi import (
+    FastAPIInstrumentor,
+    _InstrumentedFastAPI,
+)
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor, SpanExporter
 from opentelemetry.sdk.trace.sampling import ParentBased, TraceIdRatioBased
+from starlette.background import BackgroundTask
 
 from app.core.config import Settings, settings
 
@@ -31,6 +36,21 @@ ExporterFactory = Callable[[Settings], SpanExporter]
 _LOGGER_NAME = "app"
 _MAX_STACK_TRACE_CHARS = 8000
 _STACK_TRACE_TRUNCATION_MARKER = "...[truncated]"
+_REDACTED_SPAN_ATTRIBUTE_VALUE = "[redacted]"
+_HTTP_SPAN_ATTRIBUTES_WITH_SENSITIVE_REQUEST_VALUES = frozenset(
+    {
+        "url.query",
+        "url.full",
+        "http.target",
+        "http.url",
+        "http.user_agent",
+        "user_agent.original",
+        "http.client_ip",
+        "client.address",
+        "network.peer.address",
+        "net.peer.ip",
+    }
+)
 
 
 class _JsonFormatter(logging.Formatter):
@@ -141,6 +161,70 @@ def _google_exporter(settings_: Settings) -> SpanExporter:
     )
 
 
+def _sanitized_http_target(scope: Mapping[str, Any]) -> str:
+    path = scope.get("path")
+    return path if isinstance(path, str) and path else _REDACTED_SPAN_ATTRIBUTE_VALUE
+
+
+def _sanitized_http_url(scope: Mapping[str, Any]) -> str:
+    scheme = scope.get("scheme")
+    server = scope.get("server")
+    path = _sanitized_http_target(scope)
+    if (
+        isinstance(scheme, str)
+        and isinstance(server, tuple)
+        and len(server) >= 1
+        and isinstance(server[0], str)
+    ):
+        host = server[0]
+        return f"{scheme}://{host}{path}"
+    return path
+
+
+def _sanitize_server_request_span(span: Span, scope: Mapping[str, Any]) -> None:
+    """Overwrite sensitive built-in HTTP request values before span export."""
+    if not span.is_recording():
+        return
+
+    attributes = getattr(span, "attributes", None)
+    keys_to_sanitize = (
+        _HTTP_SPAN_ATTRIBUTES_WITH_SENSITIVE_REQUEST_VALUES
+        if not isinstance(attributes, Mapping)
+        else _HTTP_SPAN_ATTRIBUTES_WITH_SENSITIVE_REQUEST_VALUES.intersection(
+            attributes.keys()
+        )
+    )
+    for key in keys_to_sanitize:
+        if key == "http.target":
+            span.set_attribute(key, _sanitized_http_target(scope))
+        elif key in {"http.url", "url.full"}:
+            span.set_attribute(key, _sanitized_http_url(scope))
+        elif key == "url.query":
+            span.set_attribute(key, "")
+        else:
+            span.set_attribute(key, _REDACTED_SPAN_ATTRIBUTE_VALUE)
+
+
+def _uninstrument_owned_fastapi_app(app: FastAPI) -> None:
+    """Release this app without reverting process-wide FastAPI patches still in use."""
+    original_build_middleware_stack = getattr(
+        app, "_original_build_middleware_stack", None
+    )
+    if original_build_middleware_stack:
+        app.build_middleware_stack = original_build_middleware_stack
+        delattr(app, "_original_build_middleware_stack")
+    app._is_instrumented_by_opentelemetry = False  # type: ignore[attr-defined]
+    _InstrumentedFastAPI._instrumented_fastapi_apps.discard(app)
+
+    if not _InstrumentedFastAPI._instrumented_fastapi_apps and hasattr(
+        BackgroundTask, "_otel_original_call"
+    ):
+        BackgroundTask.__call__ = BackgroundTask._otel_original_call  # type: ignore[attr-defined,method-assign]
+        del BackgroundTask._otel_original_call  # type: ignore[attr-defined]
+
+    app.middleware_stack = None
+
+
 class Observability:
     """Own the engine trace provider, processor, exporter, and instrumentation.
 
@@ -203,7 +287,11 @@ class Observability:
             FastAPIInstrumentor.instrument_app(
                 app,
                 tracer_provider=self._provider,
-                excluded_urls=r".*/health(?:/.*)?$",
+                excluded_urls=(
+                    r"^https?://[^/]+/health(?:/.*)?(?:\?.*)?$"
+                    r"|^/health(?:/.*)?(?:\?.*)?$"
+                ),
+                server_request_hook=_sanitize_server_request_span,
                 # Empty lists fall back to ambient OTel env vars; match no headers instead.
                 http_capture_headers_server_request=[r"(?!)"],
                 http_capture_headers_server_response=[r"(?!)"],
@@ -235,7 +323,7 @@ class Observability:
         the sole owner.
         """
         if self._instrumented and self._app is not None:
-            FastAPIInstrumentor.uninstrument_app(self._app)
+            _uninstrument_owned_fastapi_app(self._app)
         if self._provider is not None:
             self._provider.shutdown()
         if self._logging_handler is not None:
