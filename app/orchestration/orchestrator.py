@@ -27,6 +27,7 @@ from app.game.campaign_state import (
     validate_persisted_campaign_state_json,
 )
 from app.game.narrator_scene import build_narrator_scene_context
+from app.game.story import apply_story_signal, derive_story_signal
 from app.guardrails.input_validation import validate_chat_request
 from app.guardrails.limit_errors import usage_limit_error
 from app.guardrails.model_policy import ModelPolicy
@@ -542,6 +543,23 @@ class ChatOrchestrator:
                         turn_id=player_turn_id,
                         type="game_state_updated",
                         payload=GameStateUpdatedPayload(state=updated_state),
+                    )
+                    campaign_state = memory_service.build_campaign_state(
+                        owner_user_id=owner_user_id, campaign_id=campaign_id
+                    )
+
+            story_signal = derive_story_signal(parsed_action, tool_result)
+            if story_signal is not None:
+                story_state = updated_state
+                story_result = apply_story_signal(story_state, story_signal)
+                if story_result.changed:
+                    db.update_campaign_state(campaign_id, story_state)
+                    db.add_event(
+                        event_id=f"evt_{uuid4().hex}",
+                        campaign_id=campaign_id,
+                        turn_id=player_turn_id,
+                        type="game_state_updated",
+                        payload=GameStateUpdatedPayload(state=story_state),
                     )
                     campaign_state = memory_service.build_campaign_state(
                         owner_user_id=owner_user_id, campaign_id=campaign_id

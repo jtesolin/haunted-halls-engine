@@ -496,6 +496,24 @@ then acquire the `old_book`.
 `ChatOrchestrator.handle_chat()` or expand the Director contract; that
 integration is deferred to a later Phase 8 milestone.
 
+### 8D1 — Deterministic Story Progression Seam
+
+**Status: Implemented in the first slice**
+
+The first deterministic 8D slice adds the authority-ordered seam between
+successful player-tool execution and the Director step. `derive_story_signal()`
+in `app/game/story.py` converts authoritative `ToolExecutionResult` outcomes
+into typed `StorySignal` values (`room_entered`, `npc_spoken_to`,
+`item_acquired`), and `ChatOrchestrator.handle_chat()` now applies the
+resulting progression immediately after the authoritative ToolExecutor state
+update and before the Director runs. The progression is persisted through the
+existing `game_state_updated` path, reloaded through the memory-service state
+boundary, and remains idempotent because `apply_story_signal()` is already the
+authoritative replay guard.
+
+This 8D1 slice intentionally excludes Director context expansion, Narrator
+story-context expansion, ability/check resolution, and any broader 8D2+ scope.
+
 ## Phase 8B — Character Progression Model
 
 **Status: Complete**
