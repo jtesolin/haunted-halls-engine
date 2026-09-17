@@ -17,6 +17,7 @@ from app.main import app
 from app.orchestration import orchestrator as orchestrator_module
 from app.orchestration.orchestrator import ChatOrchestrator
 from app.schemas.chat import ActionType, ChatRequest, ParsedAction, ToolExecutionResult
+from app.schemas.story import NpcSpokenToSignal
 
 
 @pytest.fixture(autouse=True)
@@ -573,24 +574,39 @@ def test_talk_with_empty_state_delta_persists_story_progress_and_reloads_on_late
 
 def test_non_advancing_signal_does_not_write_a_story_only_state_update(monkeypatch) -> None:
     _enable_provider(monkeypatch)
+    derived_signals = []
 
     async def fake_parse(**kwargs):
-        return ParsedAction(raw_text="observe the room", action=ActionType.OBSERVE, confidence=1.0, parse_status="ok")
+        return ParsedAction(
+            raw_text="talk to the ghost",
+            action=ActionType.TALK,
+            target="library_ghost",
+            confidence=1.0,
+            parse_status="ok",
+        )
 
     def fake_tool_execute(self, *, parsed_action, campaign_state):
         state = _story_state(objective_1="active")
         tool_result = ToolExecutionResult(
             success=True,
-            applied_tools=["observe"],
-            summary="You survey the room.",
+            applied_tools=["talk_to_npc"],
+            summary="You speak to the ghost.",
             state_delta={},
-            current_location="entry_hall",
+            npc_id="library_ghost",
         )
         return state, tool_result
 
+    original_derive_story_signal = orchestrator_module.derive_story_signal
+
+    def capture_story_signal(tool_result):
+        signal = original_derive_story_signal(tool_result)
+        derived_signals.append(signal)
+        return signal
+
     monkeypatch.setattr(orchestrator_module.orchestrator.action_parser_agent, "parse", fake_parse)
     monkeypatch.setattr(orchestrator_module.ToolExecutor, "execute", fake_tool_execute)
-    monkeypatch.setattr(orchestrator_module.orchestrator.narrator_agent, "generate", lambda **kwargs: _async_stub_narrator_reply("You survey the room."))
+    monkeypatch.setattr(orchestrator_module, "derive_story_signal", capture_story_signal)
+    monkeypatch.setattr(orchestrator_module.orchestrator.narrator_agent, "generate", lambda **kwargs: _async_stub_narrator_reply("You speak to the ghost."))
     monkeypatch.setattr(orchestrator_module.orchestrator.director_agent, "propose", _stub_director_response)
 
     client = TestClient(app)
@@ -611,6 +627,7 @@ def test_non_advancing_signal_does_not_write_a_story_only_state_update(monkeypat
         assert state["story"]["quests"]["librarys_whisper"]["objectives"]["enter_library"] == "active"
         events = db.list_campaign_events(response.campaign_id)
         assert not any(event.type == "game_state_updated" for event in events)
+    assert derived_signals == [NpcSpokenToSignal(npc_id="library_ghost")]
 
 
 def test_completed_idempotent_replay_does_not_call_story_progression_again(monkeypatch) -> None:

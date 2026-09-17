@@ -488,7 +488,6 @@ class ChatOrchestrator:
                 ),
             )
 
-            updated_state = load_authoritative_campaign_state(campaign_state)
             tool_result = ToolExecutionResult(
                 success=False,
                 summary="Action parse status was not executable.",
@@ -535,6 +534,21 @@ class ChatOrchestrator:
                             reason=tool_result.summary,
                         ),
                     )
+            else:
+                try:
+                    updated_state = load_authoritative_campaign_state(campaign_state)
+                except InvalidCampaignStateError as exc:
+                    logger.error(
+                        "campaign_state_integrity_failure owner_user_id=%s campaign_id=%s turn_id=%s error_type=%s",
+                        owner_user_id,
+                        campaign_id,
+                        player_turn_id,
+                        type(exc).__name__,
+                    )
+                    raise HTTPException(
+                        status_code=500,
+                        detail="Campaign state could not be processed.",
+                    ) from exc
 
             story_signal = derive_story_signal(tool_result)
             story_result = None
