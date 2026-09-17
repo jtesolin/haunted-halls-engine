@@ -973,9 +973,15 @@ Canonical frontend: `https://haunted-halls.tesolin.us`
 
 ### D7 — Operability/observability
 
-**Status: Future infrastructure roadmap item**
+**Status: Active — D7A engine OpenTelemetry foundation implemented**
 
-D7 remains planned. Detailed subphases will be defined when this work becomes active.
+D7A adds disabled-by-default, provider-free-tested OpenTelemetry FastAPI request
+tracing with parent-aware sampling, W3C propagation, direct OTLP/gRPC Google
+Cloud Telemetry API export capability using ADC, and stdout/stderr structured
+logs correlated to active traces without OTLP log duplication. Production
+Google activation (Telemetry API, runtime IAM, and Cloud Run settings) remains
+pending. BFF propagation and internal agent/persistence spans are deferred to
+D7B/D7C; dashboards and operational tuning are deferred to D7D.
 
 ## Explicit Deferrals
 
