@@ -993,9 +993,41 @@ Canonical frontend: `https://haunted-halls.tesolin.us`
 
 ### D7 — Operability/observability
 
-**Status: Future infrastructure roadmap item**
+**Status: Active — D7A engine OpenTelemetry foundation implemented**
 
-D7 remains planned. Detailed subphases will be defined when this work becomes active.
+D7A adds disabled-by-default, provider-free-tested OpenTelemetry FastAPI request
+tracing with parent-aware sampling, W3C propagation, direct OTLP/gRPC Google
+Cloud Telemetry API export capability using ADC, and stdout/stderr structured
+logs correlated to active traces without OTLP log duplication. Production
+Google activation (Telemetry API, runtime IAM, and Cloud Run settings) remains
+pending. D7A review hardening makes disabled initialization a logging/tracing
+no-op, prevents ambient OTel settings from enabling HTTP header capture, and
+wires the configured Google project into ADC quota-project support. A
+subsequent ownership-safety pass trims/validates `OTEL_GCP_PROJECT_ID` and
+makes logging and FastAPI-instrumentation ownership single-owner: a second
+overlapping `Observability` instance, or an already-instrumented app, degrades
+to disabled telemetry instead of sharing or later tearing down state owned by
+another instance. Isolated, no-network regressions cover log
+correlation/message preservation, real root and remote-parent sampling, secure
+exporter construction, HTTP metadata, one server span per request after
+repeated initialization, and overlapping-owner degradation for both logging
+and instrumentation.
+A further lifecycle-safety pass hardens D7A against partial-failure and
+concurrency edge cases: built-in HTTP span attributes that could otherwise
+carry raw request-path identifiers (`http.target`, `http.url`, `url.full`,
+`url.path`) are always redacted rather than rebuilt from the raw ASGI scope
+path, while the low-cardinality `http.route` template is preserved; a
+FastAPI-instrumentation failure that partially mutates the app before raising
+is detected from the app's own instrumentation marker (not only a
+success-only flag) and rolled back through the supported public
+`uninstrument_app` API so the same app can be retried; teardown of the
+FastAPI instrumentation, tracer provider/exporter, and owned logger handler
+are each attempted independently so one step's failure does not skip the
+others or leave ownership fields/logger state stuck; and the single-owner
+check-and-claim lifecycle is now serialized by a small process-local lock so
+two concurrent same-process `initialize()` calls cannot both claim ownership.
+BFF propagation and internal agent/persistence spans are deferred to
+D7B/D7C; dashboards and operational tuning are deferred to D7D.
 
 ## Explicit Deferrals
 
@@ -1010,7 +1042,7 @@ The following remain explicitly deferred and are kept out of the completed Phase
 * Narrator output validation and retry framework.
 * Cross-browser and visual-regression E2E expansion.
 * Production E2E testing against live Google OAuth or live OpenAI endpoints.
-* Unrelated infrastructure and observability work (D7).
+* Remaining D7 observability slices and production activation beyond D7A.
 
 # Architectural Principles
 

@@ -1,5 +1,6 @@
 from typing import Literal, Optional
 
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings
 
 
@@ -18,6 +19,23 @@ class Settings(BaseSettings):
     MCP_SERVER_ARGS: list[str] = []
     MCP_SERVER_CWD: Optional[str] = None
     MCP_REQUEST_TIMEOUT_MS: int = 2000
+
+    OTEL_ENABLED: bool = False
+    OTEL_SERVICE_NAME: str = "haunted-halls-engine"
+    OTEL_SERVICE_VERSION: Optional[str] = None
+    OTEL_DEPLOYMENT_ENVIRONMENT: Optional[str] = None
+    OTEL_TRACES_SAMPLE_RATIO: float = Field(default=1.0, ge=0.0, le=1.0)
+    OTEL_EXPORTER_OTLP_ENDPOINT: str = "telemetry.googleapis.com:443"
+    OTEL_GCP_PROJECT_ID: Optional[str] = None
+
+    @field_validator("OTEL_GCP_PROJECT_ID")
+    @classmethod
+    def _normalize_otel_gcp_project_id(cls, value: Optional[str]) -> Optional[str]:
+        """Trim surrounding whitespace; whitespace-only input becomes unset."""
+        if value is None:
+            return value
+        stripped = value.strip()
+        return stripped or None
 
     MAX_INPUT_CHARACTERS: int = 2000
     MAX_OUTPUT_TOKENS: int = 500
@@ -38,6 +56,10 @@ class Settings(BaseSettings):
         "env_file": ".env",
         "env_file_encoding": "utf-8",
     }
+
+    def model_post_init(self, __context: object) -> None:
+        if self.OTEL_ENABLED and not self.OTEL_GCP_PROJECT_ID:
+            raise ValueError("OTEL_GCP_PROJECT_ID is required when OTEL_ENABLED is true")
 
 
 settings = Settings()
