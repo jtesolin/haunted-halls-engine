@@ -70,7 +70,8 @@ def _configure_logging(settings_: Settings) -> logging.Handler:
 
 def _google_exporter(settings_: Settings) -> SpanExporter:
     credentials, _ = google.auth.default(
-        scopes=["https://www.googleapis.com/auth/cloud-platform"]
+        scopes=["https://www.googleapis.com/auth/cloud-platform"],
+        quota_project_id=settings_.OTEL_GCP_PROJECT_ID,
     )
     call_credentials = grpc.metadata_call_credentials(
         AuthMetadataPlugin(credentials, Request())
@@ -101,12 +102,10 @@ class Observability:
         settings_: Settings = settings,
         exporter_factory: ExporterFactory | None = None,
     ) -> None:
-        if self._instrumented or self._provider is not None:
+        if not settings_.OTEL_ENABLED or self._instrumented or self._provider is not None:
             return
         self._app = app
         self._logging_handler = _configure_logging(settings_)
-        if not settings_.OTEL_ENABLED:
-            return
 
         attributes: dict[str, str] = {"service.name": settings_.OTEL_SERVICE_NAME}
         optional_attributes = {
@@ -131,6 +130,9 @@ class Observability:
             app,
             tracer_provider=self._provider,
             excluded_urls=r".*/health(?:/.*)?$",
+            # Empty lists fall back to ambient OTel env vars; match no headers instead.
+            http_capture_headers_server_request=[r"(?!)"],
+            http_capture_headers_server_response=[r"(?!)"],
         )
         self._instrumented = True
 

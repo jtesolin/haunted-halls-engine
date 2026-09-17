@@ -980,7 +980,13 @@ tracing with parent-aware sampling, W3C propagation, direct OTLP/gRPC Google
 Cloud Telemetry API export capability using ADC, and stdout/stderr structured
 logs correlated to active traces without OTLP log duplication. Production
 Google activation (Telemetry API, runtime IAM, and Cloud Run settings) remains
-pending. BFF propagation and internal agent/persistence spans are deferred to
+pending. D7A review hardening makes disabled initialization a logging/tracing
+no-op, prevents ambient OTel settings from enabling HTTP header capture, and
+wires the configured Google project into ADC quota-project support. Isolated,
+no-network regressions cover log correlation/message preservation, real root
+and remote-parent sampling, secure exporter construction, HTTP metadata, and
+one server span per request after repeated initialization.
+BFF propagation and internal agent/persistence spans are deferred to
 D7B/D7C; dashboards and operational tuning are deferred to D7D.
 
 ## Explicit Deferrals

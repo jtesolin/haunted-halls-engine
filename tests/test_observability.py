@@ -1,14 +1,17 @@
 import json
 import logging
+from unittest.mock import Mock, patch, sentinel
 
 import pytest
 from fastapi import FastAPI
+from fastapi.responses import JSONResponse
 from fastapi.testclient import TestClient
 from opentelemetry import trace
+from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 from app.core.config import Settings
-from app.core.observability import Observability, _JsonFormatter
+from app.core.observability import Observability, _google_exporter, _JsonFormatter
 
 
 def _app() -> FastAPI:
@@ -29,21 +32,53 @@ def _app() -> FastAPI:
     return app
 
 
-def test_disabled_does_not_construct_exporter_or_instrument() -> None:
+def test_disabled_does_not_construct_exporter_or_instrument(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     app = _app()
     observability = Observability()
-    constructed = False
+    logger = logging.getLogger("app")
+    handler = logging.NullHandler()
+    formatter = logging.Formatter("%(levelname)s: %(message)s")
+    handler.setFormatter(formatter)
+    monkeypatch.setattr(logger, "handlers", [handler])
+    monkeypatch.setattr(logger, "propagate", True)
+    handlers = logger.handlers
+    level = logger.level
+    provider = trace.get_tracer_provider()
+    middleware = list(app.user_middleware)
 
-    def factory(_: Settings) -> InMemorySpanExporter:
-        nonlocal constructed
-        constructed = True
-        return InMemorySpanExporter()
+    with (
+        patch("app.core.observability._configure_logging") as configure_logging,
+        patch("app.core.observability._google_exporter") as google_exporter,
+        patch("app.core.observability.TracerProvider") as create_provider,
+        patch("app.core.observability.FastAPIInstrumentor.instrument_app") as instrument,
+        patch("app.core.observability.FastAPIInstrumentor.uninstrument_app") as uninstrument,
+    ):
+        factory = Mock()
+        settings = Settings(OTEL_ENABLED=False)
+        observability.initialize(app, settings)
+        observability.initialize(app, settings, factory)
+        with TestClient(app) as client:
+            assert client.get("/hello").json() == {"ok": True}
+        observability.shutdown()
+        configure_logging.assert_not_called()
+        google_exporter.assert_not_called()
+        factory.assert_not_called()
+        create_provider.assert_not_called()
+        instrument.assert_not_called()
+        uninstrument.assert_not_called()
 
-    observability.initialize(app, Settings(), factory)
-    with TestClient(app) as client:
-        assert client.get("/hello").json() == {"ok": True}
-    assert not constructed
-    observability.shutdown()
+    assert trace.get_tracer_provider() is provider
+    assert app.user_middleware == middleware
+    assert logger.handlers is handlers
+    assert logger.handlers == [handler]
+    assert handler.formatter is formatter
+    assert logger.level == level
+    assert logger.propagate is True
+    assert observability._app is None
+    assert observability._processor is None
+    assert observability._logging_handler is None
 
 
 @pytest.mark.parametrize("ratio", [0.0, 1.0])
@@ -60,6 +95,106 @@ def test_sample_ratio_out_of_range_is_rejected(ratio: float) -> None:
 def test_enabled_export_requires_project() -> None:
     with pytest.raises(ValueError, match="OTEL_GCP_PROJECT_ID"):
         Settings(OTEL_ENABLED=True)
+
+
+@pytest.mark.parametrize("ratio", [0.0, 1.0])
+@pytest.mark.parametrize("parent_flags", [None, "01", "00"])
+def test_parent_based_sampling_behavior(ratio: float, parent_flags: str | None) -> None:
+    app = _app()
+    exporter = InMemorySpanExporter()
+    observability = Observability()
+    observability.initialize(
+        app,
+        Settings(
+            OTEL_ENABLED=True,
+            OTEL_GCP_PROJECT_ID="test-project",
+            OTEL_TRACES_SAMPLE_RATIO=ratio,
+        ),
+        lambda _: exporter,
+    )
+    trace_id = "0af7651916cd43dd8448eb211c80319c"
+    parent_id = "b7ad6b7169203331"
+    headers = (
+        {"traceparent": f"00-{trace_id}-{parent_id}-{parent_flags}"}
+        if parent_flags is not None
+        else {}
+    )
+    try:
+        with TestClient(app) as client:
+            assert client.get("/hello", headers=headers).status_code == 200
+        assert observability._processor is not None
+        assert observability._processor.force_flush()
+        spans = exporter.get_finished_spans()
+        sampled = ratio == 1.0 if parent_flags is None else parent_flags == "01"
+        if not sampled:
+            assert not spans
+        else:
+            server_spans = [span for span in spans if span.kind == trace.SpanKind.SERVER]
+            assert len(server_spans) == 1
+            span = server_spans[0]
+            assert span.context is not None
+            assert span.context.trace_flags.sampled
+            if parent_flags is None:
+                assert span.parent is None
+            else:
+                assert f"{span.context.trace_id:032x}" == trace_id
+                assert span.parent is not None
+                assert span.parent.is_remote
+                assert f"{span.parent.span_id:016x}" == parent_id
+    finally:
+        observability.shutdown()
+
+
+def test_google_exporter_uses_adc_quota_project_and_secure_grpc() -> None:
+    settings = Settings(
+        OTEL_ENABLED=True,
+        OTEL_GCP_PROJECT_ID="test-quota-project",
+        OTEL_EXPORTER_OTLP_ENDPOINT="configured-telemetry.example:443",
+    )
+    with (
+        patch(
+            "app.core.observability.google.auth.default",
+            return_value=(sentinel.adc_credentials, "different-adc-project"),
+        ) as adc,
+        patch("app.core.observability.Request", return_value=sentinel.request) as request,
+        patch(
+            "app.core.observability.AuthMetadataPlugin",
+            return_value=sentinel.auth_plugin,
+        ) as auth_plugin,
+        patch(
+            "app.core.observability.grpc.metadata_call_credentials",
+            return_value=sentinel.call_credentials,
+        ) as metadata_credentials,
+        patch(
+            "app.core.observability.grpc.ssl_channel_credentials",
+            return_value=sentinel.tls_credentials,
+        ) as tls_credentials,
+        patch(
+            "app.core.observability.grpc.composite_channel_credentials",
+            return_value=sentinel.composite_credentials,
+        ) as composite_credentials,
+        patch(
+            "app.core.observability.OTLPSpanExporter", return_value=sentinel.exporter
+        ) as exporter,
+    ):
+        assert _google_exporter(settings) is sentinel.exporter
+
+    adc.assert_called_once_with(
+        scopes=["https://www.googleapis.com/auth/cloud-platform"],
+        quota_project_id="test-quota-project",
+    )
+    request.assert_called_once_with()
+    auth_plugin.assert_called_once_with(sentinel.adc_credentials, sentinel.request)
+    metadata_credentials.assert_called_once_with(sentinel.auth_plugin)
+    tls_credentials.assert_called_once_with()
+    composite_credentials.assert_called_once_with(
+        sentinel.tls_credentials, sentinel.call_credentials
+    )
+    exporter.assert_called_once_with(
+        endpoint="configured-telemetry.example:443",
+        credentials=sentinel.composite_credentials,
+        insecure=False,
+    )
 
 
 def test_request_spans_health_exclusion_and_w3c_propagation() -> None:
@@ -83,6 +218,12 @@ def test_request_spans_health_exclusion_and_w3c_propagation() -> None:
     spans = exporter.get_finished_spans()
     request_spans = [span for span in spans if span.name == "GET /hello"]
     assert len(request_spans) == 1
+    assert request_spans[0].kind == trace.SpanKind.SERVER
+    attributes = request_spans[0].attributes
+    assert attributes is not None
+    assert attributes["http.method"] == "GET"
+    assert attributes["http.route"] == "/hello"
+    assert attributes["http.status_code"] == 200
     context = request_spans[0].context
     assert context is not None
     assert f"{context.trace_id:032x}" == trace_id
@@ -90,8 +231,38 @@ def test_request_spans_health_exclusion_and_w3c_propagation() -> None:
     observability.shutdown()
 
 
-def test_sensitive_request_values_are_not_recorded() -> None:
+@pytest.mark.parametrize(
+    "capture_headers", [".*", "authorization,cookie,set-cookie,x-private-response"]
+)
+def test_sensitive_request_values_are_not_recorded(
+    monkeypatch: pytest.MonkeyPatch, capture_headers: str,
+) -> None:
+    monkeypatch.setenv(
+        "OTEL_INSTRUMENTATION_HTTP_CAPTURE_HEADERS_SERVER_REQUEST", capture_headers
+    )
+    monkeypatch.setenv(
+        "OTEL_INSTRUMENTATION_HTTP_CAPTURE_HEADERS_SERVER_RESPONSE", capture_headers
+    )
+    monkeypatch.setenv("OTEL_INSTRUMENTATION_HTTP_CAPTURE_HEADERS_SANITIZE_FIELDS", "")
     app = _app()
+    markers = {
+        "body": "distinctive-private-body-marker",
+        "authorization": "distinctive-private-auth-marker",
+        "cookie": "distinctive-private-cookie-marker",
+        "response": "distinctive-private-response-marker",
+        "set_cookie": "distinctive-private-set-cookie-marker",
+    }
+
+    @app.post("/private")
+    async def private_response() -> JSONResponse:
+        return JSONResponse(
+            {"message": markers["body"]},
+            headers={
+                "X-Private-Response": markers["response"],
+                "Set-Cookie": f"session={markers['set_cookie']}",
+            },
+        )
+
     exporter = InMemorySpanExporter()
     observability = Observability()
     observability.initialize(
@@ -99,18 +270,30 @@ def test_sensitive_request_values_are_not_recorded() -> None:
         Settings(OTEL_ENABLED=True, OTEL_GCP_PROJECT_ID="test-project"),
         lambda _: exporter,
     )
-    marker = "distinctive-private-marker"
-    with TestClient(app) as client:
-        assert client.post(
-            "/echo",
-            json={"message": marker},
-            headers={"Authorization": f"Bearer {marker}"},
-        ).status_code == 200
-    assert observability._processor is not None
-    observability._processor.force_flush()
-    serialized_spans = repr(exporter.get_finished_spans())
-    assert marker not in serialized_spans
-    observability.shutdown()
+    try:
+        with TestClient(app) as client:
+            response = client.post(
+                "/private",
+                json={"message": markers["body"]},
+                headers={
+                    "Authorization": f"Bearer {markers['authorization']}",
+                    "Cookie": f"session={markers['cookie']}",
+                },
+            )
+            assert response.status_code == 200
+            assert response.json() == {"message": markers["body"]}
+            assert response.headers["x-private-response"] == markers["response"]
+            assert markers["set_cookie"] in response.headers["set-cookie"]
+        assert observability._processor is not None
+        assert observability._processor.force_flush()
+        spans = exporter.get_finished_spans()
+        assert any(span.kind == trace.SpanKind.SERVER for span in spans)
+        serialized_spans = "\n".join(span.to_json() for span in spans)
+        assert all(marker not in serialized_spans for marker in markers.values())
+        assert "http.request.header." not in serialized_spans
+        assert "http.response.header." not in serialized_spans
+    finally:
+        observability.shutdown()
 
 
 def test_resource_contains_service_name_without_identity() -> None:
@@ -134,18 +317,39 @@ def test_resource_contains_service_name_without_identity() -> None:
 
 def test_structured_logging_correlates_only_inside_span() -> None:
     formatter = _JsonFormatter(Settings(OTEL_GCP_PROJECT_ID="test-project"))
-    outside = json.loads(formatter.format(logging.LogRecord(
-        "app.test", 20, "", 0, "outside", (), None
-    )))
-    assert "logging.googleapis.com/trace" not in outside
-    tracer = trace.get_tracer("test")
-    with tracer.start_as_current_span("test-span"):
-        inside = json.loads(formatter.format(logging.LogRecord(
-            "app.test", 20, "", 0, "inside", (), None
-        )))
-    assert inside["logging.googleapis.com/spanId"]
-    assert inside["logging.googleapis.com/trace"].startswith("projects/test-project/")
-    assert "logging.googleapis.com/trace_sampled" in inside
+    record = logging.LogRecord(
+        "app.test", logging.INFO, "", 0, "existing message %s", ("unchanged",), None
+    )
+    record.__dict__["private_extra"] = "distinctive-private-log-extra"
+    base_keys = {"severity", "message", "logger", "timestamp"}
+    provider = TracerProvider()
+    try:
+        tracer = provider.get_tracer("test")
+        with trace.use_span(trace.INVALID_SPAN):
+            outside = json.loads(formatter.format(record))
+            assert set(outside) == base_keys
+            with tracer.start_as_current_span("test-span") as span:
+                inside = json.loads(formatter.format(record))
+                context = span.get_span_context()
+            after = json.loads(formatter.format(record))
+        assert set(after) == base_keys
+        assert set(inside) == base_keys | {
+            "logging.googleapis.com/spanId",
+            "logging.googleapis.com/trace",
+            "logging.googleapis.com/trace_sampled",
+        }
+        assert inside["logging.googleapis.com/spanId"] == f"{context.span_id:016x}"
+        assert inside["logging.googleapis.com/trace"] == (
+            f"projects/test-project/traces/{context.trace_id:032x}"
+        )
+        assert inside["logging.googleapis.com/trace_sampled"] is True
+        for payload in (outside, inside, after):
+            assert payload["message"] == "existing message unchanged"
+            assert payload["severity"] == "INFO"
+            assert payload["logger"] == "app.test"
+            assert "distinctive-private-log-extra" not in json.dumps(payload)
+    finally:
+        provider.shutdown()
 
 
 def test_exporter_failure_does_not_fail_request() -> None:
@@ -188,11 +392,27 @@ def test_initialization_is_idempotent() -> None:
     observability = Observability()
     exporter = InMemorySpanExporter()
     settings = Settings(OTEL_ENABLED=True, OTEL_GCP_PROJECT_ID="test-project")
-    observability.initialize(app, settings, lambda _: exporter)
+    factory = Mock(return_value=exporter)
+    observability.initialize(app, settings, factory)
     processor = observability._processor
-    observability.initialize(app, settings, lambda _: exporter)
+    observability.initialize(app, settings, factory)
+    factory.assert_called_once_with(settings)
     assert observability._processor is processor
     assert len([h for h in logging.getLogger("app").handlers if getattr(
         h, "_haunted_halls_observability", False
     )]) == 1
-    observability.shutdown()
+    try:
+        with TestClient(app) as client:
+            for expected_count in (1, 2):
+                assert client.get("/hello").status_code == 200
+                assert processor is not None
+                assert processor.force_flush()
+                server_spans = [
+                    span for span in exporter.get_finished_spans()
+                    if span.kind == trace.SpanKind.SERVER
+                ]
+                assert len(server_spans) == expected_count
+                assert all(span.name == "GET /hello" for span in server_spans)
+        assert server_spans[0].context != server_spans[1].context
+    finally:
+        observability.shutdown()
