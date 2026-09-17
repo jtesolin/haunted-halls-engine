@@ -20,10 +20,10 @@ def build_director_input(
     *,
     parsed_action: ParsedAction,
     tool_result: ToolExecutionResult,
-    world: World | None = DEFAULT_WORLD,
+    world: World = DEFAULT_WORLD,
 ) -> DirectorInput:
     """Build a deterministic, non-mutating Director projection."""
-    active_world = world if world is not None else DEFAULT_WORLD
+    active_world = world
     if not isinstance(state, dict):
         raise InvalidDirectorContextError("Authoritative campaign state is malformed.")
 

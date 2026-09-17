@@ -67,6 +67,20 @@ def test_derive_story_signal_ignores_failed_or_uncertain_results() -> None:
     )
 
 
+def test_drop_does_not_produce_item_acquired_signal() -> None:
+    assert (
+        derive_story_signal(
+            ToolExecutionResult(
+                success=True,
+                applied_tools=["drop_item"],
+                summary="You drop the old book.",
+                item_id="old_book",
+            )
+        )
+        is None
+    )
+
+
 def test_story_progression_is_idempotent_for_duplicate_matches() -> None:
     state = {
         "player": {"location": "entry_hall", "inventory": []},
