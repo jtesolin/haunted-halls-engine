@@ -98,6 +98,18 @@ def test_enabled_export_requires_project() -> None:
         Settings(OTEL_ENABLED=True)
 
 
+def test_otel_gcp_project_id_trims_surrounding_whitespace() -> None:
+    assert Settings(OTEL_GCP_PROJECT_ID="  test-project  ").OTEL_GCP_PROJECT_ID == (
+        "test-project"
+    )
+
+
+@pytest.mark.parametrize("project_id", ["", "   ", "\t\n"])
+def test_enabled_export_rejects_whitespace_only_project(project_id: str) -> None:
+    with pytest.raises(ValueError, match="OTEL_GCP_PROJECT_ID"):
+        Settings(OTEL_ENABLED=True, OTEL_GCP_PROJECT_ID=project_id)
+
+
 @pytest.mark.parametrize("ratio", [0.0, 1.0])
 @pytest.mark.parametrize("parent_flags", [None, "01", "00"])
 def test_parent_based_sampling_behavior(ratio: float, parent_flags: str | None) -> None:
@@ -614,3 +626,121 @@ def test_log_without_exc_info_omits_exception_fields() -> None:
     assert "exception.type" not in payload
     assert "exception.message" not in payload
     assert "stack_trace" not in payload
+
+
+def test_second_logging_owner_degrades_and_cannot_disturb_first_owner() -> None:
+    """A second overlapping Observability instance must not claim, mutate, or
+    later release the first instance's active D7A logging handler/state."""
+    logger = logging.getLogger("app")
+    logger.disabled = False
+    original_level = logger.level
+    original_propagate = logger.propagate
+    original_handlers = list(logger.handlers)
+
+    owner1 = Observability()
+    owner2 = Observability()
+    settings = Settings(OTEL_ENABLED=True, OTEL_GCP_PROJECT_ID="test-project")
+
+    try:
+        owner1.initialize(_app(), settings, lambda _: InMemorySpanExporter())
+        assert owner1._logging_handler is not None
+        assert owner1._instrumented is True
+        owner1_handler = owner1._logging_handler
+        level_after_owner1 = logger.level
+        propagate_after_owner1 = logger.propagate
+        handlers_after_owner1 = list(logger.handlers)
+
+        # A second instance targeting a distinct app must degrade to disabled
+        # rather than sharing or claiming the already-active handler.
+        owner2.initialize(_app(), settings, lambda _: InMemorySpanExporter())
+        assert owner2._logging_handler is None
+        assert owner2._instrumented is False
+        assert owner2._provider is None
+        assert logger.handlers == handlers_after_owner1
+        assert logger.level == level_after_owner1
+        assert logger.propagate == propagate_after_owner1
+
+        # Shutting down the degraded second instance must not disturb the
+        # first owner's handler or logger state at all.
+        owner2.shutdown()
+        assert logger.handlers == handlers_after_owner1
+        assert owner1_handler in logger.handlers
+        assert logger.level == level_after_owner1
+        assert logger.propagate == propagate_after_owner1
+
+        owner1.shutdown()
+        assert owner1._logging_handler is None
+        assert logger.level == original_level
+        assert logger.propagate == original_propagate
+        assert logger.handlers == original_handlers
+    finally:
+        owner1.shutdown()
+        owner2.shutdown()
+        logger.setLevel(original_level)
+        logger.propagate = original_propagate
+
+
+def test_fastapi_instrumentation_does_not_claim_pre_instrumented_app() -> None:
+    """D7A must not claim ownership of, or later uninstrument, FastAPI
+    instrumentation that already exists on the app before initialize()."""
+    app = _app()
+    prior_middleware = list(app.user_middleware)
+
+    # Simulate pre-existing instrumentation (e.g. auto-instrumentation or a
+    # prior owner) without invoking real OTel instrumentation machinery.
+    app._is_instrumented_by_opentelemetry = True  # type: ignore[attr-defined]
+
+    observability = Observability()
+    settings = Settings(OTEL_ENABLED=True, OTEL_GCP_PROJECT_ID="test-project")
+
+    with patch(
+        "app.core.observability.FastAPIInstrumentor.instrument_app"
+    ) as instrument, patch(
+        "app.core.observability.FastAPIInstrumentor.uninstrument_app"
+    ) as uninstrument:
+        observability.initialize(app, settings, lambda _: InMemorySpanExporter())
+        instrument.assert_not_called()
+
+        assert observability._instrumented is False
+        assert observability._provider is None
+        assert observability._logging_handler is None
+
+        observability.shutdown()
+        uninstrument.assert_not_called()
+
+    assert app.user_middleware == prior_middleware
+    assert app._is_instrumented_by_opentelemetry is True  # type: ignore[attr-defined]
+
+
+def test_overlapping_instrumentation_owners_cannot_uninstrument_each_other() -> None:
+    """Two Observability instances targeting the same app: only the first
+    claims ownership; the second's shutdown must not uninstrument the app."""
+    app = _app()
+    owner1 = Observability()
+    owner2 = Observability()
+    settings = Settings(OTEL_ENABLED=True, OTEL_GCP_PROJECT_ID="test-project")
+
+    try:
+        owner1.initialize(app, settings, lambda _: InMemorySpanExporter())
+        assert owner1._instrumented is True
+        assert app._is_instrumented_by_opentelemetry is True  # type: ignore[attr-defined]
+
+        owner2.initialize(app, settings, lambda _: InMemorySpanExporter())
+        assert owner2._instrumented is False
+        assert owner2._provider is None
+        assert owner2._logging_handler is None
+        # Owner1's instrumentation must remain intact.
+        assert app._is_instrumented_by_opentelemetry is True  # type: ignore[attr-defined]
+
+        with patch(
+            "app.core.observability.FastAPIInstrumentor.uninstrument_app"
+        ) as uninstrument:
+            owner2.shutdown()
+            uninstrument.assert_not_called()
+
+        assert app._is_instrumented_by_opentelemetry is True  # type: ignore[attr-defined]
+        with TestClient(app) as client:
+            assert client.get("/hello").status_code == 200
+    finally:
+        owner1.shutdown()
+        owner2.shutdown()

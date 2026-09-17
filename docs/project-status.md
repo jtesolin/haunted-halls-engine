@@ -982,10 +982,16 @@ logs correlated to active traces without OTLP log duplication. Production
 Google activation (Telemetry API, runtime IAM, and Cloud Run settings) remains
 pending. D7A review hardening makes disabled initialization a logging/tracing
 no-op, prevents ambient OTel settings from enabling HTTP header capture, and
-wires the configured Google project into ADC quota-project support. Isolated,
-no-network regressions cover log correlation/message preservation, real root
-and remote-parent sampling, secure exporter construction, HTTP metadata, and
-one server span per request after repeated initialization.
+wires the configured Google project into ADC quota-project support. A
+subsequent ownership-safety pass trims/validates `OTEL_GCP_PROJECT_ID` and
+makes logging and FastAPI-instrumentation ownership single-owner: a second
+overlapping `Observability` instance, or an already-instrumented app, degrades
+to disabled telemetry instead of sharing or later tearing down state owned by
+another instance. Isolated, no-network regressions cover log
+correlation/message preservation, real root and remote-parent sampling, secure
+exporter construction, HTTP metadata, one server span per request after
+repeated initialization, and overlapping-owner degradation for both logging
+and instrumentation.
 BFF propagation and internal agent/persistence spans are deferred to
 D7B/D7C; dashboards and operational tuning are deferred to D7D.
 

@@ -73,26 +73,45 @@ class _JsonFormatter(logging.Formatter):
 
 
 class _LoggingConfiguration:
-    """Result of applying (or finding already-applied) D7A logging setup."""
+    """Result of newly applying D7A's owned logging setup.
+
+    Only returned when this call is the sole owner: an already-active D7A
+    handler is never returned here so a second instance cannot later mutate
+    or release state it does not own.
+    """
 
     def __init__(
         self,
         handler: logging.Handler,
-        owns_state: bool,
         prior_level: int,
         prior_propagate: bool,
     ) -> None:
         self.handler = handler
-        self.owns_state = owns_state
         self.prior_level = prior_level
         self.prior_propagate = prior_propagate
 
 
-def _configure_logging(settings_: Settings) -> _LoggingConfiguration:
+def _logging_owned_elsewhere() -> bool:
+    """True if another D7A instance already owns the shared ``app`` logger handler."""
     logger = logging.getLogger(_LOGGER_NAME)
-    for handler in logger.handlers:
-        if getattr(handler, "_haunted_halls_observability", False):
-            return _LoggingConfiguration(handler, False, logger.level, logger.propagate)
+    return any(
+        getattr(handler, "_haunted_halls_observability", False)
+        for handler in logger.handlers
+    )
+
+
+def _fastapi_already_instrumented(app: FastAPI) -> bool:
+    """True if FastAPI instrumentation is already applied, by this process or another owner."""
+    return bool(getattr(app, "_is_instrumented_by_opentelemetry", False))
+
+
+def _configure_logging(settings_: Settings) -> _LoggingConfiguration:
+    """Apply D7A's owned logging setup.
+
+    Callers must first confirm logging is not already owned elsewhere via
+    :func:`_logging_owned_elsewhere`; this function always claims ownership.
+    """
+    logger = logging.getLogger(_LOGGER_NAME)
     prior_level = logger.level
     prior_propagate = logger.propagate
     handler = logging.StreamHandler(sys.stdout)
@@ -101,7 +120,7 @@ def _configure_logging(settings_: Settings) -> _LoggingConfiguration:
     logger.addHandler(handler)
     logger.setLevel(logging.INFO)
     logger.propagate = False
-    return _LoggingConfiguration(handler, True, prior_level, prior_propagate)
+    return _LoggingConfiguration(handler, prior_level, prior_propagate)
 
 
 def _google_exporter(settings_: Settings) -> SpanExporter:
@@ -137,7 +156,6 @@ class Observability:
         self._instrumented = False
         self._app: FastAPI | None = None
         self._logging_handler: logging.Handler | None = None
-        self._owns_logger_state = False
         self._prior_logger_level: int | None = None
         self._prior_logger_propagate: bool | None = None
 
@@ -149,11 +167,16 @@ class Observability:
     ) -> None:
         if not settings_.OTEL_ENABLED or self._instrumented or self._provider is not None:
             return
+        if _logging_owned_elsewhere() or _fastapi_already_instrumented(app):
+            # Another D7A instance (or pre-existing instrumentation) already
+            # owns logging and/or FastAPI instrumentation. D7A is a single-owner
+            # model: degrade this instance to disabled rather than sharing or
+            # later tearing down state it does not own.
+            return
         try:
             self._app = app
             logging_configuration = _configure_logging(settings_)
             self._logging_handler = logging_configuration.handler
-            self._owns_logger_state = logging_configuration.owns_state
             self._prior_logger_level = logging_configuration.prior_level
             self._prior_logger_propagate = logging_configuration.prior_propagate
 
@@ -203,7 +226,14 @@ class Observability:
 
     def _release_owned_state(self) -> None:
         """Undo every resource this instance may have created, in either the
-        normal shutdown path or after a partial-initialization failure."""
+        normal shutdown path or after a partial-initialization failure.
+
+        This only ever releases state this instance itself acquired:
+        ``initialize()`` refuses to claim ownership of logging or FastAPI
+        instrumentation already held elsewhere, so ``self._logging_handler``
+        and ``self._instrumented`` are only ever set when this instance is
+        the sole owner.
+        """
         if self._instrumented and self._app is not None:
             FastAPIInstrumentor.uninstrument_app(self._app)
         if self._provider is not None:
@@ -212,17 +242,15 @@ class Observability:
             logger = logging.getLogger(_LOGGER_NAME)
             logger.removeHandler(self._logging_handler)
             self._logging_handler.close()
-            if self._owns_logger_state:
-                assert self._prior_logger_level is not None
-                assert self._prior_logger_propagate is not None
-                logger.setLevel(self._prior_logger_level)
-                logger.propagate = self._prior_logger_propagate
+            assert self._prior_logger_level is not None
+            assert self._prior_logger_propagate is not None
+            logger.setLevel(self._prior_logger_level)
+            logger.propagate = self._prior_logger_propagate
         self._app = None
         self._processor = None
         self._provider = None
         self._instrumented = False
         self._logging_handler = None
-        self._owns_logger_state = False
         self._prior_logger_level = None
         self._prior_logger_propagate = None
 

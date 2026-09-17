@@ -27,6 +27,14 @@ The resource always contains `service.name=haunted-halls-engine` by default.
 Version, deployment environment, Cloud Run service/revision, and project
 attributes are added only when supplied by configuration or Cloud Run.
 
+D7A uses a simple single-owner model, not reference counting: the first
+`Observability` instance to see an unclaimed `app.*` logging handler and an
+uninstrumented FastAPI app claims both. A second overlapping instance, or an
+app that is already instrumented elsewhere, degrades that instance to
+disabled telemetry instead of sharing or later tearing down state it does not
+own; its `shutdown()` is then a no-op with respect to the other owner's
+handler and instrumentation.
+
 ## Google export
 
 The production exporter is direct OTLP/gRPC to the Google Cloud Telemetry API
