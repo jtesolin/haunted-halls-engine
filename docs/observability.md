@@ -53,7 +53,20 @@ contain Cloud Logging trace, span ID, and sampled correlation fields. Outside a
 trace those fields are omitted. Logs are not exported through OTLP, so Cloud
 Logging does not receive duplicate records. Existing application messages are
 preserved; arbitrary LogRecord extras are not serialized or added to
-correlation metadata.
+correlation metadata. When a log call includes exception information
+(`exc_info=True`), the exception type, message, and a bounded stack trace are
+retained in dedicated structured fields so existing `logger.error(...,
+exc_info=True)` call sites keep useful diagnostics; no other `LogRecord`
+attributes are added.
+
+D7A's privacy contract governs what the new OpenTelemetry span and
+trace-correlation metadata capture: neither ever records request/response
+bodies, headers, gameplay text, prompts, model output, memories, credentials,
+or provider payloads. D7A deliberately does not rewrite, redact, or otherwise
+sanitize the content of pre-existing `app.*` log call sites; those messages
+already exist in Cloud Run stdout/stderr today, and any broad sanitization or
+redesign of that historical logging content is a separate, dedicated slice
+of work.
 
 ## Future boundaries
 

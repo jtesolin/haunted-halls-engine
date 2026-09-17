@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import sys
+import traceback
 from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any
@@ -26,6 +27,10 @@ from opentelemetry.sdk.trace.sampling import ParentBased, TraceIdRatioBased
 from app.core.config import Settings, settings
 
 ExporterFactory = Callable[[Settings], SpanExporter]
+
+_LOGGER_NAME = "app"
+_MAX_STACK_TRACE_CHARS = 8000
+_STACK_TRACE_TRUNCATION_MARKER = "...[truncated]"
 
 
 class _JsonFormatter(logging.Formatter):
@@ -51,21 +56,52 @@ class _JsonFormatter(logging.Formatter):
             payload["logging.googleapis.com/trace_sampled"] = bool(
                 context.trace_flags.sampled
             )
+        if record.exc_info:
+            exc_type, exc_value, _exc_tb = record.exc_info
+            if exc_type is not None:
+                payload["exception.type"] = exc_type.__name__
+            if exc_value is not None:
+                payload["exception.message"] = str(exc_value)
+            stack_trace = "".join(traceback.format_exception(*record.exc_info))
+            if len(stack_trace) > _MAX_STACK_TRACE_CHARS:
+                stack_trace = (
+                    stack_trace[:_MAX_STACK_TRACE_CHARS]
+                    + _STACK_TRACE_TRUNCATION_MARKER
+                )
+            payload["stack_trace"] = stack_trace
         return json.dumps(payload, separators=(",", ":"))
 
 
-def _configure_logging(settings_: Settings) -> logging.Handler:
-    logger = logging.getLogger("app")
+class _LoggingConfiguration:
+    """Result of applying (or finding already-applied) D7A logging setup."""
+
+    def __init__(
+        self,
+        handler: logging.Handler,
+        owns_state: bool,
+        prior_level: int,
+        prior_propagate: bool,
+    ) -> None:
+        self.handler = handler
+        self.owns_state = owns_state
+        self.prior_level = prior_level
+        self.prior_propagate = prior_propagate
+
+
+def _configure_logging(settings_: Settings) -> _LoggingConfiguration:
+    logger = logging.getLogger(_LOGGER_NAME)
     for handler in logger.handlers:
         if getattr(handler, "_haunted_halls_observability", False):
-            return handler
+            return _LoggingConfiguration(handler, False, logger.level, logger.propagate)
+    prior_level = logger.level
+    prior_propagate = logger.propagate
     handler = logging.StreamHandler(sys.stdout)
     handler.setFormatter(_JsonFormatter(settings_))
     handler._haunted_halls_observability = True  # type: ignore[attr-defined]
     logger.addHandler(handler)
     logger.setLevel(logging.INFO)
     logger.propagate = False
-    return handler
+    return _LoggingConfiguration(handler, True, prior_level, prior_propagate)
 
 
 def _google_exporter(settings_: Settings) -> SpanExporter:
@@ -87,14 +123,23 @@ def _google_exporter(settings_: Settings) -> SpanExporter:
 
 
 class Observability:
-    """Own the engine trace provider, processor, exporter, and instrumentation."""
+    """Own the engine trace provider, processor, exporter, and instrumentation.
+
+    D7A keeps FastAPI instrumentation bound to this explicitly owned
+    ``TracerProvider`` instead of the process-global OpenTelemetry provider
+    registry, which is write-once and cannot be safely replaced across
+    ``shutdown()``/``initialize()`` cycles in a single process.
+    """
 
     def __init__(self) -> None:
         self._provider: TracerProvider | None = None
         self._processor: BatchSpanProcessor | None = None
         self._instrumented = False
-        self._logging_handler: logging.Handler | None = None
         self._app: FastAPI | None = None
+        self._logging_handler: logging.Handler | None = None
+        self._owns_logger_state = False
+        self._prior_logger_level: int | None = None
+        self._prior_logger_propagate: bool | None = None
 
     def initialize(
         self,
@@ -104,52 +149,82 @@ class Observability:
     ) -> None:
         if not settings_.OTEL_ENABLED or self._instrumented or self._provider is not None:
             return
-        self._app = app
-        self._logging_handler = _configure_logging(settings_)
+        try:
+            self._app = app
+            logging_configuration = _configure_logging(settings_)
+            self._logging_handler = logging_configuration.handler
+            self._owns_logger_state = logging_configuration.owns_state
+            self._prior_logger_level = logging_configuration.prior_level
+            self._prior_logger_propagate = logging_configuration.prior_propagate
 
-        attributes: dict[str, str] = {"service.name": settings_.OTEL_SERVICE_NAME}
-        optional_attributes = {
-            "service.version": settings_.OTEL_SERVICE_VERSION,
-            "deployment.environment.name": settings_.OTEL_DEPLOYMENT_ENVIRONMENT,
-            "cloud.run.service": os.getenv("K_SERVICE"),
-            "cloud.run.revision": os.getenv("K_REVISION"),
-            "gcp.project_id": settings_.OTEL_GCP_PROJECT_ID,
-        }
-        attributes.update(
-            {key: value for key, value in optional_attributes.items() if value}
-        )
-        self._provider = TracerProvider(
-            resource=Resource.create(attributes),
-            sampler=ParentBased(TraceIdRatioBased(settings_.OTEL_TRACES_SAMPLE_RATIO)),
-        )
-        exporter = (exporter_factory or _google_exporter)(settings_)
-        self._processor = BatchSpanProcessor(exporter)
-        self._provider.add_span_processor(self._processor)
-        trace.set_tracer_provider(self._provider)
-        FastAPIInstrumentor.instrument_app(
-            app,
-            tracer_provider=self._provider,
-            excluded_urls=r".*/health(?:/.*)?$",
-            # Empty lists fall back to ambient OTel env vars; match no headers instead.
-            http_capture_headers_server_request=[r"(?!)"],
-            http_capture_headers_server_response=[r"(?!)"],
-        )
-        self._instrumented = True
+            attributes: dict[str, str] = {"service.name": settings_.OTEL_SERVICE_NAME}
+            optional_attributes = {
+                "service.version": settings_.OTEL_SERVICE_VERSION,
+                "deployment.environment.name": settings_.OTEL_DEPLOYMENT_ENVIRONMENT,
+                "cloud.run.service": os.getenv("K_SERVICE"),
+                "cloud.run.revision": os.getenv("K_REVISION"),
+                "gcp.project_id": settings_.OTEL_GCP_PROJECT_ID,
+            }
+            attributes.update(
+                {key: value for key, value in optional_attributes.items() if value}
+            )
+            self._provider = TracerProvider(
+                resource=Resource.create(attributes),
+                sampler=ParentBased(
+                    TraceIdRatioBased(settings_.OTEL_TRACES_SAMPLE_RATIO)
+                ),
+            )
+            exporter = (exporter_factory or _google_exporter)(settings_)
+            self._processor = BatchSpanProcessor(exporter)
+            self._provider.add_span_processor(self._processor)
+            FastAPIInstrumentor.instrument_app(
+                app,
+                tracer_provider=self._provider,
+                excluded_urls=r".*/health(?:/.*)?$",
+                # Empty lists fall back to ambient OTel env vars; match no headers instead.
+                http_capture_headers_server_request=[r"(?!)"],
+                http_capture_headers_server_response=[r"(?!)"],
+            )
+            # Starlette caches a built middleware stack on the app instance and
+            # only rebuilds it lazily when unset. Force a rebuild so a
+            # reinitialize on a previously (un)instrumented app picks up the
+            # newly patched middleware chain instead of a stale cached one.
+            app.middleware_stack = None
+            self._instrumented = True
+        except Exception:
+            self._release_owned_state()
+            logging.getLogger(_LOGGER_NAME).warning(
+                "Observability initialization failed; continuing without telemetry",
+                exc_info=True,
+            )
 
     def shutdown(self) -> None:
+        self._release_owned_state()
+
+    def _release_owned_state(self) -> None:
+        """Undo every resource this instance may have created, in either the
+        normal shutdown path or after a partial-initialization failure."""
+        if self._instrumented and self._app is not None:
+            FastAPIInstrumentor.uninstrument_app(self._app)
         if self._provider is not None:
             self._provider.shutdown()
-        if self._instrumented:
-            if self._app is not None:
-                FastAPIInstrumentor.uninstrument_app(self._app)
+        if self._logging_handler is not None:
+            logger = logging.getLogger(_LOGGER_NAME)
+            logger.removeHandler(self._logging_handler)
+            self._logging_handler.close()
+            if self._owns_logger_state:
+                assert self._prior_logger_level is not None
+                assert self._prior_logger_propagate is not None
+                logger.setLevel(self._prior_logger_level)
+                logger.propagate = self._prior_logger_propagate
         self._app = None
         self._processor = None
         self._provider = None
         self._instrumented = False
-        if self._logging_handler is not None:
-            logging.getLogger("app").removeHandler(self._logging_handler)
-            self._logging_handler.close()
-            self._logging_handler = None
+        self._logging_handler = None
+        self._owns_logger_state = False
+        self._prior_logger_level = None
+        self._prior_logger_propagate = None
 
 
 observability = Observability()

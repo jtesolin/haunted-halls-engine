@@ -8,6 +8,7 @@ from fastapi.responses import JSONResponse
 from fastapi.testclient import TestClient
 from opentelemetry import trace
 from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import SpanExporter
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 from app.core.config import Settings
@@ -416,3 +417,200 @@ def test_initialization_is_idempotent() -> None:
         assert server_spans[0].context != server_spans[1].context
     finally:
         observability.shutdown()
+
+
+def test_reinitialize_after_shutdown_preserves_trace_log_correlation(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    # Alembic's fileConfig (triggered by the per-test isolated_database fixture)
+    # disables previously registered loggers; re-enable "app" as other tests do.
+    logging.getLogger("app").disabled = False
+    app = FastAPI()
+
+    @app.get("/traced")
+    async def traced() -> dict[str, bool]:
+        logging.getLogger("app").info("traced-request-log")
+        return {"ok": True}
+
+    observability = Observability()
+    settings = Settings(OTEL_ENABLED=True, OTEL_GCP_PROJECT_ID="test-project")
+
+    def run_traced_cycle(exporter: InMemorySpanExporter) -> tuple[str, dict[str, object]]:
+        observability.initialize(app, settings, lambda _: exporter)
+        with TestClient(app) as client:
+            assert client.get("/traced").status_code == 200
+        assert observability._processor is not None
+        observability._processor.force_flush()
+        server_spans = [
+            span for span in exporter.get_finished_spans()
+            if span.kind == trace.SpanKind.SERVER
+        ]
+        assert len(server_spans) == 1
+        captured = capsys.readouterr().out
+        log_line = next(
+            line for line in captured.splitlines() if "traced-request-log" in line
+        )
+        payload = json.loads(log_line)
+        context = server_spans[0].context
+        assert context is not None
+        trace_id = f"{context.trace_id:032x}"
+        return trace_id, payload
+
+    try:
+        trace_id_1, payload_1 = run_traced_cycle(InMemorySpanExporter())
+        assert observability._provider is not None
+        provider_1 = observability._provider
+        observability.shutdown()
+        assert observability._provider is None
+        assert observability._instrumented is False
+
+        trace_id_2, payload_2 = run_traced_cycle(InMemorySpanExporter())
+        assert observability._provider is not None
+        assert observability._provider is not provider_1
+    finally:
+        observability.shutdown()
+
+    assert trace_id_1 != trace_id_2
+    assert payload_1["logging.googleapis.com/trace"] == (
+        f"projects/test-project/traces/{trace_id_1}"
+    )
+    assert payload_2["logging.googleapis.com/trace"] == (
+        f"projects/test-project/traces/{trace_id_2}"
+    )
+    for payload in (payload_1, payload_2):
+        assert payload["logging.googleapis.com/trace_sampled"] is True
+        assert "logging.googleapis.com/spanId" in payload
+
+
+def test_shutdown_restores_prior_logger_level_and_propagation() -> None:
+    logger = logging.getLogger("app")
+    logger.disabled = False
+    original_level = logger.level
+    original_propagate = logger.propagate
+    logger.setLevel(logging.DEBUG)
+    logger.propagate = True
+    try:
+        prior_level = logger.level
+        prior_propagate = logger.propagate
+
+        observability = Observability()
+        observability.initialize(
+            _app(),
+            Settings(OTEL_ENABLED=True, OTEL_GCP_PROJECT_ID="test-project"),
+            lambda _: InMemorySpanExporter(),
+        )
+        assert logger.level == logging.INFO
+        assert logger.propagate is False
+
+        observability.shutdown()
+        assert logger.level == prior_level
+        assert logger.propagate == prior_propagate
+    finally:
+        logger.setLevel(original_level)
+        logger.propagate = original_propagate
+
+
+def test_initialization_failure_is_isolated_and_allows_retry() -> None:
+    app = _app()
+    observability = Observability()
+    settings = Settings(OTEL_ENABLED=True, OTEL_GCP_PROJECT_ID="test-project")
+    logger = logging.getLogger("app")
+    logger.disabled = False
+    prior_level = logger.level
+    prior_propagate = logger.propagate
+    prior_handlers = list(logger.handlers)
+
+    def failing_factory(_: Settings) -> SpanExporter:
+        raise RuntimeError("simulated ADC/exporter failure")
+
+    observability.initialize(app, settings, failing_factory)
+
+    assert observability._provider is None
+    assert observability._processor is None
+    assert observability._instrumented is False
+    assert observability._logging_handler is None
+    assert logger.level == prior_level
+    assert logger.propagate == prior_propagate
+    assert logger.handlers == prior_handlers
+
+    with TestClient(app) as client:
+        assert client.get("/hello").status_code == 200
+
+    exporter = InMemorySpanExporter()
+    observability.initialize(app, settings, lambda _: exporter)
+    try:
+        assert observability._provider is not None
+        assert observability._instrumented is True
+        with TestClient(app) as client:
+            assert client.get("/hello").status_code == 200
+        assert observability._processor is not None
+        observability._processor.force_flush()
+        server_spans = [
+            span for span in exporter.get_finished_spans()
+            if span.kind == trace.SpanKind.SERVER
+        ]
+        assert len(server_spans) == 1
+    finally:
+        observability.shutdown()
+
+    assert logger.level == prior_level
+    assert logger.propagate == prior_propagate
+    assert logger.handlers == prior_handlers
+
+
+def test_instrumentation_failure_during_initialize_cleans_up_state() -> None:
+    app = _app()
+    observability = Observability()
+    settings = Settings(OTEL_ENABLED=True, OTEL_GCP_PROJECT_ID="test-project")
+    logger = logging.getLogger("app")
+    logger.disabled = False
+    prior_level = logger.level
+    prior_propagate = logger.propagate
+    prior_handlers = list(logger.handlers)
+
+    with patch(
+        "app.core.observability.FastAPIInstrumentor.instrument_app",
+        side_effect=RuntimeError("simulated instrumentation failure"),
+    ) as instrument, patch(
+        "app.core.observability.FastAPIInstrumentor.uninstrument_app"
+    ) as uninstrument:
+        observability.initialize(app, settings, lambda _: InMemorySpanExporter())
+        instrument.assert_called_once()
+        uninstrument.assert_not_called()
+
+    assert observability._provider is None
+    assert observability._processor is None
+    assert observability._instrumented is False
+    assert observability._app is None
+    assert observability._logging_handler is None
+    assert logger.level == prior_level
+    assert logger.propagate == prior_propagate
+    assert logger.handlers == prior_handlers
+
+
+def test_exception_log_preserves_type_message_and_traceback() -> None:
+    formatter = _JsonFormatter(Settings(OTEL_GCP_PROJECT_ID="test-project"))
+    try:
+        raise ValueError("distinctive-failure-message")
+    except ValueError:
+        import sys
+
+        record = logging.LogRecord(
+            "app.test", logging.ERROR, "", 0, "operation failed", (), sys.exc_info()
+        )
+    payload = json.loads(formatter.format(record))
+    assert payload["exception.type"] == "ValueError"
+    assert payload["exception.message"] == "distinctive-failure-message"
+    assert "ValueError: distinctive-failure-message" in payload["stack_trace"]
+    assert "Traceback" in payload["stack_trace"]
+
+
+def test_log_without_exc_info_omits_exception_fields() -> None:
+    formatter = _JsonFormatter(Settings(OTEL_GCP_PROJECT_ID="test-project"))
+    record = logging.LogRecord(
+        "app.test", logging.INFO, "", 0, "no failure here", (), None
+    )
+    payload = json.loads(formatter.format(record))
+    assert "exception.type" not in payload
+    assert "exception.message" not in payload
+    assert "stack_trace" not in payload
