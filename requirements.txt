@@ -46,10 +46,12 @@ openai==2.44.0
 psycopg[binary]>=3.2,<4
 SQLAlchemy>=2.0,<3
 alembic>=1.17,<2
-opentelemetry-api>=1.30,<2
-opentelemetry-sdk>=1.30,<2
-opentelemetry-instrumentation-fastapi>=0.51b0,<1
-opentelemetry-exporter-otlp-proto-grpc>=1.30,<2
+# Keep the coherent 1.41.1/0.62b1 family until FastAPI instrumentation no
+# longer patches Starlette BackgroundTask process-wide (introduced in 0.63b0).
+opentelemetry-api==1.41.1
+opentelemetry-sdk==1.41.1
+opentelemetry-instrumentation-fastapi==0.62b1
+opentelemetry-exporter-otlp-proto-grpc==1.41.1
 google-auth>=2.30,<3
 grpcio>=1.70,<2
 requests>=2.31,<3

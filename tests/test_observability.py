@@ -3,7 +3,7 @@ import logging
 from unittest.mock import Mock, patch, sentinel
 
 import pytest
-from fastapi import BackgroundTasks, FastAPI
+from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from fastapi.testclient import TestClient
 from opentelemetry import trace
@@ -706,17 +706,11 @@ def test_second_logging_owner_degrades_and_cannot_disturb_first_owner() -> None:
         logger.propagate = original_propagate
 
 
-def test_shutdown_preserves_process_wide_background_task_patch_for_other_app() -> None:
+def test_distinct_fastapi_app_instrumentation_remains_application_local() -> None:
     external_app = _app()
     external_exporter = InMemorySpanExporter()
     external_provider = TracerProvider()
     external_provider.add_span_processor(SimpleSpanProcessor(external_exporter))
-    background_events: list[str] = []
-
-    @external_app.get("/background")
-    async def background(background_tasks: BackgroundTasks) -> dict[str, bool]:
-        background_tasks.add_task(background_events.append, "ran")
-        return {"ok": True}
 
     owned_app = _app()
     owner = Observability()
@@ -729,25 +723,22 @@ def test_shutdown_preserves_process_wide_background_task_patch_for_other_app() -
         http_capture_headers_server_request=[r"(?!)"],
         http_capture_headers_server_response=[r"(?!)"],
     )
-    patched_background_call = BackgroundTask.__call__
-    assert patched_background_call is not original_background_call
+    assert BackgroundTask.__call__ is original_background_call
 
     try:
         owner.initialize(owned_app, settings, lambda _: InMemorySpanExporter())
         assert owner._instrumented is True
-        assert BackgroundTask.__call__ is patched_background_call
+        assert BackgroundTask.__call__ is original_background_call
 
         owner.shutdown()
         assert owner._instrumented is False
-        assert BackgroundTask.__call__ is patched_background_call
+        assert BackgroundTask.__call__ is original_background_call
 
         with TestClient(external_app) as client:
-            assert client.get("/background").status_code == 200
-        assert background_events == ["ran"]
+            assert client.get("/hello").status_code == 200
         external_provider.force_flush()
         span_names = {span.name for span in external_exporter.get_finished_spans()}
-        assert "GET /background" in span_names
-        assert "BackgroundTask append" in span_names
+        assert "GET /hello" in span_names
     finally:
         owner.shutdown()
         FastAPIInstrumentor.uninstrument_app(external_app)

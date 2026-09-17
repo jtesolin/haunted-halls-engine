@@ -19,15 +19,11 @@ from google.auth.transport.requests import Request
 from opentelemetry import trace
 from opentelemetry.trace import Span
 from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
-from opentelemetry.instrumentation.fastapi import (
-    FastAPIInstrumentor,
-    _InstrumentedFastAPI,
-)
+from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor, SpanExporter
 from opentelemetry.sdk.trace.sampling import ParentBased, TraceIdRatioBased
-from starlette.background import BackgroundTask
 
 from app.core.config import Settings, settings
 
@@ -206,23 +202,8 @@ def _sanitize_server_request_span(span: Span, scope: Mapping[str, Any]) -> None:
 
 
 def _uninstrument_owned_fastapi_app(app: FastAPI) -> None:
-    """Release this app without reverting process-wide FastAPI patches still in use."""
-    original_build_middleware_stack = getattr(
-        app, "_original_build_middleware_stack", None
-    )
-    if original_build_middleware_stack:
-        app.build_middleware_stack = original_build_middleware_stack
-        delattr(app, "_original_build_middleware_stack")
-    app._is_instrumented_by_opentelemetry = False  # type: ignore[attr-defined]
-    _InstrumentedFastAPI._instrumented_fastapi_apps.discard(app)
-
-    if not _InstrumentedFastAPI._instrumented_fastapi_apps and hasattr(
-        BackgroundTask, "_otel_original_call"
-    ):
-        BackgroundTask.__call__ = BackgroundTask._otel_original_call  # type: ignore[attr-defined,method-assign]
-        del BackgroundTask._otel_original_call  # type: ignore[attr-defined]
-
-    app.middleware_stack = None
+    """Release instrumentation installed by this owner on this application."""
+    FastAPIInstrumentor.uninstrument_app(app)
 
 
 class Observability:

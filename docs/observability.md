@@ -35,6 +35,12 @@ disabled telemetry instead of sharing or later tearing down state it does not
 own; its `shutdown()` is then a no-op with respect to the other owner's
 handler and instrumentation.
 
+The OpenTelemetry packages are pinned to the coherent `1.41.1`/`0.62b1`
+release family. FastAPI instrumentation `0.63b0` introduced a process-wide
+Starlette `BackgroundTask` patch whose per-app teardown is unsafe when multiple
+FastAPI applications share a process. The pinned family keeps instrumentation
+and teardown application-local while D7A uses only the supported public API.
+
 ## Google export
 
 The production exporter is direct OTLP/gRPC to the Google Cloud Telemetry API
