@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import sys
+import threading
 import traceback
 from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
@@ -37,6 +38,7 @@ _HTTP_SPAN_ATTRIBUTES_WITH_SENSITIVE_REQUEST_VALUES = frozenset(
     {
         "url.query",
         "url.full",
+        "url.path",
         "http.target",
         "http.url",
         "http.user_agent",
@@ -47,6 +49,16 @@ _HTTP_SPAN_ATTRIBUTES_WITH_SENSITIVE_REQUEST_VALUES = frozenset(
         "net.peer.ip",
     }
 )
+
+# Serializes the process-local D7A single-owner check/claim/release lifecycle
+# so two concurrent Observability instances cannot both observe an
+# unclaimed state and race to claim shared logging/instrumentation ownership.
+_OWNERSHIP_LOCK = threading.RLock()
+
+# Used for D7A's own internal diagnostics (e.g. best-effort teardown-step
+# failures), kept separate from the shared "app" logger whose handler/state
+# this module claims and later tears down.
+_MODULE_LOGGER = logging.getLogger(__name__)
 
 
 class _JsonFormatter(logging.Formatter):
@@ -157,28 +169,16 @@ def _google_exporter(settings_: Settings) -> SpanExporter:
     )
 
 
-def _sanitized_http_target(scope: Mapping[str, Any]) -> str:
-    path = scope.get("path")
-    return path if isinstance(path, str) and path else _REDACTED_SPAN_ATTRIBUTE_VALUE
-
-
-def _sanitized_http_url(scope: Mapping[str, Any]) -> str:
-    scheme = scope.get("scheme")
-    server = scope.get("server")
-    path = _sanitized_http_target(scope)
-    if (
-        isinstance(scheme, str)
-        and isinstance(server, tuple)
-        and len(server) >= 1
-        and isinstance(server[0], str)
-    ):
-        host = server[0]
-        return f"{scheme}://{host}{path}"
-    return path
-
-
 def _sanitize_server_request_span(span: Span, scope: Mapping[str, Any]) -> None:
-    """Overwrite sensitive built-in HTTP request values before span export."""
+    """Overwrite sensitive built-in HTTP request values before span export.
+
+    Haunted Halls has identifier-bearing dynamic routes (for example
+    ``/campaigns/{campaign_id}``), so the raw ASGI ``scope["path"]`` can carry
+    high-cardinality, potentially sensitive identifiers. D7A must never
+    rebuild ``http.target``/``http.url``/``url.full``/``url.path`` from that
+    raw path; the low-cardinality route template is exported separately as
+    ``http.route`` by the instrumentor and is left untouched here.
+    """
     if not span.is_recording():
         return
 
@@ -191,14 +191,7 @@ def _sanitize_server_request_span(span: Span, scope: Mapping[str, Any]) -> None:
         )
     )
     for key in keys_to_sanitize:
-        if key == "http.target":
-            span.set_attribute(key, _sanitized_http_target(scope))
-        elif key in {"http.url", "url.full"}:
-            span.set_attribute(key, _sanitized_http_url(scope))
-        elif key == "url.query":
-            span.set_attribute(key, "")
-        else:
-            span.set_attribute(key, _REDACTED_SPAN_ATTRIBUTE_VALUE)
+        span.set_attribute(key, "" if key == "url.query" else _REDACTED_SPAN_ATTRIBUTE_VALUE)
 
 
 def _uninstrument_owned_fastapi_app(app: FastAPI) -> None:
@@ -232,66 +225,80 @@ class Observability:
     ) -> None:
         if not settings_.OTEL_ENABLED or self._instrumented or self._provider is not None:
             return
-        if _logging_owned_elsewhere() or _fastapi_already_instrumented(app):
-            # Another D7A instance (or pre-existing instrumentation) already
-            # owns logging and/or FastAPI instrumentation. D7A is a single-owner
-            # model: degrade this instance to disabled rather than sharing or
-            # later tearing down state it does not own.
-            return
-        try:
-            self._app = app
-            logging_configuration = _configure_logging(settings_)
-            self._logging_handler = logging_configuration.handler
-            self._prior_logger_level = logging_configuration.prior_level
-            self._prior_logger_propagate = logging_configuration.prior_propagate
+        # The single-owner check-and-claim must be atomic: without the lock,
+        # two concurrent initialize() calls could both observe an unclaimed
+        # state and race to install a logging handler and/or FastAPI
+        # instrumentation.
+        with _OWNERSHIP_LOCK:
+            if self._instrumented or self._provider is not None:
+                return
+            if _logging_owned_elsewhere() or _fastapi_already_instrumented(app):
+                # Another D7A instance (or pre-existing instrumentation) already
+                # owns logging and/or FastAPI instrumentation. D7A is a single-owner
+                # model: degrade this instance to disabled rather than sharing or
+                # later tearing down state it does not own.
+                return
+            try:
+                self._app = app
+                logging_configuration = _configure_logging(settings_)
+                self._logging_handler = logging_configuration.handler
+                self._prior_logger_level = logging_configuration.prior_level
+                self._prior_logger_propagate = logging_configuration.prior_propagate
 
-            attributes: dict[str, str] = {"service.name": settings_.OTEL_SERVICE_NAME}
-            optional_attributes = {
-                "service.version": settings_.OTEL_SERVICE_VERSION,
-                "deployment.environment.name": settings_.OTEL_DEPLOYMENT_ENVIRONMENT,
-                "cloud.run.service": os.getenv("K_SERVICE"),
-                "cloud.run.revision": os.getenv("K_REVISION"),
-                "gcp.project_id": settings_.OTEL_GCP_PROJECT_ID,
-            }
-            attributes.update(
-                {key: value for key, value in optional_attributes.items() if value}
-            )
-            self._provider = TracerProvider(
-                resource=Resource.create(attributes),
-                sampler=ParentBased(
-                    TraceIdRatioBased(settings_.OTEL_TRACES_SAMPLE_RATIO)
-                ),
-            )
-            exporter = (exporter_factory or _google_exporter)(settings_)
-            self._processor = BatchSpanProcessor(exporter)
-            self._provider.add_span_processor(self._processor)
-            FastAPIInstrumentor.instrument_app(
-                app,
-                tracer_provider=self._provider,
-                excluded_urls=(
-                    r"^https?://[^/]+/health(?:/.*)?(?:\?.*)?$"
-                    r"|^/health(?:/.*)?(?:\?.*)?$"
-                ),
-                server_request_hook=_sanitize_server_request_span,
-                # Empty lists fall back to ambient OTel env vars; match no headers instead.
-                http_capture_headers_server_request=[r"(?!)"],
-                http_capture_headers_server_response=[r"(?!)"],
-            )
-            # Starlette caches a built middleware stack on the app instance and
-            # only rebuilds it lazily when unset. Force a rebuild so a
-            # reinitialize on a previously (un)instrumented app picks up the
-            # newly patched middleware chain instead of a stale cached one.
-            app.middleware_stack = None
-            self._instrumented = True
-        except Exception:
-            self._release_owned_state()
-            logging.getLogger(_LOGGER_NAME).warning(
-                "Observability initialization failed; continuing without telemetry",
-                exc_info=True,
-            )
+                attributes: dict[str, str] = {"service.name": settings_.OTEL_SERVICE_NAME}
+                optional_attributes = {
+                    "service.version": settings_.OTEL_SERVICE_VERSION,
+                    "deployment.environment.name": settings_.OTEL_DEPLOYMENT_ENVIRONMENT,
+                    "cloud.run.service": os.getenv("K_SERVICE"),
+                    "cloud.run.revision": os.getenv("K_REVISION"),
+                    "gcp.project_id": settings_.OTEL_GCP_PROJECT_ID,
+                }
+                attributes.update(
+                    {key: value for key, value in optional_attributes.items() if value}
+                )
+                self._provider = TracerProvider(
+                    resource=Resource.create(attributes),
+                    sampler=ParentBased(
+                        TraceIdRatioBased(settings_.OTEL_TRACES_SAMPLE_RATIO)
+                    ),
+                )
+                exporter = (exporter_factory or _google_exporter)(settings_)
+                self._processor = BatchSpanProcessor(exporter)
+                self._provider.add_span_processor(self._processor)
+                # From this point, instrument_app() may mutate `app` (setting
+                # `_is_instrumented_by_opentelemetry` and patching its
+                # middleware stack) before raising. `_release_owned_state()`
+                # detects any such partial mutation via that attribute rather
+                # than a flag set only on success, so a failure here is still
+                # rolled back through the supported public uninstrument API.
+                FastAPIInstrumentor.instrument_app(
+                    app,
+                    tracer_provider=self._provider,
+                    excluded_urls=(
+                        r"^https?://[^/]+/health(?:/.*)?(?:\?.*)?$"
+                        r"|^/health(?:/.*)?(?:\?.*)?$"
+                    ),
+                    server_request_hook=_sanitize_server_request_span,
+                    # Empty lists fall back to ambient OTel env vars; match no headers instead.
+                    http_capture_headers_server_request=[r"(?!)"],
+                    http_capture_headers_server_response=[r"(?!)"],
+                )
+                # Starlette caches a built middleware stack on the app instance and
+                # only rebuilds it lazily when unset. Force a rebuild so a
+                # reinitialize on a previously (un)instrumented app picks up the
+                # newly patched middleware chain instead of a stale cached one.
+                app.middleware_stack = None
+                self._instrumented = True
+            except Exception:
+                self._release_owned_state()
+                logging.getLogger(_LOGGER_NAME).warning(
+                    "Observability initialization failed; continuing without telemetry",
+                    exc_info=True,
+                )
 
     def shutdown(self) -> None:
-        self._release_owned_state()
+        with _OWNERSHIP_LOCK:
+            self._release_owned_state()
 
     def _release_owned_state(self) -> None:
         """Undo every resource this instance may have created, in either the
@@ -300,21 +307,55 @@ class Observability:
         This only ever releases state this instance itself acquired:
         ``initialize()`` refuses to claim ownership of logging or FastAPI
         instrumentation already held elsewhere, so ``self._logging_handler``
-        and ``self._instrumented`` are only ever set when this instance is
-        the sole owner.
+        and any FastAPI mutation detected below are only ever attributable to
+        this instance being the sole owner.
+
+        Each teardown step (FastAPI uninstrumentation, tracer-provider/exporter
+        shutdown, logger handler cleanup) is attempted independently: a
+        failure in one step is logged and does not skip the remaining steps,
+        and every internal ownership field is always cleared afterward so a
+        cleanup failure can never leave D7A permanently initialized or block
+        a later retry.
         """
-        if self._instrumented and self._app is not None:
-            _uninstrument_owned_fastapi_app(self._app)
+        if self._app is not None and getattr(
+            self._app, "_is_instrumented_by_opentelemetry", False
+        ):
+            try:
+                _uninstrument_owned_fastapi_app(self._app)
+            except Exception:
+                _MODULE_LOGGER.warning(
+                    "Observability FastAPI uninstrumentation failed during "
+                    "teardown; continuing cleanup",
+                    exc_info=True,
+                )
+
         if self._provider is not None:
-            self._provider.shutdown()
+            try:
+                self._provider.shutdown()
+            except Exception:
+                _MODULE_LOGGER.warning(
+                    "Observability tracer provider/exporter shutdown failed "
+                    "during teardown; continuing cleanup",
+                    exc_info=True,
+                )
+
         if self._logging_handler is not None:
             logger = logging.getLogger(_LOGGER_NAME)
-            logger.removeHandler(self._logging_handler)
-            self._logging_handler.close()
-            assert self._prior_logger_level is not None
-            assert self._prior_logger_propagate is not None
-            logger.setLevel(self._prior_logger_level)
-            logger.propagate = self._prior_logger_propagate
+            try:
+                logger.removeHandler(self._logging_handler)
+                self._logging_handler.close()
+            except Exception:
+                _MODULE_LOGGER.warning(
+                    "Observability logging handler cleanup failed during "
+                    "teardown; continuing cleanup",
+                    exc_info=True,
+                )
+            finally:
+                if self._prior_logger_level is not None:
+                    logger.setLevel(self._prior_logger_level)
+                if self._prior_logger_propagate is not None:
+                    logger.propagate = self._prior_logger_propagate
+
         self._app = None
         self._processor = None
         self._provider = None

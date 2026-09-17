@@ -1,5 +1,6 @@
 import json
 import logging
+import threading
 from unittest.mock import Mock, patch, sentinel
 
 import pytest
@@ -330,7 +331,51 @@ def test_sensitive_request_values_are_not_recorded(
         assert "http.response.header." not in serialized_spans
         server_span = next(span for span in spans if span.kind == trace.SpanKind.SERVER)
         assert server_span.attributes is not None
-        assert server_span.attributes["http.target"] == "/private"
+        # Raw request target/URL are redacted rather than rebuilt from the
+        # ASGI scope path; only the low-cardinality route template survives.
+        assert server_span.attributes["http.target"] == "[redacted]"
+        assert server_span.attributes["http.route"] == "/private"
+    finally:
+        observability.shutdown()
+
+
+def test_dynamic_route_identifier_is_not_recorded_but_route_template_is() -> None:
+    """Regression for identifier-bearing dynamic routes (e.g. campaign/
+    character IDs): the raw path segment must never be rebuilt into
+    http.target/http.url/url.full/url.path, while http.route keeps the
+    low-cardinality route template."""
+    app = _app()
+    campaign_id_marker = "distinctive-campaign-id-marker"
+
+    @app.get("/private/{campaign_id}")
+    async def private_campaign(campaign_id: str) -> JSONResponse:
+        return JSONResponse({"campaign_id": campaign_id})
+
+    exporter = InMemorySpanExporter()
+    observability = Observability()
+    observability.initialize(
+        app,
+        Settings(OTEL_ENABLED=True, OTEL_GCP_PROJECT_ID="test-project"),
+        lambda _: exporter,
+    )
+    try:
+        with TestClient(app) as client:
+            assert client.get(f"/private/{campaign_id_marker}").status_code == 200
+        assert observability._processor is not None
+        assert observability._processor.force_flush()
+        spans = exporter.get_finished_spans()
+        server_spans = [span for span in spans if span.kind == trace.SpanKind.SERVER]
+        assert len(server_spans) == 1
+        serialized_spans = "\n".join(span.to_json() for span in spans)
+        assert campaign_id_marker not in serialized_spans
+        attributes = server_spans[0].attributes
+        assert attributes is not None
+        assert attributes["http.route"] == "/private/{campaign_id}"
+        raw_path_bearing_keys = ("http.target", "http.url", "url.full", "url.path")
+        present_keys = [key for key in raw_path_bearing_keys if key in attributes]
+        assert present_keys
+        for key in present_keys:
+            assert attributes[key] == "[redacted]"
     finally:
         observability.shutdown()
 
@@ -548,6 +593,77 @@ def test_shutdown_restores_prior_logger_level_and_propagation() -> None:
         logger.propagate = original_propagate
 
 
+@pytest.mark.parametrize("failure_step", ["uninstrument", "provider_shutdown"])
+def test_teardown_is_best_effort_and_state_is_cleared_on_partial_failure(
+    failure_step: str,
+) -> None:
+    """Each teardown step (FastAPI uninstrumentation, tracer-provider/exporter
+    shutdown, logger cleanup) is attempted independently. A raised exception
+    in one step must not skip the remaining steps, and every internal
+    ownership field plus the shared logger's prior state must be fully
+    restored even though a step failed, so a later retry is not blocked."""
+    app = _app()
+    observability = Observability()
+    settings = Settings(OTEL_ENABLED=True, OTEL_GCP_PROJECT_ID="test-project")
+    logger = logging.getLogger("app")
+    logger.disabled = False
+    prior_level = logger.level
+    prior_propagate = logger.propagate
+    prior_handlers = list(logger.handlers)
+
+    observability.initialize(app, settings, lambda _: InMemorySpanExporter())
+    assert observability._instrumented is True
+    provider = observability._provider
+    assert provider is not None
+
+    if failure_step == "uninstrument":
+        failure_patch = patch(
+            "app.core.observability.FastAPIInstrumentor.uninstrument_app",
+            side_effect=RuntimeError("simulated uninstrument failure"),
+        )
+    else:
+        failure_patch = patch.object(
+            provider,
+            "shutdown",
+            side_effect=RuntimeError("simulated provider shutdown failure"),
+        )
+
+    with failure_patch:
+        observability.shutdown()
+
+    assert observability._instrumented is False
+    assert observability._provider is None
+    assert observability._processor is None
+    assert observability._app is None
+    assert observability._logging_handler is None
+    assert observability._prior_logger_level is None
+    assert observability._prior_logger_propagate is None
+    assert logger.level == prior_level
+    assert logger.propagate == prior_propagate
+    assert logger.handlers == prior_handlers
+
+    retry_app = _app()
+    exporter = InMemorySpanExporter()
+    observability.initialize(retry_app, settings, lambda _: exporter)
+    try:
+        assert observability._instrumented is True
+        with TestClient(retry_app) as client:
+            assert client.get("/hello").status_code == 200
+        assert observability._processor is not None
+        observability._processor.force_flush()
+        server_spans = [
+            span for span in exporter.get_finished_spans()
+            if span.kind == trace.SpanKind.SERVER
+        ]
+        assert len(server_spans) == 1
+    finally:
+        observability.shutdown()
+
+    assert logger.level == prior_level
+    assert logger.propagate == prior_propagate
+    assert logger.handlers == prior_handlers
+
+
 def test_initialization_failure_is_isolated_and_allows_retry() -> None:
     app = _app()
     observability = Observability()
@@ -621,6 +737,69 @@ def test_instrumentation_failure_during_initialize_cleans_up_state() -> None:
     assert observability._instrumented is False
     assert observability._app is None
     assert observability._logging_handler is None
+    assert logger.level == prior_level
+    assert logger.propagate == prior_propagate
+    assert logger.handlers == prior_handlers
+
+
+def test_partial_fastapi_instrumentation_is_rolled_back_and_retry_succeeds() -> None:
+    """If instrument_app() mutates the app (setting
+    _is_instrumented_by_opentelemetry and patching its middleware stack)
+    before raising, D7A must detect that partial mutation from the
+    uninstrumented starting state and roll it back through the supported
+    public uninstrument API, then allow a clean retry on the same app."""
+    app = _app()
+    observability = Observability()
+    settings = Settings(OTEL_ENABLED=True, OTEL_GCP_PROJECT_ID="test-project")
+    logger = logging.getLogger("app")
+    logger.disabled = False
+    prior_level = logger.level
+    prior_propagate = logger.propagate
+    prior_handlers = list(logger.handlers)
+
+    original_instrument_app = FastAPIInstrumentor.instrument_app
+
+    def partially_mutate_then_fail(target_app, **kwargs):  # type: ignore[no-untyped-def]
+        # Simulate the real instrumentor completing its mutation of the app
+        # before a later failure (e.g. in caller-side bookkeeping) surfaces.
+        original_instrument_app(target_app, **kwargs)
+        raise RuntimeError("simulated failure after instrumentation applied")
+
+    with patch(
+        "app.core.observability.FastAPIInstrumentor.instrument_app",
+        side_effect=partially_mutate_then_fail,
+    ):
+        observability.initialize(app, settings, lambda _: InMemorySpanExporter())
+
+    assert observability._instrumented is False
+    assert observability._provider is None
+    assert observability._processor is None
+    assert observability._app is None
+    assert observability._logging_handler is None
+    assert app._is_instrumented_by_opentelemetry is False  # type: ignore[attr-defined]
+    assert logger.level == prior_level
+    assert logger.propagate == prior_propagate
+    assert logger.handlers == prior_handlers
+
+    with TestClient(app) as client:
+        assert client.get("/hello").status_code == 200
+
+    exporter = InMemorySpanExporter()
+    observability.initialize(app, settings, lambda _: exporter)
+    try:
+        assert observability._instrumented is True
+        with TestClient(app) as client:
+            assert client.get("/hello").status_code == 200
+        assert observability._processor is not None
+        observability._processor.force_flush()
+        server_spans = [
+            span for span in exporter.get_finished_spans()
+            if span.kind == trace.SpanKind.SERVER
+        ]
+        assert len(server_spans) == 1
+    finally:
+        observability.shutdown()
+
     assert logger.level == prior_level
     assert logger.propagate == prior_propagate
     assert logger.handlers == prior_handlers
@@ -853,3 +1032,86 @@ def test_overlapping_instrumentation_owners_cannot_uninstrument_each_other() -> 
     finally:
         owner1.shutdown()
         owner2.shutdown()
+
+
+def test_concurrent_initialize_has_exactly_one_owner() -> None:
+    """Two concurrent same-process initialize() calls must not both claim
+    ownership: the check-and-claim lifecycle is serialized by a small
+    process-local lock so exactly one instance wins, the loser is fully
+    uninitialized, the loser's shutdown is harmless, and the winner still
+    traces/logs and can later restore state cleanly."""
+    logger = logging.getLogger("app")
+    logger.disabled = False
+    original_level = logger.level
+    original_propagate = logger.propagate
+    original_handlers = list(logger.handlers)
+
+    apps = [_app(), _app()]
+    owners = [Observability(), Observability()]
+    exporters = [InMemorySpanExporter(), InMemorySpanExporter()]
+    settings = Settings(OTEL_ENABLED=True, OTEL_GCP_PROJECT_ID="test-project")
+    barrier = threading.Barrier(2)
+
+    def run(index: int) -> None:
+        barrier.wait()
+        owners[index].initialize(
+            apps[index], settings, lambda _, exporter=exporters[index]: exporter
+        )
+
+    threads = [threading.Thread(target=run, args=(index,)) for index in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    try:
+        instrumented_flags = [owner._instrumented for owner in owners]
+        assert instrumented_flags.count(True) == 1
+        assert instrumented_flags.count(False) == 1
+
+        winner_index = instrumented_flags.index(True)
+        loser_index = instrumented_flags.index(False)
+        winner = owners[winner_index]
+        loser = owners[loser_index]
+        winner_app = apps[winner_index]
+
+        # The loser must be fully uninitialized: it never claimed logging,
+        # instrumentation, or a tracer provider.
+        assert loser._provider is None
+        assert loser._processor is None
+        assert loser._app is None
+        assert loser._logging_handler is None
+
+        handlers_after_race = list(logger.handlers)
+        level_after_race = logger.level
+        propagate_after_race = logger.propagate
+
+        # The loser's shutdown must be harmless and must not disturb the
+        # winner's active handler or logger state.
+        loser.shutdown()
+        assert logger.handlers == handlers_after_race
+        assert logger.level == level_after_race
+        assert logger.propagate == propagate_after_race
+        assert winner._instrumented is True
+
+        with TestClient(winner_app) as client:
+            assert client.get("/hello").status_code == 200
+        assert winner._processor is not None
+        winner._processor.force_flush()
+        winner_exporter = exporters[winner_index]
+        server_spans = [
+            span for span in winner_exporter.get_finished_spans()
+            if span.kind == trace.SpanKind.SERVER
+        ]
+        assert len(server_spans) == 1
+
+        winner.shutdown()
+        assert winner._instrumented is False
+        assert logger.handlers == original_handlers
+        assert logger.level == original_level
+        assert logger.propagate == original_propagate
+    finally:
+        for owner in owners:
+            owner.shutdown()
+        logger.setLevel(original_level)
+        logger.propagate = original_propagate

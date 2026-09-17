@@ -992,6 +992,20 @@ correlation/message preservation, real root and remote-parent sampling, secure
 exporter construction, HTTP metadata, one server span per request after
 repeated initialization, and overlapping-owner degradation for both logging
 and instrumentation.
+A further lifecycle-safety pass hardens D7A against partial-failure and
+concurrency edge cases: built-in HTTP span attributes that could otherwise
+carry raw request-path identifiers (`http.target`, `http.url`, `url.full`,
+`url.path`) are always redacted rather than rebuilt from the raw ASGI scope
+path, while the low-cardinality `http.route` template is preserved; a
+FastAPI-instrumentation failure that partially mutates the app before raising
+is detected from the app's own instrumentation marker (not only a
+success-only flag) and rolled back through the supported public
+`uninstrument_app` API so the same app can be retried; teardown of the
+FastAPI instrumentation, tracer provider/exporter, and owned logger handler
+are each attempted independently so one step's failure does not skip the
+others or leave ownership fields/logger state stuck; and the single-owner
+check-and-claim lifecycle is now serialized by a small process-local lock so
+two concurrent same-process `initialize()` calls cannot both claim ownership.
 BFF propagation and internal agent/persistence spans are deferred to
 D7B/D7C; dashboards and operational tuning are deferred to D7D.
 
