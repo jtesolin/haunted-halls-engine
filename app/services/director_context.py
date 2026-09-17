@@ -20,9 +20,10 @@ def build_director_input(
     *,
     parsed_action: ParsedAction,
     tool_result: ToolExecutionResult,
-    world: World = DEFAULT_WORLD,
+    world: World | None = DEFAULT_WORLD,
 ) -> DirectorInput:
     """Build a deterministic, non-mutating Director projection."""
+    active_world = world if world is not None else DEFAULT_WORLD
     if not isinstance(state, dict):
         raise InvalidDirectorContextError("Authoritative campaign state is malformed.")
 
@@ -30,7 +31,7 @@ def build_director_input(
     if not isinstance(player, dict):
         raise InvalidDirectorContextError("Authoritative player state is malformed.")
     player_location = player.get("location")
-    if not isinstance(player_location, str) or world.get_room(player_location) is None:
+    if not isinstance(player_location, str) or active_world.get_room(player_location) is None:
         raise InvalidDirectorContextError("Authoritative player location is invalid.")
 
     clock = state.get("clock")
@@ -61,7 +62,7 @@ def build_director_input(
             )
         location = npc.get("location")
         status = npc.get("status")
-        if not isinstance(location, str) or world.get_room(location) is None:
+        if not isinstance(location, str) or active_world.get_room(location) is None:
             raise InvalidDirectorContextError(
                 f"Authoritative NPC '{npc_id}' location is invalid."
             )
@@ -71,7 +72,7 @@ def build_director_input(
             )
         destinations = [
             exit_data["room_id"]
-            for exit_data in world.available_exits(location)
+            for exit_data in active_world.available_exits(location)
         ]
         npc_contexts.append(
             DirectorNPCContext(

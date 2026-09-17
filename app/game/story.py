@@ -29,7 +29,7 @@ from typing import Any, Iterable
 
 from pydantic import ValidationError
 
-from app.schemas.chat import ParsedAction, ToolExecutionResult
+from app.schemas.chat import ToolExecutionResult
 from app.schemas.story import (
     FactRecordedSignal,
     ItemAcquiredSignal,
@@ -320,24 +320,17 @@ def _signal_type(signal: StorySignal) -> StorySignalType:
     return signal.signal_type
 
 
-def derive_story_signal(
-    parsed_action: ParsedAction | None,
-    tool_result: ToolExecutionResult,
-) -> StorySignal | None:
+def derive_story_signal(tool_result: ToolExecutionResult) -> StorySignal | None:
     """Map a successful authoritative tool result into the next deterministic story signal.
 
-    The parser/prose payload is deliberately ignored here: only the authoritative
-    `ToolExecutionResult` can produce a phase-8 story signal.
+    Only the authoritative `ToolExecutionResult` can produce a phase-8 story signal;
+    parser context and raw action text are intentionally ignored.
     """
     if not tool_result.success:
         return None
 
     if "move_player" in tool_result.applied_tools:
-        destination = (
-            tool_result.current_location
-            or tool_result.resolved_exit
-            or tool_result.moved_to
-        )
+        destination = tool_result.resolved_exit
         if destination:
             return RoomEnteredSignal(room_id=destination)
         return None

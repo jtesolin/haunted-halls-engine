@@ -456,10 +456,9 @@ were introduced in 7B3.
 
 ## Phase 8 — Narrative Progression & Character Systems
 
-**Status: Active. 8A Story / Quest, 8B progression, 8C ability/check domain
-foundation, and 8E1 evaluation-harness foundation are complete. With the
-8A/8B/8C prerequisites complete, 8D Narrative Director Expansion is the next
-main gameplay milestone; ongoing Phase 8 work is tracked by #52.**
+**Status: Active. 8D1 story progression is implemented and active; 8D2
+Director Narrative Context is the next intended slice. Phase 8 work remains
+tracked by #52, with the core 8A/8B/8C and 8D1 foundations now in place.**
 
 ### 8A — Story / Quest Model
 
@@ -492,13 +491,16 @@ One development quest, "The Library's Whisper", proves the model using only
 existing canonical content: enter the `library`, speak to `library_ghost`,
 then acquire the `old_book`.
 
-8A intentionally does not wire story evaluation into
-`ChatOrchestrator.handle_chat()` or expand the Director contract; that
-integration is deferred to a later Phase 8 milestone.
+The story/quest domain is fully wired into `ChatOrchestrator.handle_chat()`
+for authoritative turn sequencing; the orchestrator applies story progression
+after the player's tool result and before the Director step. The replay guard
+for already-satisfied signals remains primarily at the chat/idempotency
+boundary, while `apply_story_signal()` remains the secondary domain-level
+idempotency guard for in-process state replay.
 
 ### 8D1 — Deterministic Story Progression Seam
 
-**Status: Implemented in the first slice**
+**Status: Implemented and active**
 
 The first deterministic 8D slice adds the authority-ordered seam between
 successful player-tool execution and the Director step. `derive_story_signal()`
@@ -508,11 +510,11 @@ into typed `StorySignal` values (`room_entered`, `npc_spoken_to`,
 resulting progression immediately after the authoritative ToolExecutor state
 update and before the Director runs. The progression is persisted through the
 existing `game_state_updated` path, reloaded through the memory-service state
-boundary, and remains idempotent because `apply_story_signal()` is already the
-authoritative replay guard.
+boundary, and remains idempotent because the chat-level replay boundary and
+`apply_story_signal()` guard against duplicate advancement.
 
-This 8D1 slice intentionally excludes Director context expansion, Narrator
-story-context expansion, ability/check resolution, and any broader 8D2+ scope.
+This slice remains focused on story progression integration itself. The next
+intended slice is 8D2 — Director Narrative Context expansion.
 
 ## Phase 8B — Character Progression Model
 

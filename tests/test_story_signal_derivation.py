@@ -1,13 +1,12 @@
 from __future__ import annotations
 
 from app.game.story import apply_story_signal, derive_story_signal
-from app.schemas.chat import ActionType, ParsedAction, ToolExecutionResult
+from app.schemas.chat import ToolExecutionResult
 from app.schemas.story import ItemAcquiredSignal, NpcSpokenToSignal, RoomEnteredSignal
 
 
 def test_derive_story_signal_from_successful_movement() -> None:
     signal = derive_story_signal(
-        ParsedAction(raw_text="go east", action=ActionType.MOVE, target="east", parse_status="ok"),
         ToolExecutionResult(
             success=True,
             applied_tools=["move_player"],
@@ -22,7 +21,6 @@ def test_derive_story_signal_from_successful_movement() -> None:
 
 def test_derive_story_signal_from_successful_talk_and_take() -> None:
     talk_signal = derive_story_signal(
-        ParsedAction(raw_text="talk to ghost", action=ActionType.TALK, target="library_ghost", parse_status="ok"),
         ToolExecutionResult(
             success=True,
             applied_tools=["talk_to_npc"],
@@ -31,7 +29,6 @@ def test_derive_story_signal_from_successful_talk_and_take() -> None:
         ),
     )
     take_signal = derive_story_signal(
-        ParsedAction(raw_text="take book", action=ActionType.TAKE, target="old_book", parse_status="ok"),
         ToolExecutionResult(
             success=True,
             applied_tools=["take_item"],
@@ -45,16 +42,26 @@ def test_derive_story_signal_from_successful_talk_and_take() -> None:
 
 
 def test_derive_story_signal_ignores_failed_or_uncertain_results() -> None:
-    assert derive_story_signal(None, ToolExecutionResult(success=False, summary="No move.")) is None
+    assert derive_story_signal(ToolExecutionResult(success=False, summary="No move.")) is None
     assert (
         derive_story_signal(
-            ParsedAction(raw_text="take book", action=ActionType.TAKE, target="old_book", parse_status="ok"),
             ToolExecutionResult(
                 success=True,
                 applied_tools=["take_item"],
                 summary="You try to take the old book.",
                 item_id=None,
             ),
+        )
+        is None
+    )
+    assert (
+        derive_story_signal(
+            ToolExecutionResult(
+                success=True,
+                applied_tools=["move_player"],
+                summary="You move somewhere.",
+                current_location="library",
+            )
         )
         is None
     )

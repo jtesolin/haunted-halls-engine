@@ -6,9 +6,12 @@ import pytest
 from alembic import command
 from alembic.config import Config
 
+from app.api.routes import chat as chat_routes
 from app.core.config import settings
 from app.db.schema import metadata
 from app.db.session import get_engine
+from app.orchestration import orchestrator as orchestrator_module
+from app.orchestration.orchestrator import ChatOrchestrator
 
 TEST_INTERNAL_ENGINE_SERVICE_TOKEN = (
     "test-internal-engine-service-token-0000000000000000000000000000000000"
@@ -29,6 +32,30 @@ def internal_engine_service_token() -> Iterator[None]:
         yield
     finally:
         settings.INTERNAL_ENGINE_SERVICE_TOKEN = original_token
+
+
+@pytest.fixture(autouse=True)
+def provider_settings() -> Iterator[None]:
+    original_ai_enabled = settings.AI_ENABLED
+    original_openai_api_key = settings.OPENAI_API_KEY
+    try:
+        yield
+    finally:
+        settings.AI_ENABLED = original_ai_enabled
+        settings.OPENAI_API_KEY = original_openai_api_key
+
+
+@pytest.fixture(autouse=True)
+def reset_orchestrator_singleton() -> Iterator[None]:
+    original_orchestrator = orchestrator_module.orchestrator
+    original_route_orchestrator = chat_routes.orchestrator
+    orchestrator_module.orchestrator = ChatOrchestrator()
+    chat_routes.orchestrator = orchestrator_module.orchestrator
+    try:
+        yield
+    finally:
+        orchestrator_module.orchestrator = original_orchestrator
+        chat_routes.orchestrator = original_route_orchestrator
 
 
 @pytest.fixture(autouse=True)
