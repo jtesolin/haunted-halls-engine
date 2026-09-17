@@ -17,6 +17,7 @@ from app.main import app
 from app.orchestration import orchestrator as orchestrator_module
 from app.orchestration.orchestrator import ChatOrchestrator
 from app.schemas.chat import ActionType, ChatRequest, ParsedAction, ToolExecutionResult
+from app.schemas.director import NoActionProposal
 from app.schemas.story import NpcSpokenToSignal
 
 
@@ -124,7 +125,7 @@ async def _async_stub_narrator_reply(reply_text: str):
 
 async def _stub_director_response(*, director_input, model=None):
     class _DirectorResult:
-        proposal = None
+        proposal = NoActionProposal()
         usage = None
 
     return _DirectorResult()
@@ -474,6 +475,67 @@ def test_story_progression_occurs_before_director_and_receives_post_story_state(
         campaign = db.get_campaign(response.campaign_id)
         state = _load_campaign_state(campaign)
         assert state["story"]["quests"]["librarys_whisper"]["objectives"]["enter_library"] == "completed"
+
+
+def test_director_input_contains_same_turn_post_story_progression_with_real_tool_executor(
+    monkeypatch,
+) -> None:
+    _enable_provider(monkeypatch)
+    captured_director_inputs = []
+
+    async def fake_parse(**kwargs):
+        return ParsedAction(
+            raw_text="go east to the library",
+            action=ActionType.MOVE,
+            target="library",
+            confidence=0.94,
+            parse_status="ok",
+        )
+
+    async def fake_propose(*, director_input, model=None):
+        captured_director_inputs.append(director_input)
+        return await _stub_director_response(director_input=director_input, model=model)
+
+    monkeypatch.setattr(
+        orchestrator_module.orchestrator.action_parser_agent, "parse", fake_parse
+    )
+    monkeypatch.setattr(
+        orchestrator_module.orchestrator.narrator_agent,
+        "generate",
+        lambda **kwargs: _async_stub_narrator_reply("The library stirs."),
+    )
+    monkeypatch.setattr(orchestrator_module.orchestrator.director_agent, "propose", fake_propose)
+
+    client = TestClient(app)
+    user_id = _resolve_user(client, "story-director-real-tool-post-state")
+    campaign_id = "campaign_story_real_tool_post_state"
+    state = build_fresh_campaign_state()
+    state["player"]["location"] = "grand_corridor"
+    _create_campaign(user_id=user_id, campaign_id=campaign_id, state=state)
+
+    response = asyncio.run(
+        orchestrator_module.orchestrator.handle_chat(
+            ChatRequest(message="go east to the library", campaign_id=campaign_id),
+            owner_user_id=user_id,
+        )
+    )
+
+    assert response.reply == "The library stirs."
+    assert len(captured_director_inputs) == 1
+    director_input = captured_director_inputs[0]
+    assert director_input.current_player_room_id == "library"
+    quest = director_input.story.quests[0]
+    assert quest.quest_id == "librarys_whisper"
+    assert quest.completed_objective_ids == ["enter_library"]
+    assert quest.active_objective is not None
+    assert quest.active_objective.objective_id == "speak_to_library_ghost"
+
+    with session() as db:
+        campaign = db.get_campaign(campaign_id)
+        persisted_state = _load_campaign_state(campaign)
+        objectives = persisted_state["story"]["quests"]["librarys_whisper"]["objectives"]
+        assert objectives["enter_library"] == "completed"
+        assert objectives["speak_to_library_ghost"] == "active"
 
 
 def test_provider_disabled_mode_still_performs_story_progression(monkeypatch) -> None:

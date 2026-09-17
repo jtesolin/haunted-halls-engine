@@ -2,17 +2,25 @@
   "scenario_id": "director-absent-off-room-npc",
   "description": "An absent off-room NPC remains represented in bounded Director context; any proposal must remain within the supplied entity/destination bounds. This scenario does not assert that a live Director must return decision=none merely because a referenced NPC's status is absent -- WorldAuthorityExecutor's MOVE_NPC bounds checks (NPC exists, valid location, destination exists and is exactly one hop away) do not reject a move based on NPC status.",
   "target": "director",
-  "tags": ["director", "context", "absent-npc"],
+  "tags": [
+    "director",
+    "context",
+    "absent-npc"
+  ],
   "authoritative_input": {
     "current_player_room_id": "eval_gallery",
     "clock_tick": 1,
-    "facts": ["The steward left the gallery some time ago."],
+    "facts": [
+      "The steward left the gallery some time ago."
+    ],
     "npcs": [
       {
         "npc_id": "eval_npc_a",
         "location_id": "eval_foyer",
         "status": "absent",
-        "one_hop_destination_room_ids": ["eval_gallery"]
+        "one_hop_destination_room_ids": [
+          "eval_gallery"
+        ]
       }
     ],
     "player_action": {
@@ -21,10 +29,49 @@
       "parse_status": "ok",
       "succeeded": true,
       "result_summary": "The player looks down the empty gallery.",
-      "applied_tools": ["observe_room"],
+      "applied_tools": [
+        "observe_room"
+      ],
       "error_code": null
+    },
+    "story": {
+      "quests": [
+        {
+          "quest_id": "librarys_whisper",
+          "title": "The Library's Whisper",
+          "status": "active",
+          "completed_objective_ids": [],
+          "active_objective": {
+            "objective_id": "enter_library",
+            "description": "Enter the library."
+          }
+        }
+      ]
+    },
+    "character": {
+      "progression_tracks": [
+        {
+          "track_id": "investigation",
+          "points": 0
+        },
+        {
+          "track_id": "resolve",
+          "points": 0
+        },
+        {
+          "track_id": "rapport",
+          "points": 0
+        },
+        {
+          "track_id": "occult",
+          "points": 0
+        }
+      ],
+      "available_abilities": []
     }
   },
   "deterministic_expectations": {},
-  "fixture_output": {"decision": "none"}
+  "fixture_output": {
+    "decision": "none"
+  }
 }

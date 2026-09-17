@@ -280,6 +280,13 @@ def ensure_story_state(state: dict[str, Any]) -> dict[str, Any]:
     return state["story"]
 
 
+def read_story_state_snapshot(state: dict[str, Any]) -> dict[str, Any]:
+    """Return a normalized story snapshot without mutating caller state."""
+    working_state = {"story": deepcopy(state.get("story"))}
+    story = ensure_story_state(working_state)
+    return deepcopy(story)
+
+
 def _coerce_signal(signal: StorySignal | dict[str, Any]) -> StorySignal | None:
     if isinstance(
         signal,

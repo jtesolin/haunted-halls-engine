@@ -38,6 +38,29 @@ scenario = Scenario(
             "succeeded": True,
             "result_summary": "The player looks around.",
         },
+        "story": {
+            "quests": [
+                {
+                    "quest_id": "librarys_whisper",
+                    "title": "The Library's Whisper",
+                    "status": "active",
+                    "completed_objective_ids": [],
+                    "active_objective": {
+                        "objective_id": "enter_library",
+                        "description": "Enter the library.",
+                    },
+                }
+            ]
+        },
+        "character": {
+            "progression_tracks": [
+                {"track_id": "investigation", "points": 0},
+                {"track_id": "resolve", "points": 0},
+                {"track_id": "rapport", "points": 0},
+                {"track_id": "occult", "points": 0},
+            ],
+            "available_abilities": [],
+        },
     },
     deterministic_expectations={"require_none": True},
     actual_output={"decision": "none"},
@@ -57,8 +80,9 @@ secrets, real users, production campaign IDs, or conversation dumps.
 
 Director `authoritative_input` must validate as the real, production
 `app.schemas.director.DirectorInput` contract (`current_player_room_id`,
-`clock_tick`, `facts`, `npcs: list[DirectorNPCContext]`, and
-`player_action: DirectorPlayerActionContext`). Narrator `authoritative_input`
+`clock_tick`, `facts`, `npcs: list[DirectorNPCContext]`,
+`player_action: DirectorPlayerActionContext`, bounded `story`, and bounded
+`character`). Narrator `authoritative_input`
 must validate as the real, production
 `app.agents.narrator.NarratorAgentInput` contract (`player_message`,
 `scene_context`, and optionally `recent_turns`, `campaign_summary`,

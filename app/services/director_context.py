@@ -2,13 +2,25 @@ from __future__ import annotations
 
 from typing import Any
 
+from app.game.abilities import VALIDATED_ABILITY_DEFINITIONS, evaluate_ability_availability
+from app.game.character_progression import PROGRESSION_TRACK_IDS, read_character_progression_state
+from app.game.story import STORY_QUESTS, read_story_state_snapshot
 from app.game.world import DEFAULT_WORLD, World
+from app.schemas.abilities import AbilityAvailabilityStatus
 from app.schemas.chat import ParsedAction, ToolExecutionResult
+from app.schemas.character_progression import ProgressionTrackId
 from app.schemas.director import (
+    DirectorAbilityContext,
+    DirectorCharacterContext,
     DirectorInput,
     DirectorNPCContext,
     DirectorPlayerActionContext,
+    DirectorProgressionTrackContext,
+    DirectorStoryContext,
+    DirectorStoryObjectiveContext,
+    DirectorStoryQuestContext,
 )
+from app.schemas.story import ObjectiveStatus, QuestStatus
 
 
 class InvalidDirectorContextError(ValueError):
@@ -96,4 +108,77 @@ def build_director_input(
             applied_tools=list(tool_result.applied_tools),
             error_code=tool_result.error_code,
         ),
+        story=_build_story_context(state),
+        character=_build_character_context(state),
+    )
+
+
+def _build_story_context(state: dict[str, Any]) -> DirectorStoryContext:
+    story = read_story_state_snapshot(state)
+    raw_quests = story.get("quests")
+    quests = raw_quests if isinstance(raw_quests, dict) else {}
+    quest_contexts: list[DirectorStoryQuestContext] = []
+
+    for quest_id, quest_definition in STORY_QUESTS.items():
+        progress = quests.get(quest_id)
+        if not isinstance(progress, dict):
+            continue
+        raw_objectives = progress.get("objectives")
+        objectives = raw_objectives if isinstance(raw_objectives, dict) else {}
+        status = QuestStatus(progress["status"])
+        completed_objective_ids = [
+            objective.id
+            for objective in quest_definition.objectives
+            if objectives.get(objective.id) == ObjectiveStatus.COMPLETED.value
+        ]
+        active_objective = None
+        if status != QuestStatus.COMPLETED:
+            for objective in quest_definition.objectives:
+                if objectives.get(objective.id) == ObjectiveStatus.ACTIVE.value:
+                    active_objective = DirectorStoryObjectiveContext(
+                        objective_id=objective.id,
+                        description=objective.description,
+                    )
+                    break
+        quest_contexts.append(
+            DirectorStoryQuestContext(
+                quest_id=quest_id,
+                title=quest_definition.title,
+                status=status,
+                completed_objective_ids=completed_objective_ids,
+                active_objective=active_objective,
+            )
+        )
+
+    return DirectorStoryContext(quests=quest_contexts)
+
+
+def _build_character_context(state: dict[str, Any]) -> DirectorCharacterContext:
+    progression = read_character_progression_state(state)
+    tracks = progression["tracks"]
+    progression_tracks = [
+        DirectorProgressionTrackContext(
+            track_id=ProgressionTrackId(track_id),
+            points=tracks[track_id],
+        )
+        for track_id in PROGRESSION_TRACK_IDS
+    ]
+
+    available_abilities: list[DirectorAbilityContext] = []
+    for definition in VALIDATED_ABILITY_DEFINITIONS:
+        availability = evaluate_ability_availability(state, definition.ability_id)
+        if availability.status != AbilityAvailabilityStatus.AVAILABLE:
+            continue
+        available_abilities.append(
+            DirectorAbilityContext(
+                ability_id=definition.ability_id,
+                display_name=definition.display_name,
+                short_description=definition.short_description,
+                track_id=definition.track,
+            )
+        )
+
+    return DirectorCharacterContext(
+        progression_tracks=progression_tracks,
+        available_abilities=available_abilities,
     )

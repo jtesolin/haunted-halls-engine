@@ -2,7 +2,11 @@
   "scenario_id": "director-baseline-noop",
   "description": "Baseline Director behavior when there is no valid world-state change and no obvious privileged movement opportunity.",
   "target": "director",
-  "tags": ["director", "baseline", "phase-7"],
+  "tags": [
+    "director",
+    "baseline",
+    "phase-7"
+  ],
   "authoritative_input": {
     "current_player_room_id": "eval_foyer",
     "clock_tick": 0,
@@ -14,10 +18,51 @@
       "parse_status": "ok",
       "succeeded": true,
       "result_summary": "The player takes stock of the evaluation foyer.",
-      "applied_tools": ["observe_room"],
+      "applied_tools": [
+        "observe_room"
+      ],
       "error_code": null
+    },
+    "story": {
+      "quests": [
+        {
+          "quest_id": "librarys_whisper",
+          "title": "The Library's Whisper",
+          "status": "active",
+          "completed_objective_ids": [],
+          "active_objective": {
+            "objective_id": "enter_library",
+            "description": "Enter the library."
+          }
+        }
+      ]
+    },
+    "character": {
+      "progression_tracks": [
+        {
+          "track_id": "investigation",
+          "points": 0
+        },
+        {
+          "track_id": "resolve",
+          "points": 0
+        },
+        {
+          "track_id": "rapport",
+          "points": 0
+        },
+        {
+          "track_id": "occult",
+          "points": 0
+        }
+      ],
+      "available_abilities": []
     }
   },
-  "deterministic_expectations": {"require_none": true},
-  "fixture_output": {"decision": "none"}
+  "deterministic_expectations": {
+    "require_none": true
+  },
+  "fixture_output": {
+    "decision": "none"
+  }
 }

@@ -29,10 +29,12 @@ Narrator grounds in the final authoritative state:
 ```text
 player text
   -> Action Parser
-  -> structured action
+  -> structured player action
   -> deterministic rule/tool execution (player ToolExecutor)
   -> authoritative player result/state
-  -> Director
+  -> deterministic story/rule progression
+  -> authoritative post-player/post-story state
+  -> Director bounded context
   -> zero or one typed WorldAction
   -> WorldAuthorityExecutor
   -> final authoritative state
@@ -43,9 +45,13 @@ The Narrator describes authoritative results and the authoritative scene
 context. It must not invent state changes. Player-action authority is separate
 from privileged world/Director authority; a player-facing action cannot become
 a world-authority operation through narration or agent choice. The Director
-never mutates campaign state directly; only `WorldAuthorityExecutor` may apply
-a privileged world-state transition, and only after the player's own
-authoritative result is already final.
+receives bounded read-only story and character projections after deterministic
+story/rule progression; those projections do not grant quest/objective
+mutation, progression-grant, ability-unlock, or ability-check authority. The
+Director never mutates campaign state directly; only `WorldAuthorityExecutor`
+may apply a privileged world-state transition, and only after the player's own
+authoritative result and deterministic story/rule progression are already
+final.
 
 The current world model includes a room graph, items, NPCs, deterministic
 interactions, authoritative narrator scene projection, campaign state, clock
@@ -65,9 +71,10 @@ player-authorized deterministic actions. Typed privileged `WorldAction` values
 execute separately through the deterministic `WorldAuthorityExecutor`.
 
 The model-backed Director is integrated into the normal authoritative chat
-turn, after the player's own result/state and before narrator scene
-construction. It proposes at most one typed `WorldAction`, or no action, from
-a bounded, non-mutating projection of that authoritative post-player state.
+turn, after the player's own result/state plus deterministic story/rule
+progression and before narrator scene construction. It proposes at most one
+typed `WorldAction`, or no action, from a bounded, non-mutating projection of
+that authoritative post-player/post-story state.
 Only `WorldAuthorityExecutor` may execute a proposed action; the Director
 itself never mutates campaign state. Director invocation, and any resulting
 privileged world-state transition, requires the same enabled provider model
