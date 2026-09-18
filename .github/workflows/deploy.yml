@@ -1,4 +1,4 @@
-name: Engine Deploy
+name: Engine Deploy (Staging)
 
 on:
   workflow_run:
@@ -14,8 +14,10 @@ permissions:
   contents: read
   id-token: write
 
+# Serialized per environment so an in-progress staging migration/deploy is
+# never cancelled by a newer merge to main.
 concurrency:
-  group: haunted-halls-engine-production
+  group: haunted-halls-engine-staging
   cancel-in-progress: false
 
 env:
@@ -23,11 +25,15 @@ env:
   GCP_REGION: us-east1
   IMAGE_REPOSITORY: us-east1-docker.pkg.dev/haunted-halls-development/haunted-halls/engine
   WIF_PROVIDER: projects/458395246135/locations/global/workloadIdentityPools/github-actions/providers/github
+  # Terraform (jtesolin/haunted-halls#32) is authoritative for granting this
+  # identity access to the staging Cloud Run resources below.
   DEPLOY_SERVICE_ACCOUNT: hh-engine-deployer@haunted-halls-development.iam.gserviceaccount.com
+  ENGINE_SERVICE: haunted-halls-engine-staging
+  MIGRATION_JOB: haunted-halls-migrate-staging
 
 jobs:
   deploy:
-    name: Deploy Engine to Production
+    name: Deploy Engine to Staging
     if: >-
       github.event_name == 'workflow_dispatch' ||
       (github.event_name == 'workflow_run' &&
@@ -48,7 +54,7 @@ jobs:
 
           if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
             if [[ "$MANUAL_REF" != "refs/heads/main" ]]; then
-              echo "Manual production deployments are allowed only from refs/heads/main (received $MANUAL_REF)." >&2
+              echo "Manual staging deployments are allowed only from refs/heads/main (received $MANUAL_REF)." >&2
               exit 1
             fi
             deploy_sha="$MANUAL_SHA"
@@ -110,7 +116,7 @@ jobs:
           fi
 
           image_ref="${IMAGE_REPOSITORY}@${IMAGE_DIGEST}"
-          previous_engine_image="$(gcloud run services describe haunted-halls-engine \
+          previous_engine_image="$(gcloud run services describe "$ENGINE_SERVICE" \
             --project="$GCP_PROJECT" \
             --region="$GCP_REGION" \
             --format='value(spec.template.spec.containers[0].image)')"
@@ -123,7 +129,7 @@ jobs:
           IMAGE_REF: ${{ steps.metadata.outputs.image_ref }}
         run: |
           set -euo pipefail
-          gcloud run jobs update haunted-halls-migrate \
+          gcloud run jobs update "$MIGRATION_JOB" \
             --image="$IMAGE_REF" \
             --project="$GCP_PROJECT" \
             --region="$GCP_REGION" \
@@ -134,7 +140,7 @@ jobs:
           IMAGE_REF: ${{ steps.metadata.outputs.image_ref }}
         run: |
           set -euo pipefail
-          configured_image="$(gcloud run jobs describe haunted-halls-migrate \
+          configured_image="$(gcloud run jobs describe "$MIGRATION_JOB" \
             --project="$GCP_PROJECT" \
             --region="$GCP_REGION" \
             --format='value(spec.template.spec.template.spec.containers[0].image)')"
@@ -147,7 +153,7 @@ jobs:
         id: migration
         run: |
           set -euo pipefail
-          execution_name="$(gcloud run jobs execute haunted-halls-migrate \
+          execution_name="$(gcloud run jobs execute "$MIGRATION_JOB" \
             --project="$GCP_PROJECT" \
             --region="$GCP_REGION" \
             --wait \
@@ -159,7 +165,7 @@ jobs:
           IMAGE_REF: ${{ steps.metadata.outputs.image_ref }}
         run: |
           set -euo pipefail
-          gcloud run services update haunted-halls-engine \
+          gcloud run services update "$ENGINE_SERVICE" \
             --image="$IMAGE_REF" \
             --project="$GCP_PROJECT" \
             --region="$GCP_REGION" \
@@ -169,7 +175,7 @@ jobs:
         id: verify
         run: |
           set -euo pipefail
-          service_json="$(gcloud run services describe haunted-halls-engine \
+          service_json="$(gcloud run services describe "$ENGINE_SERVICE" \
             --project="$GCP_PROJECT" \
             --region="$GCP_REGION" \
             --format=json)"
@@ -180,15 +186,15 @@ jobs:
           expected_image="${IMAGE_REPOSITORY}@${{ steps.image.outputs.digest }}"
 
           if [[ "$ready" != "True" ]]; then
-            echo "Engine service is not Ready: $ready" >&2
+            echo "Staging engine service is not Ready: $ready" >&2
             exit 1
           fi
           if [[ "$deployed_image" != "$expected_image" ]]; then
-            echo "Engine image mismatch: expected $expected_image, got $deployed_image" >&2
+            echo "Staging engine image mismatch: expected $expected_image, got $deployed_image" >&2
             exit 1
           fi
           if [[ -z "$service_url" ]]; then
-            echo "Engine service URL is missing from Cloud Run describe output." >&2
+            echo "Staging engine service URL is missing from Cloud Run describe output." >&2
             exit 1
           fi
 
@@ -203,7 +209,7 @@ jobs:
             --retry-delay 1 \
             "$service_url")"
           if [[ "$private_status" != "403" ]]; then
-            echo "Expected unauthenticated engine request to return 403, got $private_status" >&2
+            echo "Expected unauthenticated staging engine request to return 403, got $private_status" >&2
             exit 1
           fi
 
@@ -223,16 +229,19 @@ jobs:
           PRIVATE_BOUNDARY_STATUS: ${{ steps.verify.outputs.private_status }}
         run: |
           {
-            echo "## Engine Deploy"
+            echo "## Engine Deploy (Staging)"
             echo
+            printf -- '- Target environment: `staging` (`%s` / `%s`)\n' "$ENGINE_SERVICE" "$MIGRATION_JOB"
             printf -- '- Deployment Git SHA: `%s`\n' "${DEPLOY_SHA:-not available}"
             printf -- '- Immutable image digest: `%s`\n' "${IMAGE_DIGEST:-not available}"
             printf -- '- Migration execution: `%s`\n' "${MIGRATION_EXECUTION:-not available}"
             printf -- '- Migration status: `%s` (gcloud --wait)\n' "${MIGRATION_STATUS:-not verified}"
-            printf -- '- Previous engine image: `%s`\n' "${PREVIOUS_ENGINE_IMAGE:-not available}"
-            printf -- '- Deployed engine image: `%s`\n' "${IMAGE_REF:-not available}"
-            printf -- '- Engine Ready status: `%s`\n' "${ENGINE_READY:-not verified}"
+            printf -- '- Previous staging engine image: `%s`\n' "${PREVIOUS_ENGINE_IMAGE:-not available}"
+            printf -- '- Target staging engine image: `%s`\n' "${IMAGE_REF:-not available}"
+            printf -- '- Staging engine Ready status: `%s`\n' "${ENGINE_READY:-not verified}"
             printf -- '- Private boundary: HTTP `%s`\n' "${PRIVATE_BOUNDARY_STATUS:-not verified}"
             echo
-            echo "Rollback is manual: redeploy the previous engine image or another known-good digest. Schema downgrade is not part of rollback."
+            echo "Production is not modified by this workflow. Production promotion is centralized in jtesolin/haunted-halls#32 and promotes this exact staging digest without rebuilding."
+            echo
+            echo "Rollback is manual: redeploy the previous staging engine image or another known-good digest. Schema downgrade is not part of rollback."
           } >> "$GITHUB_STEP_SUMMARY"

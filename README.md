@@ -158,17 +158,38 @@ The workflow validates the repository's existing Python checks:
 - `python -m pyright`
 - `python -m pytest`
 
-CI also builds the production Docker image as `Engine / Docker Build`; it does not push the image.
+CI also builds the engine Docker image as `Engine / Docker Build`; it does not push the image.
 
-## Production Deployment / D5B
+## Staging Deployment / D5B
 
-The production deployment workflow runs automatically after a successful `Engine CI` push to `main`. A `workflow_dispatch` run supports manual redeployment, but only from `main`. The workflow is implemented but requires its first live production verification after merge.
+`Engine CI` behavior remains unchanged. After a successful `Engine CI` push to
+`main`, the engine staging deployment workflow runs automatically. A
+`workflow_dispatch` run supports manual staging redeployment, but only from
+`main`.
 
-Deployment uses GitHub OIDC and Google Workload Identity Federation, with no service account key or static credential. Docker BuildKit uses a GitHub Actions cache with a dedicated engine scope. The image is tagged with the deployment commit SHA and deployed by its immutable digest.
+The staging workflow uses GitHub OIDC and Google Workload Identity Federation,
+with no service account key or static credential. Docker BuildKit uses a GitHub
+Actions cache with a dedicated engine scope. It builds and pushes an immutable
+engine image, tags it with the deployment commit SHA, and deploys that exact
+digest to `haunted-halls-engine-staging`.
 
-The migration job image is updated and executed with `alembic upgrade head` before the engine service is updated. Migration failure stops the workflow before the engine update. Deployments are serialized so an in-progress migration or rollout is not canceled by a newer merge. Terraform remains the authority for all non-image configuration.
+Before the staging engine is updated, `haunted-halls-migrate-staging` is
+configured with the same immutable digest and runs `alembic upgrade head`
+against the staging database. Migration failure stops the workflow before the
+engine update. Staging deployments are serialized so an in-progress migration
+or rollout is not canceled by a newer merge. Terraform remains the authority
+for all non-image configuration.
 
-Rollback currently means manually redeploying the recorded previous engine image or another known-good digest. Schema downgrade is not part of rollback; application rollback and database downgrade remain separate under the expand/contract migration model. Automatic rollback may be considered after normal CD is verified.
+This repository's staging workflow does not automatically deploy production.
+Production promotion is a separate manual cross-repository release operation
+owned by `jtesolin/haunted-halls#32`. That promotion reuses the exact immutable
+engine digest already tested in staging; it does not rebuild the image.
+
+Rollback remains image-based: manually redeploy the recorded previous staging
+engine image or another known-good digest. Schema downgrade is not part of
+rollback; application rollback and database downgrade remain separate under the
+expand/contract migration model. Automatic rollback may be considered after
+normal CD is verified.
 
 ## Local Docker Stack
 
