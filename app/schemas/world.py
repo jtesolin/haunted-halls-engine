@@ -6,11 +6,15 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 
+NARRATIVE_CLUE_ID_MAX_LENGTH = 128
+
+
 class WorldActionType(StrEnum):
     MOVE_NPC = "move_npc"
     SET_NPC_STATUS = "set_npc_status"
     ADVANCE_CLOCK = "advance_clock"
     RECORD_FACT = "record_fact"
+    REVEAL_CLUE = "reveal_clue"
 
 
 class MoveNpcWorldAction(BaseModel):
@@ -43,7 +47,14 @@ class RecordFactWorldAction(BaseModel):
     fact: str
 
 
-WorldAction = MoveNpcWorldAction | SetNpcStatusWorldAction | AdvanceClockWorldAction | RecordFactWorldAction
+class RevealClueWorldAction(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    action: Literal[WorldActionType.REVEAL_CLUE] = WorldActionType.REVEAL_CLUE
+    clue_id: str = Field(min_length=1, max_length=NARRATIVE_CLUE_ID_MAX_LENGTH)
+
+
+WorldAction = MoveNpcWorldAction | SetNpcStatusWorldAction | AdvanceClockWorldAction | RecordFactWorldAction | RevealClueWorldAction
 
 
 class WorldActionResult(BaseModel):

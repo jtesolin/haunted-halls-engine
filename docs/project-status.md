@@ -457,9 +457,9 @@ were introduced in 7B3.
 
 ## Phase 8 — Narrative Progression & Character Systems
 
-**Status: Active. 8D2 Director Narrative Context is implemented; 8D3
-Narrative World Authority is the next intended 8D slice. Phase 8 work remains
-tracked by #52, with the core 8A/8B/8C and 8D1/8D2 foundations now in place.**
+**Status: Active. 8D2 Director Narrative Context and 8D3 Narrative World
+Authority are both implemented. Phase 8 work remains tracked by #52, with the
+core 8A/8B/8C and 8D1/8D2/8D3 foundations now in place.**
 
 ### 8A — Story / Quest Model
 
@@ -534,7 +534,81 @@ No new Director mutation authority was added: the proposal vocabulary remains
 the existing zero-or-one `WorldAction` set (`move_npc`, `set_npc_status`,
 `advance_clock`, `record_fact`), with quest/objective mutation, progression
 grants, ability unlocks, and ability checks still reserved for deterministic
-domain systems. 8D3 Narrative World Authority is the next intended 8D slice.
+domain systems. 8D3 Narrative World Authority (see below) adds bounded
+narrative authority with a deterministic `reveal_clue` action.
+
+### 8D3 — Narrative World Authority
+
+**Status: Implemented**
+
+Phase 8D3 adds a bounded narrative world authority domain that authors
+canonical story clues and exposes them through a new deterministic
+`reveal_clue` world action. The reveal action is executor-supported but
+intentionally excluded from the Director's proposal vocabulary, preserving
+the model's focus on mechanical outcome mutations (NPC movement, status,
+clock, facts) while keeping authored narrative disclosure deterministic and
+under strict eligibility guards.
+
+* `app/game/narrative.py` defines the narrative domain with immutable
+  `ClueDefinition` dataclass holding clue metadata (ID, text, quest ID,
+  objective ID). Canonical clue definitions are built into the domain, not
+  configurable from campaign state. One development clue,
+  `ghost_points_to_old_book`, proves the model: it becomes revealable when
+  `acquire_old_book` is the active objective in `librarys_whisper`, after
+  the earlier enter-library and speak-to-ghost objectives have completed.
+
+* `validate_narrative_clue_definitions()` validates clue definitions at
+  domain startup: empty/oversized IDs, duplicate IDs, empty/oversized text,
+  and unknown quest/objective references are all rejected with clear
+  programmer errors. This runs once at app bootstrap.
+
+* `ensure_narrative_state()` provides and normalizes the `narrative`
+  namespace in authoritative campaign state (`state["narrative"]`), safely
+  handling legacy campaigns without a narrative namespace (defaults to empty
+  revealed clues). If the namespace exists but is structurally malformed
+  (e.g., `revealed_clues` is not a list, or contains non-string entries),
+  the error is raised as `InvalidNarrativeStateError` rather than silently
+  repaired, ensuring malformed persisted state cannot accidentally reveal
+  clues or corrupt eligibility.
+
+* `list_revealable_clues()` computes a deterministically-ordered list of
+  clues currently eligible for reveal based on current authoritative story
+  state. A clue is revealable if (1) its quest is currently active, (2) its
+  target objective is currently active, and (3) it has not already been
+  revealed. This eligibility is computed fresh on each call by reading
+  current story state, never cached, and is resilient to legacy clues that
+  may have been revealed in older versions.
+
+* `app/schemas/world.py` adds `RevealClueWorldAction` to the `WorldAction`
+  union, enabling the executor to run the action. The action carries only
+  the clue ID, never the clue text or eligibility state.
+
+* `app/services/world_authority.py` implements the executor handler for
+  `reveal_clue`: validates the clue exists in canonical definitions, checks
+  it is currently eligible via `list_revealable_clues()`, appends the clue
+  ID to `state["narrative"]["revealed_clues"]` on success (never duplicate
+  entries), and returns a structured `WorldAuthorityResult` with
+  `changed=False` for idempotent duplicate reveals. Errors (`clue_not_found`,
+  `clue_not_eligible`, `malformed_narrative_state`) are non-mutating; the
+  original state is returned unchanged.
+
+* `app/schemas/director.py` creates a `DirectorWorldAction` union containing
+  only the four existing Director actions (`move_npc`, `set_npc_status`,
+  `advance_clock`, `record_fact`), intentionally excluding `reveal_clue`.
+  The `DirectorProposal` schema uses `DirectorWorldAction`, preventing the
+  model-backed Director from proposing narrative reveals during this phase.
+  The broader `WorldAction` union (supported by the executor) includes
+  reveal_clue; this boundary is enforced at the schema/type level.
+
+* The narrative domain does not integrate with the Narrator, Director, or
+  Orchestrator during 8D3. Reveal-clue actions must be proposed by game code
+  or future deterministic authority systems, not by the model or narrator
+  agent. Quest progression isolation is preserved: revealing a clue does not
+  advance objectives or grant progression points.
+
+* No database migration was required; narrative state persists as part of
+  the existing authoritative campaign-state JSON document, consistent with
+  current persistence architecture.
 
 ## Phase 8B — Character Progression Model
 
@@ -1190,11 +1264,11 @@ projection and memory maintenance ground in the resulting final authoritative
 state.
 
 Phase 8A Story / Quest, 8B progression, 8C ability/check domain foundation,
-8D1 deterministic story progression, 8D2 Director Narrative Context, and 8E1
-AI evaluation-harness foundation (issue #55) are complete. 8D3 Narrative
-World Authority is the next intended 8D slice. Ongoing Phase 8 work is tracked
-under roadmap issue #52; consult that issue for the current sequence of Phase
-8 milestones before starting further Phase 8 work.
+8D1 deterministic story progression, 8D2 Director Narrative Context, 8D3
+Narrative World Authority, and 8E1 AI evaluation-harness foundation (issue
+#55) are complete. Ongoing Phase 8 work is tracked under roadmap issue #52;
+consult that issue for the current sequence of Phase 8 milestones before
+starting further Phase 8 work.
 Tracking issue #43 (Phase 7B rollout planning) is closed and is not the
 active source for future-work candidates. See **Explicit Deferrals** above
 for the separate backlog of pre-Phase-8 candidate areas (for example

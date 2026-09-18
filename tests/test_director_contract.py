@@ -26,6 +26,7 @@ from app.schemas.world import (
     AdvanceClockWorldAction,
     MoveNpcWorldAction,
     RecordFactWorldAction,
+    RevealClueWorldAction,
     SetNpcStatusWorldAction,
     WorldAction,
 )
@@ -37,6 +38,22 @@ from app.services.director_context import (
 
 PROPOSAL_ADAPTER = TypeAdapter(DirectorProposal)
 WORLD_ACTION_ADAPTER = TypeAdapter(WorldAction)
+
+
+def test_package_schemas_exports_reveal_clue_world_action() -> None:
+    """Package-level world-action exports include the executor-supported clue action."""
+    from app import schemas
+    from app.schemas import (
+        AdvanceClockWorldAction as PackageAdvanceClockWorldAction,
+        RevealClueWorldAction as PackageRevealClueWorldAction,
+    )
+
+    assert PackageRevealClueWorldAction is RevealClueWorldAction
+    assert PackageAdvanceClockWorldAction is AdvanceClockWorldAction
+    assert "RevealClueWorldAction" in schemas.__all__
+    assert PackageRevealClueWorldAction(
+        clue_id="ghost_points_to_old_book"
+    ).action == "reveal_clue"
 
 
 def _parsed_action(
@@ -408,3 +425,68 @@ def test_director_context_identifies_malformed_npc_by_canonical_id(
 
     with pytest.raises(InvalidDirectorContextError, match=expected_message):
         _director_input(state)
+
+
+def test_broad_world_action_accepts_reveal_clue() -> None:
+    """Broad WorldAction union accepts reveal_clue."""
+    from app.schemas.world import RevealClueWorldAction
+
+    action = RevealClueWorldAction(clue_id="ghost_points_to_old_book")
+    validated = WORLD_ACTION_ADAPTER.validate_python(action.model_dump())
+
+    assert isinstance(validated, RevealClueWorldAction)
+    assert validated.clue_id == "ghost_points_to_old_book"
+
+
+def test_director_proposal_rejects_reveal_clue() -> None:
+    """DirectorProposal rejects reveal_clue during 8D3."""
+    reveal_action = {
+        "action": "reveal_clue",
+        "clue_id": "ghost_points_to_old_book",
+    }
+
+    with pytest.raises(ValidationError):
+        PROPOSAL_ADAPTER.validate_python(
+            {"decision": "act", "world_action": reveal_action}
+        )
+
+
+def test_director_proposal_still_rejects_other_unsupported_actions() -> None:
+    """DirectorProposal continues to reject non-Director actions."""
+    unsupported_actions = [
+        {"action": "spawn_npc", "npc_id": "new_npc"},
+        {"action": "set_world_flag", "flag": "visited_library"},
+        {"action": "advance_story_beat", "quest_id": "librarys_whisper"},
+        {"action": "reveal_clue", "clue_id": "some_clue"},
+    ]
+
+    for action in unsupported_actions:
+        with pytest.raises(ValidationError):
+            PROPOSAL_ADAPTER.validate_python(
+                {"decision": "act", "world_action": action}
+            )
+
+
+def test_director_proposal_still_accepts_four_supported_actions() -> None:
+    """DirectorProposal continues to accept the four Director actions."""
+    from app.schemas.world import (
+        MoveNpcWorldAction,
+        SetNpcStatusWorldAction,
+        AdvanceClockWorldAction,
+        RecordFactWorldAction,
+    )
+
+    actions = [
+        MoveNpcWorldAction(
+            npc_id="old_caretaker", destination_room_id="grand_corridor"
+        ),
+        SetNpcStatusWorldAction(npc_id="old_caretaker", status="absent"),
+        AdvanceClockWorldAction(ticks=1),
+        RecordFactWorldAction(fact="A fact"),
+    ]
+
+    for action in actions:
+        proposal = PROPOSAL_ADAPTER.validate_python(
+            {"decision": "act", "world_action": action.model_dump()}
+        )
+        assert isinstance(proposal, WorldActionProposal)

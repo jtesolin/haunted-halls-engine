@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+from typing import Any
 
 import pytest
 
@@ -344,3 +345,269 @@ def test_world_authority_preserves_unsupported_raw_dict_action_discriminator() -
     assert result.action == "unsupported_action"
     assert result.error_code == "invalid_world_action"
     assert state == original
+
+
+def test_world_authority_reveal_clue_succeeds_when_eligible() -> None:
+    """RevealClueWorldAction succeeds when clue is eligible and unrevealed."""
+    from app.schemas.story import NpcSpokenToSignal, RoomEnteredSignal
+    from app.schemas.world import RevealClueWorldAction
+    from app.game.story import apply_story_signal
+
+    state = build_fresh_campaign_state()
+    executor = WorldAuthorityExecutor()
+
+    # Progress story to make clue eligible
+    apply_story_signal(state, RoomEnteredSignal(room_id="library"))
+    apply_story_signal(state, NpcSpokenToSignal(npc_id="library_ghost"))
+
+    action = RevealClueWorldAction(clue_id="ghost_points_to_old_book")
+    next_state, result = executor.execute(action, state)
+
+    assert result.success is True
+    assert result.changed is True
+    assert "ghost_points_to_old_book" in next_state["narrative"]["revealed_clues"]
+    assert result.state_delta == {
+        "narrative": {
+            "revealed_clues": {
+                "added": ["ghost_points_to_old_book"],
+            }
+        }
+    }
+
+
+def test_world_authority_reveal_clue_succeeds_with_raw_dict() -> None:
+    """RevealClueWorldAction succeeds with raw dict payload when eligible."""
+    from app.schemas.story import NpcSpokenToSignal, RoomEnteredSignal
+    from app.game.story import apply_story_signal
+
+    state = build_fresh_campaign_state()
+    executor = WorldAuthorityExecutor()
+
+    # Progress story to make clue eligible
+    apply_story_signal(state, RoomEnteredSignal(room_id="library"))
+    apply_story_signal(state, NpcSpokenToSignal(npc_id="library_ghost"))
+
+    action = {
+        "action": "reveal_clue",
+        "clue_id": "ghost_points_to_old_book",
+    }
+    next_state, result = executor.execute(action, state)
+
+    assert result.success is True
+    assert result.changed is True
+    assert "ghost_points_to_old_book" in next_state["narrative"]["revealed_clues"]
+
+
+def test_world_authority_reveal_clue_changes_narrative_only_and_persists_id_not_text() -> None:
+    """Reveal changes only narrative namespace and persists only canonical clue ID."""
+    from app.schemas.story import NpcSpokenToSignal, RoomEnteredSignal
+    from app.schemas.world import RevealClueWorldAction
+    from app.game.story import apply_story_signal
+
+    state = build_fresh_campaign_state()
+
+    executor = WorldAuthorityExecutor()
+
+    # Progress story to make clue eligible
+    apply_story_signal(state, RoomEnteredSignal(room_id="library"))
+    apply_story_signal(state, NpcSpokenToSignal(npc_id="library_ghost"))
+
+    # Now take snapshots after story progression
+    original_story = copy.deepcopy(state.get("story"))
+    original_npcs = copy.deepcopy(state.get("npcs"))
+    original_items = copy.deepcopy(state.get("items"))
+    original_clock = copy.deepcopy(state.get("clock"))
+    original_facts = copy.deepcopy(state.get("facts"))
+
+    action = RevealClueWorldAction(clue_id="ghost_points_to_old_book")
+    next_state, result = executor.execute(action, state)
+
+    assert result.success is True
+    assert next_state["story"] == original_story
+    assert next_state["npcs"] == original_npcs
+    assert next_state["items"] == original_items
+    assert next_state["clock"] == original_clock
+    assert next_state["facts"] == original_facts
+    assert "ghost_points_to_old_book" in next_state["narrative"]["revealed_clues"]
+    # Verify clue text is NOT persisted
+    assert "The library ghost's attention" not in str(next_state["narrative"]["revealed_clues"])
+
+
+def test_world_authority_reveal_clue_duplicate_is_idempotent() -> None:
+    """Revealing clue twice: first succeeds with changed=True, second succeeds with changed=False."""
+    from app.schemas.story import NpcSpokenToSignal, RoomEnteredSignal
+    from app.schemas.world import RevealClueWorldAction
+    from app.game.story import apply_story_signal
+
+    state = build_fresh_campaign_state()
+    executor = WorldAuthorityExecutor()
+
+    # Progress story to make clue eligible
+    apply_story_signal(state, RoomEnteredSignal(room_id="library"))
+    apply_story_signal(state, NpcSpokenToSignal(npc_id="library_ghost"))
+
+    action = RevealClueWorldAction(clue_id="ghost_points_to_old_book")
+
+    # First reveal
+    next_state, first_result = executor.execute(action, state)
+    assert first_result.success is True
+    assert first_result.changed is True
+
+    # Second reveal (duplicate)
+    next_state_2, second_result = executor.execute(action, next_state)
+    assert second_result.success is True
+    assert second_result.changed is False
+    assert second_result.state_delta == {}
+    assert len(next_state_2["narrative"]["revealed_clues"]) == 1
+
+
+def test_world_authority_reveal_clue_unknown_fails_with_clue_not_found() -> None:
+    """Revealing unknown clue fails with clue_not_found."""
+    from app.schemas.world import RevealClueWorldAction
+
+    state = build_fresh_campaign_state()
+    executor = WorldAuthorityExecutor()
+
+    action = RevealClueWorldAction(clue_id="unknown_clue_id")
+    next_state, result = executor.execute(action, state)
+
+    assert result.success is False
+    assert result.changed is False
+    assert result.error_code == "clue_not_found"
+    assert "narrative" not in next_state or next_state["narrative"]["revealed_clues"] == []
+
+
+def test_world_authority_reveal_clue_ineligible_fails_with_clue_not_eligible() -> None:
+    """Revealing ineligible clue fails with clue_not_eligible."""
+    from app.schemas.world import RevealClueWorldAction
+
+    state = build_fresh_campaign_state()
+    executor = WorldAuthorityExecutor()
+
+    # Clue requires acquire_old_book to be active, but we don't progress story
+    action = RevealClueWorldAction(clue_id="ghost_points_to_old_book")
+    next_state, result = executor.execute(action, state)
+
+    assert result.success is False
+    assert result.changed is False
+    assert result.error_code == "clue_not_eligible"
+    assert "narrative" not in next_state or next_state["narrative"]["revealed_clues"] == []
+
+
+def test_world_authority_reveal_clue_malformed_narrative_state_fails() -> None:
+    """Revealing clue with malformed narrative state fails with malformed_narrative_state."""
+    from app.schemas.world import RevealClueWorldAction
+
+    state = build_fresh_campaign_state()
+    state["narrative"] = {"revealed_clues": "broken"}
+    executor = WorldAuthorityExecutor()
+
+    action = RevealClueWorldAction(clue_id="ghost_points_to_old_book")
+    next_state, result = executor.execute(action, state)
+
+    assert result.success is False
+    assert result.changed is False
+    assert result.error_code == "malformed_narrative_state"
+    assert next_state == state  # Unchanged
+
+
+@pytest.mark.parametrize(
+    "narrative_state",
+    [
+        None,
+        {},
+        {"revealed_clues": [""]},
+    ],
+    ids=["null-narrative", "missing-revealed-clues", "empty-clue-id"],
+)
+def test_world_authority_reveal_clue_malformed_state_is_non_mutating(
+    narrative_state: Any,
+) -> None:
+    """Malformed persisted narrative state fails without semantic mutation."""
+    from app.schemas.world import RevealClueWorldAction
+
+    state = build_fresh_campaign_state()
+    state["narrative"] = narrative_state
+    original = copy.deepcopy(state)
+
+    next_state, result = WorldAuthorityExecutor().execute(
+        RevealClueWorldAction(clue_id="ghost_points_to_old_book"),
+        state,
+    )
+
+    assert result.success is False
+    assert result.changed is False
+    assert result.error_code == "malformed_narrative_state"
+    assert next_state == original
+    assert state == original
+
+
+def test_reveal_clue_action_clue_id_observes_narrative_identifier_bound() -> None:
+    """The public action validates the same clue-ID boundary as the domain."""
+    from pydantic import ValidationError
+
+    from app.schemas.world import (
+        NARRATIVE_CLUE_ID_MAX_LENGTH,
+        RevealClueWorldAction,
+    )
+
+    accepted = RevealClueWorldAction(
+        clue_id="x" * NARRATIVE_CLUE_ID_MAX_LENGTH
+    )
+    assert len(accepted.clue_id) == NARRATIVE_CLUE_ID_MAX_LENGTH
+
+    with pytest.raises(ValidationError):
+        RevealClueWorldAction(
+            clue_id="x" * (NARRATIVE_CLUE_ID_MAX_LENGTH + 1)
+        )
+
+
+def test_world_authority_reveal_clue_invalid_payload_fails_with_invalid_world_action() -> None:
+    """Revealing with invalid payload fails with invalid_world_action."""
+    state = build_fresh_campaign_state()
+    executor = WorldAuthorityExecutor()
+
+    action = {
+        "action": "reveal_clue",
+        "clue_id": "",  # Invalid: empty clue_id
+    }
+    next_state, result = executor.execute(action, state)
+
+    assert result.success is False
+    assert result.error_code == "invalid_world_action"
+    assert next_state == state  # Unchanged
+
+
+def test_world_authority_existing_actions_unchanged() -> None:
+    """Existing move_npc, set_npc_status, advance_clock, record_fact remain unchanged."""
+    from app.schemas.world import (
+        MoveNpcWorldAction,
+        SetNpcStatusWorldAction,
+        AdvanceClockWorldAction,
+        RecordFactWorldAction,
+    )
+
+    state = build_fresh_campaign_state()
+    executor = WorldAuthorityExecutor()
+
+    # Test move_npc
+    move_result = executor.execute(
+        MoveNpcWorldAction(npc_id="old_caretaker", destination_room_id="grand_corridor"),
+        state,
+    )[1]
+    assert move_result.success is True
+
+    # Test set_npc_status
+    status_result = executor.execute(
+        SetNpcStatusWorldAction(npc_id="old_caretaker", status="absent"),
+        state,
+    )[1]
+    assert status_result.success is True
+
+    # Test advance_clock
+    clock_result = executor.execute(AdvanceClockWorldAction(ticks=2), state)[1]
+    assert clock_result.success is True
+
+    # Test record_fact
+    fact_result = executor.execute(RecordFactWorldAction(fact="A fact"), state)[1]
+    assert fact_result.success is True
