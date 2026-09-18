@@ -600,9 +600,15 @@ cannot escalate ownership or ability availability. Evaluation and resolution
 are pure reads with no campaign mutation, RNG/dice, model judgment, combat,
 or database migration.
 
-This is **8C DOMAIN FOUNDATION only**. It is **not** integrated into the
-Action Parser, player `ToolExecutor`, Director, Narrator, `ChatOrchestrator`,
-or story progression.
+This remains **8C DOMAIN FOUNDATION only** for deterministic ability
+availability and check resolution. Through 8D2, normal chat orchestration now
+supplies the Director with read-only normalized progression-track context and
+currently available canonical abilities during Director context construction.
+This integration is contextual only: the player `ToolExecutor` cannot grant
+8C progression, the Director cannot grant progression or unlock abilities,
+the Director cannot invoke or resolve ability checks, the Narrator has no new
+character-capability authority, and no model owns deterministic ability/check
+resolution.
 
 ## Authentication and Authorization
 
@@ -674,19 +680,22 @@ Extracts durable facts/memories from longer-running play.
 
 ### Director Agent
 
-**Implemented (7B1, 7B2, 7B3)**
+**Implemented (7B foundation; 8D2 bounded narrative context)**
 
 The engine exposes a bounded, typed authoritative context and a strict proposal
 contract representing no action or one existing typed `WorldAction`. The
 model-backed Director consumes only that projection and returns a validated
 advisory proposal plus provider usage metadata; it never mutates or repairs
-authoritative state itself. The Director is invoked inside the normal
-authoritative chat turn after the player's own result/state and before
-narrator scene construction. A `decision="act"` proposal executes exactly once
-through `WorldAuthorityExecutor`, which remains the sole deterministic
-execution boundary for privileged world actions; `decision="none"` performs no
-world mutation. A disabled provider path skips the Director and privileged
-world execution entirely.
+authoritative state itself. In the normal authoritative chat turn, the player
+result/state is applied, deterministic story progression runs, bounded
+read-only Director story/character context is constructed, and the Director may
+propose zero or one existing typed `WorldAction`. A `decision="act"` proposal
+executes exactly once through `WorldAuthorityExecutor`, which remains the sole
+deterministic execution boundary for privileged world actions before final
+state reaches the Narrator; `decision="none"` performs no world mutation. A
+disabled provider path skips the Director and privileged world execution
+entirely. Deterministic story, progression, and ability systems remain
+authoritative.
 
 ## Current Persistence
 
