@@ -546,8 +546,10 @@ def test_reveal_clue_action_clue_id_observes_narrative_identifier_bound() -> Non
     """The public action validates the same clue-ID boundary as the domain."""
     from pydantic import ValidationError
 
-    from app.game.narrative import NARRATIVE_CLUE_ID_MAX_LENGTH
-    from app.schemas.world import RevealClueWorldAction
+    from app.schemas.world import (
+        NARRATIVE_CLUE_ID_MAX_LENGTH,
+        RevealClueWorldAction,
+    )
 
     accepted = RevealClueWorldAction(
         clue_id="x" * NARRATIVE_CLUE_ID_MAX_LENGTH

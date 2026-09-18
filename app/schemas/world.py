@@ -5,7 +5,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.game.narrative import NARRATIVE_CLUE_ID_MAX_LENGTH
+
+NARRATIVE_CLUE_ID_MAX_LENGTH = 128
 
 
 class WorldActionType(StrEnum):

@@ -11,7 +11,6 @@ from app.game.campaign_state import build_fresh_campaign_state
 from app.game.narrative import (
     ClueDefinition,
     InvalidNarrativeStateError,
-    NARRATIVE_CLUE_ID_MAX_LENGTH,
     NARRATIVE_CLUES,
     ensure_narrative_state,
     list_revealable_clues,
@@ -20,6 +19,7 @@ from app.game.narrative import (
 )
 from app.game.story import apply_story_signal
 from app.schemas.story import NpcSpokenToSignal, RoomEnteredSignal
+from app.schemas.world import NARRATIVE_CLUE_ID_MAX_LENGTH
 
 
 def test_canonical_clue_definitions_validate() -> None:

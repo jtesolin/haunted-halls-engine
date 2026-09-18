@@ -14,9 +14,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from app.game.story import STORY_QUESTS, read_story_state_snapshot
-
-
-NARRATIVE_CLUE_ID_MAX_LENGTH = 128
+from app.schemas.world import NARRATIVE_CLUE_ID_MAX_LENGTH
 
 
 class InvalidNarrativeStateError(Exception):
