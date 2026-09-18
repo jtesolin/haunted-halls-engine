@@ -5,11 +5,18 @@ from typing import Any
 
 from pydantic import ValidationError
 
+from app.game.narrative import (
+    InvalidNarrativeStateError,
+    NARRATIVE_CLUES,
+    ensure_narrative_state,
+    list_revealable_clues,
+)
 from app.game.world import DEFAULT_WORLD, World
 from app.schemas.world import (
     AdvanceClockWorldAction,
     MoveNpcWorldAction,
     RecordFactWorldAction,
+    RevealClueWorldAction,
     SetNpcStatusWorldAction,
     WorldAction,
     WorldActionResult,
@@ -64,6 +71,8 @@ class WorldAuthorityExecutor:
             return self._execute_advance_clock(candidate, action_model, state)
         if isinstance(action_model, RecordFactWorldAction):
             return self._execute_record_fact(candidate, action_model, state)
+        if isinstance(action_model, RevealClueWorldAction):
+            return self._execute_reveal_clue(candidate, action_model, state)
         return state, self._result(
             success=False,
             action=str(getattr(action_model, "action", "unknown")),
@@ -372,6 +381,93 @@ class WorldAuthorityExecutor:
         )
         return candidate, result
 
+    def _execute_reveal_clue(
+        self,
+        candidate: dict[str, Any],
+        action: RevealClueWorldAction,
+        original_state: dict[str, Any],
+    ) -> tuple[dict[str, Any], WorldActionResult]:
+        # Validate malformed narrative state first
+        try:
+            ensure_narrative_state(candidate)
+        except InvalidNarrativeStateError:
+            return original_state, self._result(
+                success=False,
+                action=WorldActionType.REVEAL_CLUE,
+                summary="Narrative state is malformed.",
+                error_code="malformed_narrative_state",
+                errors=["malformed_narrative_state"],
+            )
+
+        # Check if clue exists in canonical definitions
+        if action.clue_id not in NARRATIVE_CLUES:
+            return original_state, self._result(
+                success=False,
+                action=WorldActionType.REVEAL_CLUE,
+                summary=f"Clue '{action.clue_id}' is not defined.",
+                error_code="clue_not_found",
+                errors=["clue_not_found"],
+            )
+
+        # Get current narrative state
+        narrative = candidate.get("narrative", {})
+        if not isinstance(narrative, dict):
+            return original_state, self._result(
+                success=False,
+                action=WorldActionType.REVEAL_CLUE,
+                summary="Narrative state is malformed.",
+                error_code="malformed_narrative_state",
+                errors=["malformed_narrative_state"],
+            )
+
+        revealed_clues = narrative.get("revealed_clues")
+        if not isinstance(revealed_clues, list):
+            return original_state, self._result(
+                success=False,
+                action=WorldActionType.REVEAL_CLUE,
+                summary="Narrative state is malformed.",
+                error_code="malformed_narrative_state",
+                errors=["malformed_narrative_state"],
+            )
+
+        # Check if already revealed
+        if action.clue_id in revealed_clues:
+            return candidate, self._result(
+                success=True,
+                changed=False,
+                action=WorldActionType.REVEAL_CLUE,
+                summary=f"Clue '{action.clue_id}' is already revealed.",
+                state_delta={},
+            )
+
+        # Check if clue is currently revealable
+        revealable_clues = list_revealable_clues(original_state)
+        if not any(clue.clue_id == action.clue_id for clue in revealable_clues):
+            return original_state, self._result(
+                success=False,
+                action=WorldActionType.REVEAL_CLUE,
+                summary=f"Clue '{action.clue_id}' is not currently eligible.",
+                error_code="clue_not_eligible",
+                errors=["clue_not_eligible"],
+            )
+
+        # Reveal the clue
+        revealed_clues.append(action.clue_id)
+        result = self._result(
+            success=True,
+            changed=True,
+            action=WorldActionType.REVEAL_CLUE,
+            summary=f"Revealed clue '{action.clue_id}'.",
+            state_delta={
+                "narrative": {
+                    "revealed_clues": {
+                        "added": [action.clue_id],
+                    }
+                }
+            },
+        )
+        return candidate, result
+
     def _coerce_action(self, action: WorldAction | dict[str, Any]) -> WorldAction | None:
         if isinstance(action, dict):
             action_type = action.get("action")
@@ -383,6 +479,8 @@ class WorldAuthorityExecutor:
                 return AdvanceClockWorldAction.model_validate(action)
             if action_type == WorldActionType.RECORD_FACT:
                 return RecordFactWorldAction.model_validate(action)
+            if action_type == WorldActionType.REVEAL_CLUE:
+                return RevealClueWorldAction.model_validate(action)
             return None
         return action
 

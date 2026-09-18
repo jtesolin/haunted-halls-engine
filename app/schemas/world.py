@@ -11,6 +11,7 @@ class WorldActionType(StrEnum):
     SET_NPC_STATUS = "set_npc_status"
     ADVANCE_CLOCK = "advance_clock"
     RECORD_FACT = "record_fact"
+    REVEAL_CLUE = "reveal_clue"
 
 
 class MoveNpcWorldAction(BaseModel):
@@ -43,7 +44,14 @@ class RecordFactWorldAction(BaseModel):
     fact: str
 
 
-WorldAction = MoveNpcWorldAction | SetNpcStatusWorldAction | AdvanceClockWorldAction | RecordFactWorldAction
+class RevealClueWorldAction(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    action: Literal[WorldActionType.REVEAL_CLUE] = WorldActionType.REVEAL_CLUE
+    clue_id: str = Field(min_length=1)
+
+
+WorldAction = MoveNpcWorldAction | SetNpcStatusWorldAction | AdvanceClockWorldAction | RecordFactWorldAction | RevealClueWorldAction
 
 
 class WorldActionResult(BaseModel):

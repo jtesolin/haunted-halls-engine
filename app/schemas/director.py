@@ -7,7 +7,12 @@ from pydantic import BaseModel, ConfigDict, Field
 from app.schemas.chat import ActionType, ParseStatus
 from app.schemas.character_progression import ProgressionTrackId
 from app.schemas.story import QuestStatus
-from app.schemas.world import WorldAction
+from app.schemas.world import (
+    AdvanceClockWorldAction,
+    MoveNpcWorldAction,
+    RecordFactWorldAction,
+    SetNpcStatusWorldAction,
+)
 
 
 class DirectorNPCContext(BaseModel):
@@ -97,11 +102,19 @@ class NoActionProposal(BaseModel):
     decision: Literal["none"] = "none"
 
 
+DirectorWorldAction = (
+    MoveNpcWorldAction
+    | SetNpcStatusWorldAction
+    | AdvanceClockWorldAction
+    | RecordFactWorldAction
+)
+
+
 class WorldActionProposal(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     decision: Literal["act"] = "act"
-    world_action: WorldAction
+    world_action: DirectorWorldAction
 
 
 DirectorProposal = Annotated[
