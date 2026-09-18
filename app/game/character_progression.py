@@ -2,8 +2,10 @@
 
 Phase 8B establishes the smallest coherent, deterministic character-growth
 model needed to eventually power Phase 8C ability/check resolution. It is
-intentionally independent of story/quest logic (owned by Phase 8A) and does
-not integrate with the Director or `ChatOrchestrator` yet.
+intentionally independent of story/quest logic (owned by Phase 8A). Through
+8D2, read-only normalized progression data may be projected into Director
+context during normal chat orchestration, but that projection grants neither
+the Director nor `ChatOrchestrator` mutation or check authority.
 
 Design invariants:
 
@@ -17,6 +19,10 @@ Design invariants:
   allowed to exceed it.
 * Ability unlocks are idempotent: unlocking an already-owned ability is a
   successful no-op, not an error.
+* Progression grants and ability unlocks remain deterministic domain
+  operations; ability availability and check resolution remain deterministic
+  Phase 8C domain authority. The Director cannot grant progression, unlock
+  abilities, or invoke/resolve ability checks.
 * Malformed persisted progression data (wrong types, out-of-range points,
   unknown tracks, non-string ability ids) is normalized down to safe
   defaults rather than trusted, so it can never escalate privileges.
