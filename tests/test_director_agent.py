@@ -245,6 +245,7 @@ def test_director_provider_actions_adapt_to_authoritative_world_actions(
         {"action": "spawn_npc", "npc_id": "new_npc"},
         {"action": "unsupported_action"},
         {"action": "advance_story_beat", "quest_id": "librarys_whisper"},
+        {"action": "reveal_clue", "clue_id": "ghost_points_to_old_book"},
     ],
 )
 def test_director_provider_wrapper_rejects_unsupported_actions(

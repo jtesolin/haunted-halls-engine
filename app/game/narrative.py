@@ -16,6 +16,9 @@ from typing import Any
 from app.game.story import STORY_QUESTS, read_story_state_snapshot
 
 
+NARRATIVE_CLUE_ID_MAX_LENGTH = 128
+
+
 class InvalidNarrativeStateError(Exception):
     """Raised when persisted narrative state is present but malformed.
 
@@ -52,7 +55,7 @@ def validate_narrative_clue_definitions(
     """Validate static clue identity, text, and quest/objective references.
 
     Raises immediately for programmer/configuration mistakes:
-    - Empty clue IDs
+    - Empty or oversized clue IDs
     - Duplicate clue IDs
     - Empty or oversized clue text
     - Referenced quest not in STORY_QUESTS
@@ -74,6 +77,10 @@ def validate_narrative_clue_definitions(
         clue_id = clue.clue_id
         if not clue_id or not isinstance(clue_id, str):
             raise ValueError("Clue ID must be a non-empty string.")
+        if len(clue_id) > NARRATIVE_CLUE_ID_MAX_LENGTH:
+            raise ValueError(
+                f"Clue ID exceeds {NARRATIVE_CLUE_ID_MAX_LENGTH} characters."
+            )
         if clue_id in seen_ids:
             raise ValueError(f"Duplicate clue ID '{clue_id}'.")
         seen_ids.add(clue_id)
@@ -114,8 +121,15 @@ def _normalize_revealed_clues(persisted_revealed: Any) -> list[str]:
             raise InvalidNarrativeStateError(
                 "Persisted revealed_clues contains non-string entries."
             )
-        if item:  # Skip empty strings
-            result.append(item)
+        if not item:
+            raise InvalidNarrativeStateError(
+                "Persisted revealed_clues contains empty clue IDs."
+            )
+        if len(item) > NARRATIVE_CLUE_ID_MAX_LENGTH:
+            raise InvalidNarrativeStateError(
+                "Persisted revealed_clues contains an oversized clue ID."
+            )
+        result.append(item)
     return result
 
 
@@ -127,25 +141,24 @@ def ensure_narrative_state(state: dict[str, Any]) -> dict[str, Any]:
     raises InvalidNarrativeStateError rather than silently repairing. Legacy
     campaigns with no `narrative` key are normalized to empty revealed_clues.
     """
-    raw_narrative = state.get("narrative")
-
-    if raw_narrative is None:
+    if "narrative" not in state:
         state["narrative"] = {"revealed_clues": []}
         return state["narrative"]
 
+    raw_narrative = state["narrative"]
     if not isinstance(raw_narrative, dict):
         raise InvalidNarrativeStateError(
             "Persisted narrative state is not an object."
         )
 
-    raw_revealed = raw_narrative.get("revealed_clues")
-    if raw_revealed is None:
-        normalized_revealed: list[str] = []
-    else:
-        try:
-            normalized_revealed = _normalize_revealed_clues(raw_revealed)
-        except InvalidNarrativeStateError:
-            raise
+    if "revealed_clues" not in raw_narrative:
+        raise InvalidNarrativeStateError(
+            "Persisted narrative state is missing revealed_clues."
+        )
+
+    normalized_revealed = _normalize_revealed_clues(
+        raw_narrative["revealed_clues"]
+    )
 
     state["narrative"] = {"revealed_clues": normalized_revealed}
     return state["narrative"]
@@ -158,7 +171,7 @@ def read_narrative_state_snapshot(state: dict[str, Any]) -> dict[str, Any]:
     Valid namespace -> copied normalized representation.
     Malformed present namespace -> raises InvalidNarrativeStateError.
     """
-    working_state = {"narrative": deepcopy(state.get("narrative"))}
+    working_state = deepcopy(state)
     narrative = ensure_narrative_state(working_state)
     return deepcopy(narrative)
 

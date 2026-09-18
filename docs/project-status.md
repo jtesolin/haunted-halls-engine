@@ -553,14 +553,14 @@ under strict eligibility guards.
   `ClueDefinition` dataclass holding clue metadata (ID, text, quest ID,
   objective ID). Canonical clue definitions are built into the domain, not
   configurable from campaign state. One development clue,
-  `ghost_points_to_old_book`, proves the model: it becomes revealable once
-  the player has activated and completed the prerequisites (enter library,
-  speak to library ghost) required by the active quest `librarys_whisper`.
+  `ghost_points_to_old_book`, proves the model: it becomes revealable when
+  `acquire_old_book` is the active objective in `librarys_whisper`, after
+  the earlier enter-library and speak-to-ghost objectives have completed.
 
 * `validate_narrative_clue_definitions()` validates clue definitions at
-  domain startup: empty IDs, duplicate IDs, empty/oversized text, unknown
-  quest/objective references, and objective ordering are all rejected with
-  clear programmer errors. This runs once at app bootstrap.
+  domain startup: empty/oversized IDs, duplicate IDs, empty/oversized text,
+  and unknown quest/objective references are all rejected with clear
+  programmer errors. This runs once at app bootstrap.
 
 * `ensure_narrative_state()` provides and normalizes the `narrative`
   namespace in authoritative campaign state (`state["narrative"]`), safely

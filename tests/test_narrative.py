@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import copy
+from typing import Any
+
 import pytest
 
 from app.game.campaign_state import build_fresh_campaign_state
 from app.game.narrative import (
     ClueDefinition,
     InvalidNarrativeStateError,
+    NARRATIVE_CLUE_ID_MAX_LENGTH,
     NARRATIVE_CLUES,
     ensure_narrative_state,
     list_revealable_clues,
@@ -97,6 +100,19 @@ def test_oversized_clue_text_rejects() -> None:
         validate_narrative_clue_definitions({"test_clue": clue})
 
 
+def test_oversized_clue_id_rejects() -> None:
+    """Clue ID must observe the shared narrative identifier bound."""
+    clue = ClueDefinition(
+        clue_id="x" * (NARRATIVE_CLUE_ID_MAX_LENGTH + 1),
+        text="Test clue.",
+        quest_id="librarys_whisper",
+        objective_id="acquire_old_book",
+    )
+
+    with pytest.raises(ValueError, match="Clue ID exceeds"):
+        validate_narrative_clue_definitions({"test_clue": clue})
+
+
 def test_legacy_state_without_narrative_namespace_reads_empty() -> None:
     """Legacy campaign state without narrative namespace normalizes to empty clues."""
     state = {"player": {"location": "entry_hall", "inventory": []}}
@@ -104,6 +120,34 @@ def test_legacy_state_without_narrative_namespace_reads_empty() -> None:
 
     assert narrative == {"revealed_clues": []}
     assert state["narrative"] == {"revealed_clues": []}
+
+
+@pytest.mark.parametrize(
+    "narrative_state",
+    [
+        None,
+        {},
+        {"revealed_clues": [""]},
+        {"revealed_clues": ["x" * (NARRATIVE_CLUE_ID_MAX_LENGTH + 1)]},
+    ],
+    ids=[
+        "null-narrative",
+        "missing-revealed-clues",
+        "empty-clue-id",
+        "oversized-clue-id",
+    ],
+)
+def test_present_malformed_narrative_state_is_not_repaired(
+    narrative_state: Any,
+) -> None:
+    """Present malformed state raises without discarding its persisted value."""
+    state = {"narrative": narrative_state}
+    original = copy.deepcopy(state)
+
+    with pytest.raises(InvalidNarrativeStateError):
+        ensure_narrative_state(state)
+
+    assert state == original
 
 
 def test_read_snapshot_does_not_mutate_caller() -> None:
@@ -118,13 +162,28 @@ def test_read_snapshot_does_not_mutate_caller() -> None:
     assert snapshot1 == snapshot2
 
 
+def test_read_snapshot_preserves_absent_vs_null_narrative_state() -> None:
+    """Snapshot treats absent legacy state as empty and present null as malformed."""
+    absent_state: dict[str, Any] = {}
+    null_state = {"narrative": None}
+
+    assert read_narrative_state_snapshot(absent_state) == {"revealed_clues": []}
+    assert "narrative" not in absent_state
+    with pytest.raises(InvalidNarrativeStateError):
+        read_narrative_state_snapshot(null_state)
+    assert null_state == {"narrative": None}
+
+
 def test_malformed_present_narrative_namespace_raises_safely() -> None:
     """Malformed present narrative namespace raises InvalidNarrativeStateError safely."""
     malformed_states = [
         {"narrative": []},  # narrative is list, not dict
         {"narrative": "broken"},  # narrative is string, not dict
+        {"narrative": None},  # narrative is explicitly null
+        {"narrative": {}},  # revealed_clues is missing
         {"narrative": {"revealed_clues": {}}},  # revealed_clues is dict, not list
         {"narrative": {"revealed_clues": "foo"}},  # revealed_clues is string, not list
+        {"narrative": {"revealed_clues": [""]}},  # clue ID is empty
     ]
 
     for state in malformed_states:

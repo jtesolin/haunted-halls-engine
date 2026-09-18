@@ -69,6 +69,10 @@ regenerating replacement state.
 Player `ParsedAction` values and the player `ToolExecutor` remain limited to
 player-authorized deterministic actions. Typed privileged `WorldAction` values
 execute separately through the deterministic `WorldAuthorityExecutor`.
+World authority may execute canonical deterministic narrative actions, but
+those actions operate only on authored IDs and static content rather than
+arbitrary model-authored mutations. Quest and objective completion remains
+owned exclusively by deterministic story progression.
 
 The model-backed Director is integrated into the normal authoritative chat
 turn, after the player's own result/state plus deterministic story/rule
@@ -81,3 +85,6 @@ privileged world-state transition, requires the same enabled provider model
 path as other model-backed agents; a disabled provider path skips the
 Director and privileged world execution entirely and preserves prior
 deterministic/stub chat behavior.
+Executor support for a `WorldAction` does not automatically expose it to the
+model-backed Director: the Director has an independently bounded proposal and
+provider-facing action vocabulary.

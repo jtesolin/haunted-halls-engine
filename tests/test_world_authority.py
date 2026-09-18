@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+from typing import Any
 
 import pytest
 
@@ -508,6 +509,55 @@ def test_world_authority_reveal_clue_malformed_narrative_state_fails() -> None:
     assert result.changed is False
     assert result.error_code == "malformed_narrative_state"
     assert next_state == state  # Unchanged
+
+
+@pytest.mark.parametrize(
+    "narrative_state",
+    [
+        None,
+        {},
+        {"revealed_clues": [""]},
+    ],
+    ids=["null-narrative", "missing-revealed-clues", "empty-clue-id"],
+)
+def test_world_authority_reveal_clue_malformed_state_is_non_mutating(
+    narrative_state: Any,
+) -> None:
+    """Malformed persisted narrative state fails without semantic mutation."""
+    from app.schemas.world import RevealClueWorldAction
+
+    state = build_fresh_campaign_state()
+    state["narrative"] = narrative_state
+    original = copy.deepcopy(state)
+
+    next_state, result = WorldAuthorityExecutor().execute(
+        RevealClueWorldAction(clue_id="ghost_points_to_old_book"),
+        state,
+    )
+
+    assert result.success is False
+    assert result.changed is False
+    assert result.error_code == "malformed_narrative_state"
+    assert next_state == original
+    assert state == original
+
+
+def test_reveal_clue_action_clue_id_observes_narrative_identifier_bound() -> None:
+    """The public action validates the same clue-ID boundary as the domain."""
+    from pydantic import ValidationError
+
+    from app.game.narrative import NARRATIVE_CLUE_ID_MAX_LENGTH
+    from app.schemas.world import RevealClueWorldAction
+
+    accepted = RevealClueWorldAction(
+        clue_id="x" * NARRATIVE_CLUE_ID_MAX_LENGTH
+    )
+    assert len(accepted.clue_id) == NARRATIVE_CLUE_ID_MAX_LENGTH
+
+    with pytest.raises(ValidationError):
+        RevealClueWorldAction(
+            clue_id="x" * (NARRATIVE_CLUE_ID_MAX_LENGTH + 1)
+        )
 
 
 def test_world_authority_reveal_clue_invalid_payload_fails_with_invalid_world_action() -> None:

@@ -5,6 +5,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.game.narrative import NARRATIVE_CLUE_ID_MAX_LENGTH
+
 
 class WorldActionType(StrEnum):
     MOVE_NPC = "move_npc"
@@ -48,7 +50,7 @@ class RevealClueWorldAction(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     action: Literal[WorldActionType.REVEAL_CLUE] = WorldActionType.REVEAL_CLUE
-    clue_id: str = Field(min_length=1)
+    clue_id: str = Field(min_length=1, max_length=NARRATIVE_CLUE_ID_MAX_LENGTH)
 
 
 WorldAction = MoveNpcWorldAction | SetNpcStatusWorldAction | AdvanceClockWorldAction | RecordFactWorldAction | RevealClueWorldAction
