@@ -26,6 +26,7 @@ from app.schemas.world import (
     AdvanceClockWorldAction,
     MoveNpcWorldAction,
     RecordFactWorldAction,
+    RevealClueWorldAction,
     SetNpcStatusWorldAction,
     WorldAction,
 )
@@ -37,6 +38,22 @@ from app.services.director_context import (
 
 PROPOSAL_ADAPTER = TypeAdapter(DirectorProposal)
 WORLD_ACTION_ADAPTER = TypeAdapter(WorldAction)
+
+
+def test_package_schemas_exports_reveal_clue_world_action() -> None:
+    """Package-level world-action exports include the executor-supported clue action."""
+    from app import schemas
+    from app.schemas import (
+        AdvanceClockWorldAction as PackageAdvanceClockWorldAction,
+        RevealClueWorldAction as PackageRevealClueWorldAction,
+    )
+
+    assert PackageRevealClueWorldAction is RevealClueWorldAction
+    assert PackageAdvanceClockWorldAction is AdvanceClockWorldAction
+    assert "RevealClueWorldAction" in schemas.__all__
+    assert PackageRevealClueWorldAction(
+        clue_id="ghost_points_to_old_book"
+    ).action == "reveal_clue"
 
 
 def _parsed_action(
