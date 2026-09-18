@@ -7,7 +7,15 @@ import pytest
 from pydantic import TypeAdapter, ValidationError
 
 from app.game.campaign_state import build_fresh_campaign_state
+from app.game.abilities import CANONICAL_ABILITY_DEFINITIONS
+from app.game.character_progression import (
+    PROGRESSION_TRACK_IDS,
+    grant_progress,
+    unlock_ability,
+)
+from app.game.story import STORY_QUESTS, apply_story_signal
 from app.schemas.chat import ActionType, ParsedAction, ParseStatus, ToolExecutionResult
+from app.schemas.story import ItemAcquiredSignal, NpcSpokenToSignal, RoomEnteredSignal
 from app.schemas.director import (
     DirectorInput,
     DirectorProposal,
@@ -120,6 +128,7 @@ def test_director_proposal_rejects_unknown_and_spawn_actions() -> None:
     for action in (
         {"action": "spawn_npc", "npc_id": "new_npc"},
         {"action": "unlock_exit", "room_id": "entry_hall"},
+        {"action": "advance_story_beat", "quest_id": "librarys_whisper"},
     ):
         with pytest.raises(ValidationError):
             PROPOSAL_ADAPTER.validate_python(
@@ -160,6 +169,156 @@ def test_director_context_is_bounded_deterministic_and_non_mutating() -> None:
     caretaker = next(npc for npc in context.npcs if npc.npc_id == "old_caretaker")
     assert caretaker.one_hop_destination_room_ids == ["grand_corridor"]
     assert state == original
+    assert [quest.quest_id for quest in context.story.quests] == ["librarys_whisper"]
+    assert [track.track_id.value for track in context.character.progression_tracks] == list(
+        PROGRESSION_TRACK_IDS
+    )
+
+
+def test_director_context_projects_initial_story_without_locked_future_details() -> None:
+    state = build_fresh_campaign_state()
+
+    context = _director_input(state)
+
+    assert len(context.story.quests) == 1
+    quest = context.story.quests[0]
+    assert quest.quest_id == "librarys_whisper"
+    assert quest.title == "The Library's Whisper"
+    assert quest.status.value == "active"
+    assert quest.completed_objective_ids == []
+    assert quest.active_objective is not None
+    assert quest.active_objective.objective_id == "enter_library"
+    assert quest.active_objective.description == "Enter the library."
+
+    serialized = context.model_dump_json(exclude_none=True)
+    assert "Speak to the library ghost." not in serialized
+    assert "Acquire the old book." not in serialized
+    assert "signal_type" not in serialized
+    assert "match_value" not in serialized
+
+
+def test_director_context_projects_progressed_story_from_domain_state() -> None:
+    state = build_fresh_campaign_state()
+
+    apply_story_signal(state, RoomEnteredSignal(room_id="library"))
+    context = _director_input(state)
+    quest = context.story.quests[0]
+    assert quest.completed_objective_ids == ["enter_library"]
+    assert quest.active_objective is not None
+    assert quest.active_objective.objective_id == "speak_to_library_ghost"
+
+    apply_story_signal(state, NpcSpokenToSignal(npc_id="library_ghost"))
+    context = _director_input(state)
+    quest = context.story.quests[0]
+    assert quest.completed_objective_ids == [
+        "enter_library",
+        "speak_to_library_ghost",
+    ]
+    assert quest.active_objective is not None
+    assert quest.active_objective.objective_id == "acquire_old_book"
+
+    apply_story_signal(state, ItemAcquiredSignal(item_id="old_book"))
+    context = _director_input(state)
+    quest = context.story.quests[0]
+    assert quest.status.value == "completed"
+    assert quest.completed_objective_ids == [
+        "enter_library",
+        "speak_to_library_ghost",
+        "acquire_old_book",
+    ]
+    assert quest.active_objective is None
+
+
+def test_director_context_projects_character_capabilities_only_when_available() -> None:
+    state = build_fresh_campaign_state()
+    grant_progress(state, "investigation", 2)
+    grant_progress(state, "rapport", 1)
+    unlock_ability(state, "keen_eye")
+    unlock_ability(state, "read_the_room")
+
+    context = _director_input(state)
+
+    assert [track.track_id.value for track in context.character.progression_tracks] == list(
+        PROGRESSION_TRACK_IDS
+    )
+    assert [track.points for track in context.character.progression_tracks] == [2, 0, 1, 0]
+    assert [ability.ability_id for ability in context.character.available_abilities] == [
+        "keen_eye"
+    ]
+    ability = context.character.available_abilities[0]
+    definition = CANONICAL_ABILITY_DEFINITIONS[0]
+    assert ability.display_name == definition.display_name
+    assert ability.short_description == definition.short_description
+    assert ability.track_id == definition.track
+
+
+def test_director_context_malformed_story_and_progression_remain_safe_and_non_mutating() -> None:
+    state = build_fresh_campaign_state()
+    state["story"] = {
+        "quests": {
+            "unknown_quest": {"status": "completed", "objectives": {}},
+            "librarys_whisper": {
+                "status": "completed",
+                "objectives": {
+                    "enter_library": "locked",
+                    "speak_to_library_ghost": "completed",
+                    "acquire_old_book": "locked",
+                },
+            },
+        }
+    }
+    state["player"]["progression"] = {
+        "version": 999,
+        "tracks": {
+            "investigation": 999,
+            "resolve": -1,
+            "rapport": "many",
+            "occult": True,
+        },
+        "unlocked_abilities": ["keen_eye", "unknown_ability"],
+    }
+    original = copy.deepcopy(state)
+
+    context = _director_input(state)
+
+    quest = context.story.quests[0]
+    assert quest.quest_id == "librarys_whisper"
+    assert quest.status.value == "active"
+    assert quest.completed_objective_ids == []
+    assert quest.active_objective is not None
+    assert quest.active_objective.objective_id == "enter_library"
+    assert [track.points for track in context.character.progression_tracks] == [0, 0, 0, 0]
+    assert context.character.available_abilities == []
+    assert "unknown_quest" not in context.model_dump_json(exclude_none=True)
+    assert "unknown_ability" not in context.model_dump_json(exclude_none=True)
+    assert state == original
+
+
+def test_director_context_projection_ordering_is_stable() -> None:
+    state = build_fresh_campaign_state()
+    apply_story_signal(state, RoomEnteredSignal(room_id="library"))
+    apply_story_signal(state, NpcSpokenToSignal(npc_id="library_ghost"))
+    grant_progress(state, "occult", 2)
+    grant_progress(state, "resolve", 2)
+    unlock_ability(state, "occult_insight")
+    unlock_ability(state, "steady_nerves")
+
+    context = _director_input(state)
+    repeated = _director_input(state)
+
+    assert context == repeated
+    assert [quest.quest_id for quest in context.story.quests] == list(STORY_QUESTS)
+    assert context.story.quests[0].completed_objective_ids == [
+        "enter_library",
+        "speak_to_library_ghost",
+    ]
+    assert [track.track_id.value for track in context.character.progression_tracks] == list(
+        PROGRESSION_TRACK_IDS
+    )
+    assert [ability.ability_id for ability in context.character.available_abilities] == [
+        "steady_nerves",
+        "occult_insight",
+    ]
 
 
 def test_director_context_includes_absent_npcs_with_canonical_ids_and_locations() -> None:

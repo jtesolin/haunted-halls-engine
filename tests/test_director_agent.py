@@ -15,6 +15,7 @@ from app.agents.director import (
 from app.ai.model_client import ModelCallResult, ModelUsage
 from app.ai.prompts import director_prompt
 from app.game.campaign_state import build_fresh_campaign_state
+from app.game.character_progression import grant_progress, unlock_ability
 from app.guardrails.model_policy import ModelPolicy
 from app.guardrails.token_budget import TokenBudget, estimate_tokens
 from app.schemas.chat import ActionType, ParsedAction, ToolExecutionResult
@@ -88,7 +89,26 @@ def test_director_requires_typed_input() -> None:
 
 def test_director_request_contains_only_bounded_projection(monkeypatch) -> None:
     agent = DirectorAgent()
-    director_input = _director_input()
+    state = build_fresh_campaign_state()
+    grant_progress(state, "investigation", 2)
+    unlock_ability(state, "keen_eye")
+    state["story"] = {
+        "quests": {
+            "unknown_quest": {"status": "completed", "objectives": {}},
+            "librarys_whisper": {
+                "status": "active",
+                "objectives": {
+                    "enter_library": "active",
+                    "speak_to_library_ghost": "locked",
+                    "acquire_old_book": "locked",
+                },
+                "signal_type": "room_entered",
+                "match_value": "library",
+            },
+        },
+        "raw_campaign_state": "must not be exposed",
+    }
+    director_input = _director_input(state)
     captured_messages = []
 
     async def fake_generate_structured(*, messages, **kwargs):  # noqa: ANN202, ARG001
@@ -112,10 +132,21 @@ def test_director_request_contains_only_bounded_projection(monkeypatch) -> None:
         "Authoritative Director input:\n"
         + director_input.model_dump_json(exclude_none=True, indent=2)
     )
-    assert "This raw player text must not be sent to the Director." not in str(
-        captured_messages
-    )
-    assert "inventory" not in str(captured_messages)
+    request_text = str(captured_messages)
+    assert "This raw player text must not be sent to the Director." not in request_text
+    assert "inventory" not in request_text
+    assert '"story"' in captured_messages[1]["content"]
+    assert '"character"' in captured_messages[1]["content"]
+    assert '"active_objective"' in captured_messages[1]["content"]
+    assert '"available_abilities"' in captured_messages[1]["content"]
+    assert '"ability_id": "keen_eye"' in captured_messages[1]["content"]
+    assert "Speak to the library ghost." not in request_text
+    assert "Acquire the old book." not in request_text
+    assert "signal_type" not in request_text
+    assert "match_value" not in request_text
+    assert "raw_campaign_state" not in request_text
+    assert "unknown_quest" not in request_text
+    assert "advance_story_beat" not in request_text
 
 
 def test_director_returns_no_action_proposal_and_provider_usage(monkeypatch) -> None:
@@ -213,6 +244,7 @@ def test_director_provider_actions_adapt_to_authoritative_world_actions(
     [
         {"action": "spawn_npc", "npc_id": "new_npc"},
         {"action": "unsupported_action"},
+        {"action": "advance_story_beat", "quest_id": "librarys_whisper"},
     ],
 )
 def test_director_provider_wrapper_rejects_unsupported_actions(

@@ -34,6 +34,30 @@ import evals.runner as runner_module
 from evals.scenarios import filter_scenarios, load_scenarios
 from evals.schemas import GraderResult, Scenario, ScenarioResult, ScenarioTarget
 
+_DIRECTOR_STORY_FIXTURE = {
+    "quests": [
+        {
+            "quest_id": "librarys_whisper",
+            "title": "The Library's Whisper",
+            "status": "active",
+            "completed_objective_ids": [],
+            "active_objective": {
+                "objective_id": "enter_library",
+                "description": "Enter the library.",
+            },
+        }
+    ]
+}
+_DIRECTOR_CHARACTER_FIXTURE = {
+    "progression_tracks": [
+        {"track_id": "investigation", "points": 0},
+        {"track_id": "resolve", "points": 0},
+        {"track_id": "rapport", "points": 0},
+        {"track_id": "occult", "points": 0},
+    ],
+    "available_abilities": [],
+}
+
 _DIRECTOR_FIXTURE = {
     "current_player_room_id": "eval_foyer",
     "clock_tick": 0,
@@ -52,6 +76,8 @@ _DIRECTOR_FIXTURE = {
         "succeeded": True,
         "result_summary": "The player looks around.",
     },
+    "story": _DIRECTOR_STORY_FIXTURE,
+    "character": _DIRECTOR_CHARACTER_FIXTURE,
 }
 
 
@@ -401,6 +427,8 @@ def test_move_npc_destination_legal_for_other_npc_is_still_rejected() -> None:
             "succeeded": True,
             "result_summary": "The player waits.",
         },
+        "story": _DIRECTOR_STORY_FIXTURE,
+        "character": _DIRECTOR_CHARACTER_FIXTURE,
     }
     DirectorInput.model_validate(authoritative_input)
 
@@ -438,6 +466,8 @@ def test_move_npc_destination_legal_for_own_npc_passes() -> None:
             "succeeded": True,
             "result_summary": "The player waits.",
         },
+        "story": _DIRECTOR_STORY_FIXTURE,
+        "character": _DIRECTOR_CHARACTER_FIXTURE,
     }
     scenario = Scenario(
         scenario_id="director-own-npc-destination-ok",
@@ -1337,6 +1367,8 @@ def test_report_omits_provider_controlled_validation_error_locations() -> None:
                     "error_code": None,
                     "target": None,
                 },
+                "story": _DIRECTOR_STORY_FIXTURE,
+                "character": _DIRECTOR_CHARACTER_FIXTURE,
                 marker: "unexpected-extra-field",
             }
         )

@@ -457,9 +457,9 @@ were introduced in 7B3.
 
 ## Phase 8 — Narrative Progression & Character Systems
 
-**Status: Active. 8D1 story progression is implemented and active; 8D2
-Director Narrative Context is the next intended slice. Phase 8 work remains
-tracked by #52, with the core 8A/8B/8C and 8D1 foundations now in place.**
+**Status: Active. 8D2 Director Narrative Context is implemented; 8D3
+Narrative World Authority is the next intended 8D slice. Phase 8 work remains
+tracked by #52, with the core 8A/8B/8C and 8D1/8D2 foundations now in place.**
 
 ### 8A — Story / Quest Model
 
@@ -514,8 +514,27 @@ existing `game_state_updated` path, reloaded through the memory-service state
 boundary, and remains idempotent because the chat-level replay boundary and
 `apply_story_signal()` guard against duplicate advancement.
 
-This slice remains focused on story progression integration itself. The next
-intended slice is 8D2 — Director Narrative Context expansion.
+This slice remains focused on story progression integration itself and is now
+followed by 8D2 — Director Narrative Context expansion.
+
+### 8D2 — Director Narrative Context
+
+**Status: Implemented**
+
+The Director now receives a bounded, read-only projection of authoritative
+story and character-capability state as part of `DirectorInput`. Story context
+contains canonical quest IDs and titles, current quest status, completed
+objective IDs, and only the current active objective description; locked
+future objective descriptions, trigger internals, raw player prose, and
+arbitrary campaign-state JSON remain outside the Director request. Character
+context contains all canonical progression tracks with normalized points and
+only currently available canonical abilities with bounded static metadata.
+
+No new Director mutation authority was added: the proposal vocabulary remains
+the existing zero-or-one `WorldAction` set (`move_npc`, `set_npc_status`,
+`advance_clock`, `record_fact`), with quest/objective mutation, progression
+grants, ability unlocks, and ability checks still reserved for deterministic
+domain systems. 8D3 Narrative World Authority is the next intended 8D slice.
 
 ## Phase 8B — Character Progression Model
 
@@ -581,9 +600,15 @@ cannot escalate ownership or ability availability. Evaluation and resolution
 are pure reads with no campaign mutation, RNG/dice, model judgment, combat,
 or database migration.
 
-This is **8C DOMAIN FOUNDATION only**. It is **not** integrated into the
-Action Parser, player `ToolExecutor`, Director, Narrator, `ChatOrchestrator`,
-or story progression.
+This remains **8C DOMAIN FOUNDATION only** for deterministic ability
+availability and check resolution. Through 8D2, normal chat orchestration now
+supplies the Director with read-only normalized progression-track context and
+currently available canonical abilities during Director context construction.
+This integration is contextual only: the player `ToolExecutor` cannot grant
+8C progression, the Director cannot grant progression or unlock abilities,
+the Director cannot invoke or resolve ability checks, the Narrator has no new
+character-capability authority, and no model owns deterministic ability/check
+resolution.
 
 ## Authentication and Authorization
 
@@ -655,19 +680,22 @@ Extracts durable facts/memories from longer-running play.
 
 ### Director Agent
 
-**Implemented (7B1, 7B2, 7B3)**
+**Implemented (7B foundation; 8D2 bounded narrative context)**
 
 The engine exposes a bounded, typed authoritative context and a strict proposal
 contract representing no action or one existing typed `WorldAction`. The
 model-backed Director consumes only that projection and returns a validated
 advisory proposal plus provider usage metadata; it never mutates or repairs
-authoritative state itself. The Director is invoked inside the normal
-authoritative chat turn after the player's own result/state and before
-narrator scene construction. A `decision="act"` proposal executes exactly once
-through `WorldAuthorityExecutor`, which remains the sole deterministic
-execution boundary for privileged world actions; `decision="none"` performs no
-world mutation. A disabled provider path skips the Director and privileged
-world execution entirely.
+authoritative state itself. In the normal authoritative chat turn, the player
+result/state is applied, deterministic story progression runs, bounded
+read-only Director story/character context is constructed, and the Director may
+propose zero or one existing typed `WorldAction`. A `decision="act"` proposal
+executes exactly once through `WorldAuthorityExecutor`, which remains the sole
+deterministic execution boundary for privileged world actions before final
+state reaches the Narrator; `decision="none"` performs no world mutation. A
+disabled provider path skips the Director and privileged world execution
+entirely. Deterministic story, progression, and ability systems remain
+authoritative.
 
 ## Current Persistence
 
@@ -1162,11 +1190,11 @@ projection and memory maintenance ground in the resulting final authoritative
 state.
 
 Phase 8A Story / Quest, 8B progression, 8C ability/check domain foundation,
-and 8E1 AI evaluation-harness foundation (issue #55) are complete. With the
-8A/8B/8C prerequisites complete, 8D Narrative Director Expansion is the next
-main gameplay milestone. Ongoing Phase 8 work is tracked under roadmap issue
-#52; consult that issue for the current sequence of Phase 8 milestones before
-starting further Phase 8 work.
+8D1 deterministic story progression, 8D2 Director Narrative Context, and 8E1
+AI evaluation-harness foundation (issue #55) are complete. 8D3 Narrative
+World Authority is the next intended 8D slice. Ongoing Phase 8 work is tracked
+under roadmap issue #52; consult that issue for the current sequence of Phase
+8 milestones before starting further Phase 8 work.
 Tracking issue #43 (Phase 7B rollout planning) is closed and is not the
 active source for future-work candidates. See **Explicit Deferrals** above
 for the separate backlog of pre-Phase-8 candidate areas (for example
