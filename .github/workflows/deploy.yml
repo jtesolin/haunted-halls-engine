@@ -237,7 +237,7 @@ jobs:
             printf -- '- Migration execution: `%s`\n' "${MIGRATION_EXECUTION:-not available}"
             printf -- '- Migration status: `%s` (gcloud --wait)\n' "${MIGRATION_STATUS:-not verified}"
             printf -- '- Previous staging engine image: `%s`\n' "${PREVIOUS_ENGINE_IMAGE:-not available}"
-            printf -- '- Deployed staging engine image: `%s`\n' "${IMAGE_REF:-not available}"
+            printf -- '- Target staging engine image: `%s`\n' "${IMAGE_REF:-not available}"
             printf -- '- Staging engine Ready status: `%s`\n' "${ENGINE_READY:-not verified}"
             printf -- '- Private boundary: HTTP `%s`\n' "${PRIVATE_BOUNDARY_STATUS:-not verified}"
             echo
