@@ -5,6 +5,7 @@ from app.game.campaign_state import build_fresh_campaign_state
 from app.game.character_progression import default_character_progression_state
 from app.game.progression_rewards import (
     AUTHORED_QUEST_COMPLETION_REWARDS,
+    REWARD_CLAIMS_KEY,
     ProgressionRewardOutcome,
     apply_quest_completion_rewards,
     read_reward_claims,
@@ -45,6 +46,37 @@ def test_legacy_and_read_claims_are_non_mutating() -> None:
 
     assert read_reward_claims(state) == (True, ())
     assert state == before
+
+
+def test_valid_player_without_reward_namespace_is_legacy_no_claims() -> None:
+    """A valid `player` dict simply lacking the reward-claims namespace is a
+    legacy campaign with no claims, not malformed state."""
+    state = build_fresh_campaign_state()
+    assert REWARD_CLAIMS_KEY not in state["player"]
+
+    assert read_reward_claims(state) == (True, ())
+
+
+def test_present_malformed_player_is_read_as_invalid_not_legacy() -> None:
+    for malformed_player in ("not-a-dict", ["also", "not", "a", "dict"], 42, None):
+        state = build_fresh_campaign_state()
+        state["player"] = malformed_player
+
+        assert read_reward_claims(state) == (False, ())
+
+
+def test_present_malformed_player_reward_application_fails_without_mutation() -> None:
+    state = build_fresh_campaign_state()
+    state["player"] = "not-a-dict"
+    before = deepcopy(state)
+
+    result = apply_quest_completion_rewards(state, _completed_library_whisper())
+
+    assert result.outcome == ProgressionRewardOutcome.FAILED
+    assert result.changed is False
+    assert result.narrator_reward is None
+    assert state == before
+    assert state["player"] == "not-a-dict"
 
 
 def test_malformed_claims_fail_safely_without_partial_reward() -> None:

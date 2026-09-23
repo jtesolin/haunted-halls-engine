@@ -883,6 +883,66 @@ def test_director_provider_failure_rolls_story_progression_back_with_transaction
         assert state["story"]["quests"]["librarys_whisper"]["objectives"]["speak_to_library_ghost"] == "active"
 
 
+def test_director_provider_failure_rolls_back_final_objective_and_reward_with_transaction(
+    monkeypatch,
+) -> None:
+    """8F1's authored reward is applied inside the same turn that completes
+    the final quest objective; a subsequent Director/provider failure must
+    roll the story completion and the reward back together at the DB
+    transaction boundary, not just within domain-level copying."""
+    _enable_provider(monkeypatch)
+
+    async def fake_parse(**kwargs):
+        return ParsedAction(
+            raw_text="take the old book",
+            action=ActionType.TAKE,
+            target="old_book",
+            confidence=1.0,
+            parse_status="ok",
+        )
+
+    def fake_tool_execute(self, *, parsed_action, campaign_state):
+        state = _story_state(objective_1="completed", objective_2="completed", objective_3="active")
+        tool_result = ToolExecutionResult(
+            success=True,
+            applied_tools=["take_item"],
+            summary="You take the old book.",
+            state_delta={},
+            item_id="old_book",
+        )
+        return state, tool_result
+
+    async def fake_propose(*, director_input, model=None):
+        raise DirectorProviderError("Director provider failed.")
+
+    monkeypatch.setattr(orchestrator_module.orchestrator.action_parser_agent, "parse", fake_parse)
+    monkeypatch.setattr(orchestrator_module.ToolExecutor, "execute", fake_tool_execute)
+    monkeypatch.setattr(orchestrator_module.orchestrator.director_agent, "propose", fake_propose)
+
+    client = TestClient(app)
+    user_id = _resolve_user(client, "story-final-objective-reward-director-failure")
+    campaign_id = "campaign_story_final_objective_reward_director_failure"
+    initial_state = _story_state(objective_1="completed", objective_2="completed", objective_3="active")
+    _create_campaign(user_id=user_id, campaign_id=campaign_id, state=initial_state)
+
+    with pytest.raises(HTTPException, match="Director service failed"):
+        asyncio.run(
+            orchestrator_module.orchestrator.handle_chat(
+                ChatRequest(message="take the old book", campaign_id=campaign_id),
+                owner_user_id=user_id,
+            )
+        )
+
+    with session() as db:
+        campaign = db.get_campaign(campaign_id)
+        state = _load_campaign_state(campaign)
+        quest = state["story"]["quests"]["librarys_whisper"]
+        assert quest["status"] == "active"
+        assert quest["objectives"]["acquire_old_book"] == "active"
+        assert "progression" not in state["player"]
+        assert "progression_rewards" not in state["player"]
+
+
 def test_real_tool_executor_executes_full_library_whisper_sequence(monkeypatch) -> None:
     _disable_provider(monkeypatch)
 

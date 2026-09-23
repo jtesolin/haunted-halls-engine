@@ -103,9 +103,20 @@ validate_progression_reward_definitions()
 
 
 def read_reward_claims(state: dict[str, Any]) -> tuple[bool, tuple[str, ...]]:
-    """Read claims without mutation; the boolean is false for malformed state."""
-    player = state.get("player")
-    if not isinstance(player, dict) or REWARD_CLAIMS_KEY not in player:
+    """Read claims without mutation; the boolean is false for malformed state.
+
+    A genuinely absent `player` key is legacy-compatible (no claims yet). A
+    *present* `player` value that is not a dict is malformed authoritative
+    state and must fail safely rather than being treated as "no claims", to
+    avoid downstream progression helpers silently replacing it with a fresh
+    dict and granting a reward on top of discarded corrupt state.
+    """
+    if "player" not in state:
+        return True, ()
+    player = state["player"]
+    if not isinstance(player, dict):
+        return False, ()
+    if REWARD_CLAIMS_KEY not in player:
         return True, ()
     namespace = player[REWARD_CLAIMS_KEY]
     if not isinstance(namespace, dict):
