@@ -20,6 +20,12 @@ from app.schemas.chat import (
     ParsedAction,
     ToolExecutionResult,
 )
+from app.schemas.character_progression import (
+    NarratorProgressionGrant,
+    NarratorProgressionReward,
+    NarratorUnlockedAbility,
+    ProgressionTrackId,
+)
 
 
 def test_narrator_agent_input_requires_scene_context() -> None:
@@ -121,6 +127,50 @@ def test_narrator_receives_narrow_authoritative_reveal(monkeypatch) -> None:
     assert "The library ghost's attention settles on the old book." in reveal_message["content"]
     assert "revealed_clues" not in reveal_message["content"]
     assert "current authoritative narrative reveal" in captured_messages[0]["content"].lower()
+
+
+def test_narrator_receives_only_narrow_authoritative_progression_reward(monkeypatch) -> None:
+    agent = NarratorAgent()
+    captured_messages = []
+
+    async def fake_generate_text(*, messages, **kwargs):  # noqa: ANN202, ARG001
+        captured_messages.extend(messages)
+        return "Your eye for hidden details sharpens."
+
+    monkeypatch.setattr("app.agents.narrator.model_client.generate_text", fake_generate_text)
+    asyncio.run(
+        agent.generate(
+            payload=NarratorAgentInput(
+                player_message="take the old book",
+                scene_context=NarratorSceneContext(
+                    current_room=NarratorRoom(id="library", name="Library")
+                ),
+                current_turn_reward=NarratorProgressionReward(
+                    reward_id="librarys_whisper_completion",
+                    progression_grants=[
+                        NarratorProgressionGrant(
+                            track_id=ProgressionTrackId.INVESTIGATION, prior_points=0, new_points=2
+                        )
+                    ],
+                    unlocked_abilities=[
+                        NarratorUnlockedAbility(
+                            ability_id="keen_eye", display_name="Keen Eye"
+                        )
+                    ],
+                ),
+            )
+        )
+    )
+
+    reward_message = next(
+        message
+        for message in captured_messages
+        if message["content"].startswith("Current authoritative progression reward")
+    )
+    assert '"librarys_whisper_completion"' in reward_message["content"]
+    assert '"new_points": 2' in reward_message["content"]
+    assert '"display_name": "Keen Eye"' in reward_message["content"]
+    assert '"progression"' not in reward_message["content"]
 
 
 def test_narrator_receives_authoritative_talk_target(monkeypatch) -> None:

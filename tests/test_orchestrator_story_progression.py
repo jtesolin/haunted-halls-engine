@@ -349,6 +349,7 @@ def test_failed_talk_variants_do_not_progress(monkeypatch, error_code: str, summ
 
 def test_take_after_objectives_1_and_2_completes_quest(monkeypatch) -> None:
     _enable_provider(monkeypatch)
+    captured_director_inputs = []
 
     async def fake_parse(**kwargs):
         return ParsedAction(raw_text="take the old book", action=ActionType.TAKE, target="old_book", confidence=1.0, parse_status="ok")
@@ -364,10 +365,23 @@ def test_take_after_objectives_1_and_2_completes_quest(monkeypatch) -> None:
         )
         return state, tool_result
 
+    original_build_director_input = orchestrator_module.build_director_input
+
+    def capture_build_director_input(state, *, parsed_action, tool_result, world=DEFAULT_WORLD):
+        director_input = original_build_director_input(
+            state,
+            parsed_action=parsed_action,
+            tool_result=tool_result,
+            world=world,
+        )
+        captured_director_inputs.append(director_input)
+        return director_input
+
     monkeypatch.setattr(orchestrator_module.orchestrator.action_parser_agent, "parse", fake_parse)
     monkeypatch.setattr(orchestrator_module.ToolExecutor, "execute", fake_tool_execute)
     monkeypatch.setattr(orchestrator_module.orchestrator.narrator_agent, "generate", lambda **kwargs: _async_stub_narrator_reply("The book settles into your hands."))
     monkeypatch.setattr(orchestrator_module.orchestrator.director_agent, "propose", _stub_director_response)
+    monkeypatch.setattr(orchestrator_module, "build_director_input", capture_build_director_input)
 
     client = TestClient(app)
     user_id = _resolve_user(client, "story-take-final-quest")
@@ -380,6 +394,13 @@ def test_take_after_objectives_1_and_2_completes_quest(monkeypatch) -> None:
         state = _load_campaign_state(campaign)
         assert state["story"]["quests"]["librarys_whisper"]["status"] == "completed"
         assert state["story"]["quests"]["librarys_whisper"]["objectives"]["acquire_old_book"] == "completed"
+        assert captured_director_inputs[-1].character.progression_tracks[0].points == 2
+        assert [ability.ability_id for ability in captured_director_inputs[-1].character.available_abilities] == [
+            "keen_eye"
+        ]
+        assert state["player"]["progression_rewards"]["claimed_reward_ids"] == [
+            "librarys_whisper_completion"
+        ]
 
 
 @pytest.mark.parametrize(

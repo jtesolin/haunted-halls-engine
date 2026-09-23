@@ -97,3 +97,8 @@ Narrator receives only a narrow current-turn effect containing the canonical
 clue ID and authored text. The Narrator does not receive raw narrative state,
 the full Director proposal, or arbitrary world-action results as narrative
 grounding.
+
+Authored character-progression rewards are deterministic static content triggered
+only by authoritative story outcomes. Persistent campaign-state reward claims
+prevent duplicate grants; models may observe and narrate an earned reward but
+never select or grant progression or abilities.

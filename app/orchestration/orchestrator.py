@@ -33,6 +33,9 @@ from app.game.campaign_state import (
 )
 from app.game.narrator_scene import build_narrator_scene_context
 from app.game.narrative import NARRATIVE_CLUES
+from app.game.progression_rewards import (
+    apply_quest_completion_rewards,
+)
 from app.game.story import apply_story_signal, derive_story_signal
 from app.guardrails.input_validation import validate_chat_request
 from app.guardrails.limit_errors import usage_limit_error
@@ -59,6 +62,7 @@ from app.schemas.chat import (
     ParsedAction,
     ToolExecutionResult,
 )
+from app.schemas.character_progression import NarratorProgressionReward
 from app.schemas.director import WorldActionProposal
 from app.schemas.events import (
     ActionParseFailedPayload,
@@ -84,6 +88,7 @@ logger = logging.getLogger(__name__)
 class DirectorStepResult:
     campaign_state: str
     current_turn_reveal: NarratorNarrativeReveal | None = None
+    current_turn_reward: NarratorProgressionReward | None = None
 
 
 class ChatOrchestrator:
@@ -569,11 +574,15 @@ class ChatOrchestrator:
             if story_signal is not None:
                 story_result = apply_story_signal(updated_state, story_signal)
                 story_state_changed = bool(story_result.changed)
+            reward_result = apply_quest_completion_rewards(updated_state, story_result)
+            current_turn_reward = reward_result.narrator_reward
+            reward_state_changed = reward_result.changed
 
             authoritative_state_changed = (
                 bool(tool_result.state_delta)
                 or campaign_state == "No campaign state yet."
                 or story_state_changed
+                or reward_state_changed
             )
             if authoritative_state_changed:
                 db.update_campaign_state(campaign_id, updated_state)
@@ -598,9 +607,11 @@ class ChatOrchestrator:
                     campaign_state=campaign_state,
                     parsed_action=parsed_action,
                     tool_result=tool_result,
+                    current_turn_reward=current_turn_reward,
                 )
                 campaign_state = director_step_result.campaign_state
                 current_turn_reveal = director_step_result.current_turn_reveal
+                current_turn_reward = director_step_result.current_turn_reward
             else:
                 current_turn_reveal = None
 
@@ -616,6 +627,7 @@ class ChatOrchestrator:
                     parsed_action=parsed_action,
                     tool_result=tool_result,
                     current_turn_reveal=current_turn_reveal,
+                    current_turn_reward=current_turn_reward,
                 )
                 if provider_model_enabled:
                     start_time = time.perf_counter()
@@ -759,6 +771,7 @@ class ChatOrchestrator:
         campaign_state: str,
         parsed_action: ParsedAction,
         tool_result: ToolExecutionResult,
+        current_turn_reward: NarratorProgressionReward | None,
     ) -> DirectorStepResult:
         """Invoke the Director after the authoritative player result and, for
         `decision="act"`, execute at most one validated `WorldAction` through
@@ -889,7 +902,10 @@ class ChatOrchestrator:
 
         proposal = director_result.proposal
         if not isinstance(proposal, WorldActionProposal):
-            return DirectorStepResult(campaign_state=campaign_state)
+            return DirectorStepResult(
+                campaign_state=campaign_state,
+                current_turn_reward=current_turn_reward,
+            )
 
         updated_world_state, world_action_result = self.world_authority_executor.execute(
             proposal.world_action, director_state
@@ -943,6 +959,7 @@ class ChatOrchestrator:
         return DirectorStepResult(
             campaign_state=campaign_state,
             current_turn_reveal=current_turn_reveal,
+            current_turn_reward=current_turn_reward,
         )
 
     def _chat_request_fingerprint(self, request: ChatRequest) -> str:
