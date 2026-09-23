@@ -11,6 +11,7 @@ from app.ai.prompts import narrator_prompt
 from app.guardrails.model_policy import ModelPolicy
 from app.guardrails.token_budget import TokenBudget
 from app.schemas.chat import NarratorSceneContext, ParsedAction, ToolExecutionResult
+from app.schemas.character_progression import NarratorProgressionReward
 
 
 class NarratorNarrativeReveal(BaseModel):
@@ -29,6 +30,7 @@ class NarratorAgentInput(BaseModel):
     parsed_action: ParsedAction | None = None
     tool_result: ToolExecutionResult | None = None
     current_turn_reveal: NarratorNarrativeReveal | None = None
+    current_turn_reward: NarratorProgressionReward | None = None
 
 
 class NarratorAgentOutput(BaseModel):
@@ -70,6 +72,7 @@ class NarratorAgent(BaseAgent):
             parsed_action=payload.parsed_action,
             tool_result=payload.tool_result,
             current_turn_reveal=payload.current_turn_reveal,
+            current_turn_reward=payload.current_turn_reward,
         )
         result = await model_client.generate_text(
             messages=messages,
@@ -105,6 +108,7 @@ class NarratorAgent(BaseAgent):
         parsed_action: ParsedAction | None,
         tool_result: ToolExecutionResult | None,
         current_turn_reveal: NarratorNarrativeReveal | None,
+        current_turn_reward: NarratorProgressionReward | None,
     ) -> list[ChatCompletionMessageParam]:
         messages: list[ChatCompletionMessageParam] = [
             {
@@ -183,6 +187,19 @@ class NarratorAgent(BaseAgent):
                         "Communicate this exact authored clue to the player this turn; "
                         "do not invent additional state or quest progress.\n"
                         f"{current_turn_reveal.model_dump_json(exclude_none=True, indent=2)}"
+                    ),
+                }
+            )
+
+        if current_turn_reward is not None:
+            messages.append(
+                {
+                    "role": "user",
+                    "content": (
+                        "Current authoritative progression reward:\n"
+                        "Communicate only this earned authored reward; do not invent "
+                        "additional points, abilities, quest changes, or state.\n"
+                        f"{current_turn_reward.model_dump_json(exclude_none=True, indent=2)}"
                     ),
                 }
             )

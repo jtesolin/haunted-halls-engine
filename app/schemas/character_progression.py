@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from enum import StrEnum
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class ProgressionTrackId(StrEnum):
@@ -57,3 +57,30 @@ class AbilityUnlockResult(BaseModel):
     already_unlocked: bool = False
     error_code: str | None = None
     reason: str | None = None
+
+
+class NarratorProgressionGrant(BaseModel):
+    """Narrow authoritative projection of points earned on the current turn."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    track_id: ProgressionTrackId
+    prior_points: int
+    new_points: int
+
+
+class NarratorUnlockedAbility(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    ability_id: str
+    display_name: str
+
+
+class NarratorProgressionReward(BaseModel):
+    """Narrow authoritative projection of one earned authored reward."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    reward_id: str
+    progression_grants: list[NarratorProgressionGrant] = Field(default_factory=list)
+    unlocked_abilities: list[NarratorUnlockedAbility] = Field(default_factory=list)

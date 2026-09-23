@@ -8,6 +8,7 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from app.agents.director import DirectorProviderError
+from app.agents.narrator import NarratorAgentInput
 from app.api.routes import chat as chat_routes
 from app.core.config import settings
 from app.db.session import session
@@ -17,6 +18,7 @@ from app.main import app
 from app.orchestration import orchestrator as orchestrator_module
 from app.orchestration.orchestrator import ChatOrchestrator
 from app.schemas.chat import ActionType, ChatRequest, ParsedAction, ToolExecutionResult
+from app.schemas.character_progression import ProgressionTrackId
 from app.schemas.director import NoActionProposal
 from app.schemas.story import NpcSpokenToSignal
 
@@ -349,6 +351,7 @@ def test_failed_talk_variants_do_not_progress(monkeypatch, error_code: str, summ
 
 def test_take_after_objectives_1_and_2_completes_quest(monkeypatch) -> None:
     _enable_provider(monkeypatch)
+    captured_director_inputs = []
 
     async def fake_parse(**kwargs):
         return ParsedAction(raw_text="take the old book", action=ActionType.TAKE, target="old_book", confidence=1.0, parse_status="ok")
@@ -364,10 +367,23 @@ def test_take_after_objectives_1_and_2_completes_quest(monkeypatch) -> None:
         )
         return state, tool_result
 
+    original_build_director_input = orchestrator_module.build_director_input
+
+    def capture_build_director_input(state, *, parsed_action, tool_result, world=DEFAULT_WORLD):
+        director_input = original_build_director_input(
+            state,
+            parsed_action=parsed_action,
+            tool_result=tool_result,
+            world=world,
+        )
+        captured_director_inputs.append(director_input)
+        return director_input
+
     monkeypatch.setattr(orchestrator_module.orchestrator.action_parser_agent, "parse", fake_parse)
     monkeypatch.setattr(orchestrator_module.ToolExecutor, "execute", fake_tool_execute)
     monkeypatch.setattr(orchestrator_module.orchestrator.narrator_agent, "generate", lambda **kwargs: _async_stub_narrator_reply("The book settles into your hands."))
     monkeypatch.setattr(orchestrator_module.orchestrator.director_agent, "propose", _stub_director_response)
+    monkeypatch.setattr(orchestrator_module, "build_director_input", capture_build_director_input)
 
     client = TestClient(app)
     user_id = _resolve_user(client, "story-take-final-quest")
@@ -380,6 +396,252 @@ def test_take_after_objectives_1_and_2_completes_quest(monkeypatch) -> None:
         state = _load_campaign_state(campaign)
         assert state["story"]["quests"]["librarys_whisper"]["status"] == "completed"
         assert state["story"]["quests"]["librarys_whisper"]["objectives"]["acquire_old_book"] == "completed"
+        assert captured_director_inputs[-1].character.progression_tracks[0].points == 2
+        assert [ability.ability_id for ability in captured_director_inputs[-1].character.available_abilities] == [
+            "keen_eye"
+        ]
+        assert state["player"]["progression_rewards"]["claimed_reward_ids"] == [
+            "librarys_whisper_completion"
+        ]
+
+
+def test_final_objective_completion_forwards_authoritative_reward_to_narrator(monkeypatch) -> None:
+    """Prove the orchestration boundary itself forwards the narrow authoritative
+    8F1 reward earned this turn to the Narrator, and nothing broader."""
+    _enable_provider(monkeypatch)
+    captured_narrator_payloads: list[NarratorAgentInput] = []
+
+    async def fake_parse(**kwargs):
+        return ParsedAction(raw_text="take the old book", action=ActionType.TAKE, target="old_book", confidence=1.0, parse_status="ok")
+
+    def fake_tool_execute(self, *, parsed_action, campaign_state):
+        state = _story_state(objective_1="completed", objective_2="completed", objective_3="active")
+        tool_result = ToolExecutionResult(
+            success=True,
+            applied_tools=["take_item"],
+            summary="You take the old book.",
+            state_delta={},
+            item_id="old_book",
+        )
+        return state, tool_result
+
+    async def capture_narrator_generate(*, payload, model=None):
+        captured_narrator_payloads.append(payload)
+        return await _async_stub_narrator_reply("The book settles into your hands.")
+
+    monkeypatch.setattr(orchestrator_module.orchestrator.action_parser_agent, "parse", fake_parse)
+    monkeypatch.setattr(orchestrator_module.ToolExecutor, "execute", fake_tool_execute)
+    monkeypatch.setattr(orchestrator_module.orchestrator.narrator_agent, "generate", capture_narrator_generate)
+    monkeypatch.setattr(orchestrator_module.orchestrator.director_agent, "propose", _stub_director_response)
+
+    client = TestClient(app)
+    user_id = _resolve_user(client, "story-final-objective-narrator-reward")
+    asyncio.run(
+        orchestrator_module.orchestrator.handle_chat(ChatRequest(message="take the old book"), owner_user_id=user_id)
+    )
+
+    assert len(captured_narrator_payloads) == 1
+    reward = captured_narrator_payloads[0].current_turn_reward
+    assert reward is not None
+    assert reward.reward_id == "librarys_whisper_completion"
+    assert len(reward.progression_grants) == 1
+    assert reward.progression_grants[0].track_id == ProgressionTrackId.INVESTIGATION
+    assert reward.progression_grants[0].prior_points == 0
+    assert reward.progression_grants[0].new_points == 2
+    assert len(reward.unlocked_abilities) == 1
+    assert reward.unlocked_abilities[0].ability_id == "keen_eye"
+    assert reward.unlocked_abilities[0].display_name == "Keen Eye"
+
+
+def test_idempotent_replay_does_not_regrant_or_renarrate_final_objective_reward(
+    monkeypatch,
+) -> None:
+    """Issue #76 requires that a completed idempotent chat replay neither
+    grants nor narrates the authored quest-completion reward again. This
+    exercises the actual `librarys_whisper` final-objective/reward turn
+    through the real orchestration/idempotency path, rather than a generic
+    replay scenario, so it proves the reward-specific acceptance
+    requirement directly."""
+    _enable_provider(monkeypatch)
+    captured_narrator_payloads: list[NarratorAgentInput] = []
+
+    async def fake_parse(**kwargs):
+        return ParsedAction(
+            raw_text="take the old book",
+            action=ActionType.TAKE,
+            target="old_book",
+            confidence=1.0,
+            parse_status="ok",
+        )
+
+    def fake_tool_execute(self, *, parsed_action, campaign_state):
+        state = _story_state(objective_1="completed", objective_2="completed", objective_3="active")
+        tool_result = ToolExecutionResult(
+            success=True,
+            applied_tools=["take_item"],
+            summary="You take the old book.",
+            state_delta={},
+            item_id="old_book",
+        )
+        return state, tool_result
+
+    async def capture_narrator_generate(*, payload, model=None):
+        captured_narrator_payloads.append(payload)
+        return await _async_stub_narrator_reply("The book settles into your hands.")
+
+    monkeypatch.setattr(orchestrator_module.orchestrator.action_parser_agent, "parse", fake_parse)
+    monkeypatch.setattr(orchestrator_module.ToolExecutor, "execute", fake_tool_execute)
+    monkeypatch.setattr(orchestrator_module.orchestrator.narrator_agent, "generate", capture_narrator_generate)
+    monkeypatch.setattr(orchestrator_module.orchestrator.director_agent, "propose", _stub_director_response)
+
+    client = TestClient(app)
+    user_id = _resolve_user(client, "story-idempotent-final-objective-reward")
+    campaign_id = "campaign_story_idempotent_final_objective_reward"
+    initial_state = _story_state(objective_1="completed", objective_2="completed", objective_3="active")
+    _create_campaign(user_id=user_id, campaign_id=campaign_id, state=initial_state)
+    idempotency_key = "final-objective-reward-replay-key"
+
+    first = asyncio.run(
+        orchestrator_module.orchestrator.handle_chat(
+            ChatRequest(message="take the old book", campaign_id=campaign_id),
+            owner_user_id=user_id,
+            idempotency_key=idempotency_key,
+        )
+    )
+
+    with session() as db:
+        campaign = db.get_campaign(campaign_id)
+        state_after_first = _load_campaign_state(campaign)
+    quest_after_first = state_after_first["story"]["quests"]["librarys_whisper"]
+    assert quest_after_first["status"] == "completed"
+    assert quest_after_first["objectives"]["acquire_old_book"] == "completed"
+    assert state_after_first["player"]["progression"]["tracks"]["investigation"] == 2
+    assert state_after_first["player"]["progression"]["unlocked_abilities"] == ["keen_eye"]
+    assert state_after_first["player"]["progression_rewards"]["claimed_reward_ids"] == [
+        "librarys_whisper_completion"
+    ]
+
+    assert len(captured_narrator_payloads) == 1
+    first_reward = captured_narrator_payloads[0].current_turn_reward
+    assert first_reward is not None
+    assert first_reward.reward_id == "librarys_whisper_completion"
+    assert first_reward.progression_grants[0].prior_points == 0
+    assert first_reward.progression_grants[0].new_points == 2
+    assert first_reward.unlocked_abilities[0].ability_id == "keen_eye"
+
+    def fail_if_called_parse(**kwargs):
+        raise AssertionError("Action parser must not run again on completed replay.")
+
+    def fail_if_called_execute(*args, **kwargs):
+        raise AssertionError("Tool executor must not run again on completed replay.")
+
+    async def fail_if_called_generate(*args, **kwargs):
+        raise AssertionError("Narrator must not run again on completed replay.")
+
+    def fail_story_derivation(*args, **kwargs):
+        raise AssertionError("Story derivation should not run on a replayed completed request.")
+
+    def fail_story_progression(*args, **kwargs):
+        raise AssertionError("apply_story_signal should not run on a replayed completed request.")
+
+    def fail_reward_application(*args, **kwargs):
+        raise AssertionError(
+            "apply_quest_completion_rewards should not run on a replayed completed request."
+        )
+
+    monkeypatch.setattr(orchestrator_module.orchestrator.action_parser_agent, "parse", fail_if_called_parse)
+    monkeypatch.setattr(orchestrator_module.ToolExecutor, "execute", fail_if_called_execute)
+    monkeypatch.setattr(orchestrator_module.orchestrator.narrator_agent, "generate", fail_if_called_generate)
+    monkeypatch.setattr(orchestrator_module, "derive_story_signal", fail_story_derivation)
+    monkeypatch.setattr(orchestrator_module, "apply_story_signal", fail_story_progression)
+    monkeypatch.setattr(
+        orchestrator_module, "apply_quest_completion_rewards", fail_reward_application
+    )
+
+    second = asyncio.run(
+        orchestrator_module.orchestrator.handle_chat(
+            ChatRequest(message="take the old book", campaign_id=campaign_id),
+            owner_user_id=user_id,
+            idempotency_key=idempotency_key,
+        )
+    )
+
+    assert second.reply == first.reply
+    assert second.campaign_id == first.campaign_id
+    assert second.turn_id == first.turn_id
+    assert len(captured_narrator_payloads) == 1
+
+    with session() as db:
+        campaign = db.get_campaign(campaign_id)
+        state_after_replay = _load_campaign_state(campaign)
+    assert state_after_replay == state_after_first
+    quest_after_replay = state_after_replay["story"]["quests"]["librarys_whisper"]
+    assert quest_after_replay["status"] == "completed"
+    assert state_after_replay["player"]["progression"]["tracks"]["investigation"] == 2
+    assert state_after_replay["player"]["progression"]["unlocked_abilities"] == ["keen_eye"]
+    assert state_after_replay["player"]["progression_rewards"]["claimed_reward_ids"] == [
+        "librarys_whisper_completion"
+    ]
+
+
+def test_malformed_reward_claims_roll_back_quest_completion(monkeypatch) -> None:
+    _enable_provider(monkeypatch)
+
+    async def fake_parse(**kwargs):
+        return ParsedAction(
+            raw_text="take the old book",
+            action=ActionType.TAKE,
+            target="old_book",
+            confidence=1.0,
+            parse_status="ok",
+        )
+
+    def fake_tool_execute(self, *, parsed_action, campaign_state):
+        state = json.loads(campaign_state)
+        return state, ToolExecutionResult(
+            success=True,
+            applied_tools=["take_item"],
+            summary="You take the old book.",
+            state_delta={},
+            item_id="old_book",
+        )
+
+    monkeypatch.setattr(
+        orchestrator_module.orchestrator.action_parser_agent, "parse", fake_parse
+    )
+    monkeypatch.setattr(orchestrator_module.ToolExecutor, "execute", fake_tool_execute)
+
+    client = TestClient(app)
+    user_id = _resolve_user(client, "story-malformed-reward-claims")
+    campaign_id = "campaign_story_malformed_reward_claims"
+    initial_state = _story_state(
+        objective_1="completed",
+        objective_2="completed",
+        objective_3="active",
+    )
+    initial_state["player"]["progression_rewards"] = {
+        "claimed_reward_ids": ["librarys_whisper_completion", 3]
+    }
+    _create_campaign(user_id=user_id, campaign_id=campaign_id, state=initial_state)
+
+    with pytest.raises(HTTPException, match="Campaign state could not be processed"):
+        asyncio.run(
+            orchestrator_module.orchestrator.handle_chat(
+                ChatRequest(message="take the old book", campaign_id=campaign_id),
+                owner_user_id=user_id,
+            )
+        )
+
+    with session() as db:
+        campaign = db.get_campaign(campaign_id)
+        state = _load_campaign_state(campaign)
+        quest = state["story"]["quests"]["librarys_whisper"]
+        assert quest["status"] == "active"
+        assert quest["objectives"]["acquire_old_book"] == "active"
+        assert "progression" not in state["player"]
+        assert state["player"]["progression_rewards"] == {
+            "claimed_reward_ids": ["librarys_whisper_completion", 3]
+        }
 
 
 @pytest.mark.parametrize(
@@ -800,6 +1062,66 @@ def test_director_provider_failure_rolls_story_progression_back_with_transaction
         campaign = db.get_campaign(campaign_id)
         state = _load_campaign_state(campaign)
         assert state["story"]["quests"]["librarys_whisper"]["objectives"]["speak_to_library_ghost"] == "active"
+
+
+def test_director_provider_failure_rolls_back_final_objective_and_reward_with_transaction(
+    monkeypatch,
+) -> None:
+    """8F1's authored reward is applied inside the same turn that completes
+    the final quest objective; a subsequent Director/provider failure must
+    roll the story completion and the reward back together at the DB
+    transaction boundary, not just within domain-level copying."""
+    _enable_provider(monkeypatch)
+
+    async def fake_parse(**kwargs):
+        return ParsedAction(
+            raw_text="take the old book",
+            action=ActionType.TAKE,
+            target="old_book",
+            confidence=1.0,
+            parse_status="ok",
+        )
+
+    def fake_tool_execute(self, *, parsed_action, campaign_state):
+        state = _story_state(objective_1="completed", objective_2="completed", objective_3="active")
+        tool_result = ToolExecutionResult(
+            success=True,
+            applied_tools=["take_item"],
+            summary="You take the old book.",
+            state_delta={},
+            item_id="old_book",
+        )
+        return state, tool_result
+
+    async def fake_propose(*, director_input, model=None):
+        raise DirectorProviderError("Director provider failed.")
+
+    monkeypatch.setattr(orchestrator_module.orchestrator.action_parser_agent, "parse", fake_parse)
+    monkeypatch.setattr(orchestrator_module.ToolExecutor, "execute", fake_tool_execute)
+    monkeypatch.setattr(orchestrator_module.orchestrator.director_agent, "propose", fake_propose)
+
+    client = TestClient(app)
+    user_id = _resolve_user(client, "story-final-objective-reward-director-failure")
+    campaign_id = "campaign_story_final_objective_reward_director_failure"
+    initial_state = _story_state(objective_1="completed", objective_2="completed", objective_3="active")
+    _create_campaign(user_id=user_id, campaign_id=campaign_id, state=initial_state)
+
+    with pytest.raises(HTTPException, match="Director service failed"):
+        asyncio.run(
+            orchestrator_module.orchestrator.handle_chat(
+                ChatRequest(message="take the old book", campaign_id=campaign_id),
+                owner_user_id=user_id,
+            )
+        )
+
+    with session() as db:
+        campaign = db.get_campaign(campaign_id)
+        state = _load_campaign_state(campaign)
+        quest = state["story"]["quests"]["librarys_whisper"]
+        assert quest["status"] == "active"
+        assert quest["objectives"]["acquire_old_book"] == "active"
+        assert "progression" not in state["player"]
+        assert "progression_rewards" not in state["player"]
 
 
 def test_real_tool_executor_executes_full_library_whisper_sequence(monkeypatch) -> None:
