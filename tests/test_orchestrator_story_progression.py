@@ -8,6 +8,7 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from app.agents.director import DirectorProviderError
+from app.agents.narrator import NarratorAgentInput
 from app.api.routes import chat as chat_routes
 from app.core.config import settings
 from app.db.session import session
@@ -17,6 +18,7 @@ from app.main import app
 from app.orchestration import orchestrator as orchestrator_module
 from app.orchestration.orchestrator import ChatOrchestrator
 from app.schemas.chat import ActionType, ChatRequest, ParsedAction, ToolExecutionResult
+from app.schemas.character_progression import ProgressionTrackId
 from app.schemas.director import NoActionProposal
 from app.schemas.story import NpcSpokenToSignal
 
@@ -401,6 +403,54 @@ def test_take_after_objectives_1_and_2_completes_quest(monkeypatch) -> None:
         assert state["player"]["progression_rewards"]["claimed_reward_ids"] == [
             "librarys_whisper_completion"
         ]
+
+
+def test_final_objective_completion_forwards_authoritative_reward_to_narrator(monkeypatch) -> None:
+    """Prove the orchestration boundary itself forwards the narrow authoritative
+    8F1 reward earned this turn to the Narrator, and nothing broader."""
+    _enable_provider(monkeypatch)
+    captured_narrator_payloads: list[NarratorAgentInput] = []
+
+    async def fake_parse(**kwargs):
+        return ParsedAction(raw_text="take the old book", action=ActionType.TAKE, target="old_book", confidence=1.0, parse_status="ok")
+
+    def fake_tool_execute(self, *, parsed_action, campaign_state):
+        state = _story_state(objective_1="completed", objective_2="completed", objective_3="active")
+        tool_result = ToolExecutionResult(
+            success=True,
+            applied_tools=["take_item"],
+            summary="You take the old book.",
+            state_delta={},
+            item_id="old_book",
+        )
+        return state, tool_result
+
+    async def capture_narrator_generate(*, payload, model=None):
+        captured_narrator_payloads.append(payload)
+        return await _async_stub_narrator_reply("The book settles into your hands.")
+
+    monkeypatch.setattr(orchestrator_module.orchestrator.action_parser_agent, "parse", fake_parse)
+    monkeypatch.setattr(orchestrator_module.ToolExecutor, "execute", fake_tool_execute)
+    monkeypatch.setattr(orchestrator_module.orchestrator.narrator_agent, "generate", capture_narrator_generate)
+    monkeypatch.setattr(orchestrator_module.orchestrator.director_agent, "propose", _stub_director_response)
+
+    client = TestClient(app)
+    user_id = _resolve_user(client, "story-final-objective-narrator-reward")
+    asyncio.run(
+        orchestrator_module.orchestrator.handle_chat(ChatRequest(message="take the old book"), owner_user_id=user_id)
+    )
+
+    assert len(captured_narrator_payloads) == 1
+    reward = captured_narrator_payloads[0].current_turn_reward
+    assert reward is not None
+    assert reward.reward_id == "librarys_whisper_completion"
+    assert len(reward.progression_grants) == 1
+    assert reward.progression_grants[0].track_id == ProgressionTrackId.INVESTIGATION
+    assert reward.progression_grants[0].prior_points == 0
+    assert reward.progression_grants[0].new_points == 2
+    assert len(reward.unlocked_abilities) == 1
+    assert reward.unlocked_abilities[0].ability_id == "keen_eye"
+    assert reward.unlocked_abilities[0].display_name == "Keen Eye"
 
 
 def test_malformed_reward_claims_roll_back_quest_completion(monkeypatch) -> None:

@@ -33,7 +33,8 @@ player text
   -> deterministic rule/tool execution (player ToolExecutor)
   -> authoritative player result/state
   -> deterministic story/rule progression
-  -> authoritative post-player/post-story state
+  -> deterministic authored progression rewards
+  -> authoritative post-story/post-reward state
   -> Director bounded context
   -> zero or one typed WorldAction
   -> WorldAuthorityExecutor
@@ -47,12 +48,13 @@ not invent state changes. Player-action authority is separate from privileged
 world/Director authority; a player-facing action cannot become a world-authority
 operation through narration or agent choice. The Director receives bounded
 read-only story, character, and revealable-clue projections after deterministic
-story/rule progression; those projections do not grant quest/objective
-mutation, progression-grant, ability-unlock, ability-check, or arbitrary
-narrative-writing authority. The Director never mutates campaign state
-directly; only `WorldAuthorityExecutor` may apply a privileged world-state
-transition, and only after the player's own authoritative result and
-deterministic story/rule progression are already final.
+story/rule progression and authored progression rewards; those projections do
+not grant quest/objective mutation, progression-grant, ability-unlock,
+ability-check, or arbitrary narrative-writing authority. The Director never
+mutates campaign state directly; only `WorldAuthorityExecutor` may apply a
+privileged world-state transition, and only after the player's own
+authoritative result, deterministic story/rule progression, and authored
+progression rewards are already final.
 
 The current world model includes a room graph, items, NPCs, deterministic
 interactions, authoritative narrator scene projection, campaign state, clock
@@ -80,15 +82,15 @@ exclusively by deterministic story progression.
 
 The model-backed Director is integrated into the normal authoritative chat
 turn, after the player's own result/state plus deterministic story/rule
-progression and before narrator scene construction. It proposes at most one
-currently exposed typed `WorldAction`, or no action, from a bounded,
-non-mutating projection of that authoritative post-player/post-story state.
-Only `WorldAuthorityExecutor` may execute a proposed action; the Director
-itself never mutates campaign state. Director invocation, and any resulting
-privileged world-state transition, requires the same enabled provider model
-path as other model-backed agents; a disabled provider path skips the
-Director and privileged world execution entirely and preserves prior
-deterministic/stub chat behavior.
+progression and authored progression rewards, and before narrator scene
+construction. It proposes at most one currently exposed typed `WorldAction`,
+or no action, from a bounded, non-mutating projection of that authoritative
+post-story/post-reward state. Only `WorldAuthorityExecutor` may execute a
+proposed action; the Director itself never mutates campaign state. Director
+invocation, and any resulting privileged world-state transition, requires the
+same enabled provider model path as other model-backed agents; a disabled
+provider path skips the Director and privileged world execution entirely and
+preserves prior deterministic/stub chat behavior.
 Executor support for a `WorldAction` does not automatically expose it to the
 model-backed Director: the Director has an independently bounded proposal and
 provider-facing action vocabulary.
