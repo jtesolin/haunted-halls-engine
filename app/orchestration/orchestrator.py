@@ -4,6 +4,7 @@ import hashlib
 import json
 import logging
 import time
+from dataclasses import dataclass
 from typing import Any, cast
 from uuid import uuid4
 
@@ -17,7 +18,11 @@ from app.agents.director import (
 )
 from app.agents.memory_reflection import MemoryReflectionAgent, MemoryReflectionInput
 from app.agents.memory_summarizer import MemorySummarizerAgent, MemorySummarizerInput
-from app.agents.narrator import NarratorAgent, NarratorAgentInput
+from app.agents.narrator import (
+    NarratorAgent,
+    NarratorAgentInput,
+    NarratorNarrativeReveal,
+)
 from app.core.config import settings
 from app.db.session import session
 from app.game.campaign_state import (
@@ -27,6 +32,7 @@ from app.game.campaign_state import (
     validate_persisted_campaign_state_json,
 )
 from app.game.narrator_scene import build_narrator_scene_context
+from app.game.narrative import NARRATIVE_CLUES
 from app.game.story import apply_story_signal, derive_story_signal
 from app.guardrails.input_validation import validate_chat_request
 from app.guardrails.limit_errors import usage_limit_error
@@ -68,9 +74,16 @@ from app.schemas.events import (
 from app.services.director_context import InvalidDirectorContextError, build_director_input
 from app.services.tool_executor import ToolExecutor
 from app.services.world_authority import WorldAuthorityExecutor
+from app.schemas.world import RevealClueWorldAction
 
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class DirectorStepResult:
+    campaign_state: str
+    current_turn_reveal: NarratorNarrativeReveal | None = None
 
 
 class ChatOrchestrator:
@@ -576,7 +589,7 @@ class ChatOrchestrator:
                 )
 
             if provider_model_enabled:
-                campaign_state = await self._run_director_step(
+                director_step_result = await self._run_director_step(
                     db=db,
                     memory_service=memory_service,
                     owner_user_id=owner_user_id,
@@ -586,6 +599,10 @@ class ChatOrchestrator:
                     parsed_action=parsed_action,
                     tool_result=tool_result,
                 )
+                campaign_state = director_step_result.campaign_state
+                current_turn_reveal = director_step_result.current_turn_reveal
+            else:
+                current_turn_reveal = None
 
             if not provider_model_enabled and not ai_enabled:
                 reply = self._stub_reply(request.message)
@@ -598,6 +615,7 @@ class ChatOrchestrator:
                     relevant_memories=memory_context,
                     parsed_action=parsed_action,
                     tool_result=tool_result,
+                    current_turn_reveal=current_turn_reveal,
                 )
                 if provider_model_enabled:
                     start_time = time.perf_counter()
@@ -741,15 +759,17 @@ class ChatOrchestrator:
         campaign_state: str,
         parsed_action: ParsedAction,
         tool_result: ToolExecutionResult,
-    ) -> str:
+    ) -> DirectorStepResult:
         """Invoke the Director after the authoritative player result and, for
         `decision="act"`, execute at most one validated `WorldAction` through
         `WorldAuthorityExecutor`.
 
         Returns the authoritative campaign-state text to use for final
-        narrator grounding and memory maintenance. The Director never
-        mutates campaign state directly; only `WorldAuthorityExecutor` may
-        apply a privileged world-state transition.
+        narrator grounding and memory maintenance, plus the optional
+        same-turn authored reveal that resulted from a changed reveal_clue
+        action. The Director never mutates campaign state directly; only
+        `WorldAuthorityExecutor` may apply a privileged world-state
+        transition.
         """
         # A legitimate missing/sentinel campaign state is the *only* case in
         # which fresh starter state may be materialized here (never for
@@ -869,11 +889,12 @@ class ChatOrchestrator:
 
         proposal = director_result.proposal
         if not isinstance(proposal, WorldActionProposal):
-            return campaign_state
+            return DirectorStepResult(campaign_state=campaign_state)
 
         updated_world_state, world_action_result = self.world_authority_executor.execute(
             proposal.world_action, director_state
         )
+        current_turn_reveal = None
 
         if world_action_result.success:
             db.add_event(
@@ -900,6 +921,12 @@ class ChatOrchestrator:
                 campaign_state = memory_service.build_campaign_state(
                     owner_user_id=owner_user_id, campaign_id=campaign_id
                 )
+                if isinstance(proposal.world_action, RevealClueWorldAction):
+                    clue = NARRATIVE_CLUES[proposal.world_action.clue_id]
+                    current_turn_reveal = NarratorNarrativeReveal(
+                        clue_id=clue.clue_id,
+                        text=clue.text,
+                    )
         else:
             db.add_event(
                 event_id=f"evt_{uuid4().hex}",
@@ -913,7 +940,10 @@ class ChatOrchestrator:
                 ),
             )
 
-        return campaign_state
+        return DirectorStepResult(
+            campaign_state=campaign_state,
+            current_turn_reveal=current_turn_reveal,
+        )
 
     def _chat_request_fingerprint(self, request: ChatRequest) -> str:
         canonical_request = json.dumps(

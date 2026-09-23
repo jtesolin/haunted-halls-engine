@@ -166,6 +166,22 @@ class DirectorDeterministicGrader(DeterministicGrader):
                         },
                     )
                 )
+            elif action.action == "reveal_clue":
+                clue_id = getattr(action, "clue_id", None)
+                revealable_ids = _revealable_clue_ids(scenario.authoritative_input)
+                clue_ok = isinstance(clue_id, str) and clue_id in revealable_ids
+                results.append(
+                    GraderResult(
+                        name="reveal_clue_id_in_bounded_context",
+                        passed=clue_ok,
+                        score=1.0 if clue_ok else 0.0,
+                        max_score=1.0,
+                        details={
+                            "clue_id": clue_id,
+                            "revealable_clue_ids": revealable_ids,
+                        },
+                    )
+                )
             elif getattr(action, "npc_id", None) is not None:
                 npc_id = getattr(action, "npc_id")
                 npc_ok = _find_npc_context(scenario.authoritative_input, npc_id) is not None
@@ -343,6 +359,23 @@ def _npc_one_hop_destinations(npc_context: dict[str, Any]) -> list[str]:
     if not isinstance(destinations, list):
         return []
     return [str(item) for item in destinations if isinstance(item, str)]
+
+
+def _revealable_clue_ids(input_payload: dict[str, Any]) -> list[str]:
+    narrative = input_payload.get("narrative")
+    if not isinstance(narrative, dict):
+        return []
+    revealable_clues = narrative.get("revealable_clues")
+    if not isinstance(revealable_clues, list):
+        return []
+    clue_ids: list[str] = []
+    for clue in revealable_clues:
+        if not isinstance(clue, dict):
+            continue
+        clue_id = clue.get("clue_id")
+        if isinstance(clue_id, str):
+            clue_ids.append(clue_id)
+    return clue_ids
 
 
 def _sanitize_error(exc: Exception) -> dict[str, Any]:

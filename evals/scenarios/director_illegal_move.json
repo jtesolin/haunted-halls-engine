@@ -72,6 +72,9 @@
         }
       ],
       "available_abilities": []
+    },
+    "narrative": {
+      "revealable_clues": []
     }
   },
   "deterministic_expectations": {},

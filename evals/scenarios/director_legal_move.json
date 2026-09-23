@@ -66,6 +66,9 @@
         }
       ],
       "available_abilities": []
+    },
+    "narrative": {
+      "revealable_clues": []
     }
   },
   "fixture_output": {

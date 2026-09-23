@@ -16,6 +16,7 @@ from app.ai.model_client import ModelCallResult, ModelUsage
 from app.ai.prompts import director_prompt
 from app.game.campaign_state import build_fresh_campaign_state
 from app.game.character_progression import grant_progress, unlock_ability
+from app.game.story import apply_story_signal
 from app.guardrails.model_policy import ModelPolicy
 from app.guardrails.token_budget import TokenBudget, estimate_tokens
 from app.schemas.chat import ActionType, ParsedAction, ToolExecutionResult
@@ -24,9 +25,11 @@ from app.schemas.world import (
     AdvanceClockWorldAction,
     MoveNpcWorldAction,
     RecordFactWorldAction,
+    RevealClueWorldAction,
     SetNpcStatusWorldAction,
     WorldAction,
 )
+from app.schemas.story import NpcSpokenToSignal, RoomEnteredSignal
 from app.services.director_context import build_director_input
 from app.services.world_authority import WorldAuthorityExecutor
 
@@ -137,6 +140,8 @@ def test_director_request_contains_only_bounded_projection(monkeypatch) -> None:
     assert "inventory" not in request_text
     assert '"story"' in captured_messages[1]["content"]
     assert '"character"' in captured_messages[1]["content"]
+    assert '"narrative"' in captured_messages[1]["content"]
+    assert '"revealable_clues": []' in captured_messages[1]["content"]
     assert '"active_objective"' in captured_messages[1]["content"]
     assert '"available_abilities"' in captured_messages[1]["content"]
     assert '"ability_id": "keen_eye"' in captured_messages[1]["content"]
@@ -147,6 +152,35 @@ def test_director_request_contains_only_bounded_projection(monkeypatch) -> None:
     assert "raw_campaign_state" not in request_text
     assert "unknown_quest" not in request_text
     assert "advance_story_beat" not in request_text
+
+
+def test_director_request_contains_only_bounded_revealable_clue_context(monkeypatch) -> None:
+    agent = DirectorAgent()
+    state = build_fresh_campaign_state()
+    apply_story_signal(state, RoomEnteredSignal(room_id="library"))
+    apply_story_signal(state, NpcSpokenToSignal(npc_id="library_ghost"))
+    state["narrative"] = {"revealed_clues": []}
+    director_input = _director_input(state)
+    captured_messages = []
+
+    async def fake_generate_structured(*, messages, **kwargs):  # noqa: ANN202, ARG001
+        captured_messages.extend(messages)
+        return _proposal_response({"decision": "none"})
+
+    monkeypatch.setattr(
+        "app.agents.director.model_client.generate_structured",
+        fake_generate_structured,
+    )
+
+    asyncio.run(agent.propose(director_input=director_input))
+
+    request_text = str(captured_messages)
+    user_content = captured_messages[1]["content"]
+    assert '"narrative"' in request_text
+    assert '"revealable_clues"' in request_text
+    assert '"clue_id": "ghost_points_to_old_book"' in request_text
+    assert '"text": "The library ghost\'s attention settles on the old book."' in user_content
+    assert '"revealed_clues"' not in request_text
 
 
 def test_director_returns_no_action_proposal_and_provider_usage(monkeypatch) -> None:
@@ -213,6 +247,13 @@ def test_director_returns_no_action_proposal_and_provider_usage(monkeypatch) -> 
             },
             RecordFactWorldAction(fact="The bell rang once."),
         ),
+        (
+            {
+                "action": "reveal_clue",
+                "clue_id": "ghost_points_to_old_book",
+            },
+            RevealClueWorldAction(clue_id="ghost_points_to_old_book"),
+        ),
     ],
 )
 def test_director_provider_actions_adapt_to_authoritative_world_actions(
@@ -245,7 +286,7 @@ def test_director_provider_actions_adapt_to_authoritative_world_actions(
         {"action": "spawn_npc", "npc_id": "new_npc"},
         {"action": "unsupported_action"},
         {"action": "advance_story_beat", "quest_id": "librarys_whisper"},
-        {"action": "reveal_clue", "clue_id": "ghost_points_to_old_book"},
+        {"action": "set_world_flag", "flag": "cellar_open"},
     ],
 )
 def test_director_provider_wrapper_rejects_unsupported_actions(
@@ -264,6 +305,7 @@ def test_director_provider_wrapper_rejects_unsupported_actions(
         {"action": "set_npc_status", "status": "absent"},
         {"action": "advance_clock"},
         {"action": "record_fact"},
+        {"action": "reveal_clue"},
     ],
 )
 def test_director_provider_action_rejects_missing_required_fields(
@@ -317,6 +359,11 @@ def test_director_provider_act_requires_action_payload() -> None:
             "action": "record_fact",
             "fact": "The bell rang once.",
             "ticks": 1,
+        },
+        {
+            "action": "reveal_clue",
+            "clue_id": "ghost_points_to_old_book",
+            "fact": "The model must not author clue text.",
         },
     ],
 )

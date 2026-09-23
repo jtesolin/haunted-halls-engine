@@ -17,6 +17,7 @@ from app.schemas.world import (
     AdvanceClockWorldAction,
     MoveNpcWorldAction,
     RecordFactWorldAction,
+    RevealClueWorldAction,
     SetNpcStatusWorldAction,
 )
 
@@ -31,12 +32,19 @@ class DirectorProviderWorldAction(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    action: Literal["move_npc", "set_npc_status", "advance_clock", "record_fact"]
+    action: Literal[
+        "move_npc",
+        "set_npc_status",
+        "advance_clock",
+        "record_fact",
+        "reveal_clue",
+    ]
     npc_id: str | None = None
     destination_room_id: str | None = None
     status: Literal["active", "absent"] | None = None
     ticks: int | None = None
     fact: str | None = None
+    clue_id: str | None = None
 
     def to_domain_action(
         self,
@@ -45,6 +53,7 @@ class DirectorProviderWorldAction(BaseModel):
         | SetNpcStatusWorldAction
         | AdvanceClockWorldAction
         | RecordFactWorldAction
+        | RevealClueWorldAction
     ):
         if self.action == "move_npc":
             self._require_only("npc_id", "destination_room_id")
@@ -70,6 +79,9 @@ class DirectorProviderWorldAction(BaseModel):
         if self.action == "record_fact":
             self._require_only("fact")
             return RecordFactWorldAction(fact=self._require_string("fact"))
+        if self.action == "reveal_clue":
+            self._require_only("clue_id")
+            return RevealClueWorldAction(clue_id=self._require_string("clue_id"))
         raise ValueError(f"Unsupported Director provider world action: {self.action}")
 
     def _require_only(self, *allowed_fields: str) -> None:
@@ -82,6 +94,7 @@ class DirectorProviderWorldAction(BaseModel):
                 "status",
                 "ticks",
                 "fact",
+                "clue_id",
             )
             if getattr(self, field_name) is not None
         }
