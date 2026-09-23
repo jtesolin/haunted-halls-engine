@@ -19,14 +19,19 @@ from app.game.character_progression import (
     grant_progress,
     unlock_ability,
 )
-from app.game.story import STORY_QUESTS
+from app.game.story import STORY_QUESTS, read_story_state_snapshot
 from app.schemas.character_progression import (
     NarratorProgressionGrant,
     NarratorProgressionReward,
     NarratorUnlockedAbility,
     ProgressionTrackId,
 )
-from app.schemas.story import StoryProgressionOutcome, StoryProgressionResult
+from app.schemas.story import (
+    ObjectiveStatus,
+    QuestStatus,
+    StoryProgressionOutcome,
+    StoryProgressionResult,
+)
 
 REWARD_CLAIMS_KEY = "progression_rewards"
 CLAIMED_REWARD_IDS_KEY = "claimed_reward_ids"
@@ -148,6 +153,47 @@ class ProgressionRewardResult:
     narrator_reward: NarratorProgressionReward | None = None
 
 
+def _proves_canonical_quest_completion(
+    state: dict[str, Any], story_result: StoryProgressionResult, quest_id: str
+) -> bool:
+    """Require proof of the quest's canonical first ACTIVE -> COMPLETED transition.
+
+    `apply_quest_completion_rewards` only trusts `story_result.changed` and
+    `story_result.outcome` as a matter of course, but nothing prevents a
+    manually constructed, replayed, or otherwise inconsistent
+    `StoryProgressionResult` from claiming a completion it did not actually
+    prove. A reward may only be granted for a result whose transition fields
+    prove the canonical final objective of `quest_id` moved ACTIVE ->
+    COMPLETED and the quest itself moved ACTIVE -> COMPLETED, cross-checked
+    against the authoritative current story snapshot. This function never
+    mutates or repairs an inconsistent result; it only decides eligibility.
+    """
+    quest = STORY_QUESTS.get(quest_id)
+    if quest is None or not quest.objectives:
+        return False
+    final_objective = max(quest.objectives, key=lambda objective: objective.order)
+
+    if (
+        story_result.objective_id != final_objective.id
+        or story_result.previous_quest_status != QuestStatus.ACTIVE
+        or story_result.new_quest_status != QuestStatus.COMPLETED
+        or story_result.previous_objective_status != ObjectiveStatus.ACTIVE
+        or story_result.new_objective_status != ObjectiveStatus.COMPLETED
+    ):
+        return False
+
+    snapshot = read_story_state_snapshot(state)
+    quest_progress = snapshot.get("quests", {}).get(quest_id)
+    if not isinstance(quest_progress, dict):
+        return False
+    if quest_progress.get("status") != QuestStatus.COMPLETED.value:
+        return False
+    objective_statuses = quest_progress.get("objectives")
+    if not isinstance(objective_statuses, dict):
+        return False
+    return objective_statuses.get(final_objective.id) == ObjectiveStatus.COMPLETED.value
+
+
 def apply_quest_completion_rewards(
     state: dict[str, Any],
     story_result: StoryProgressionResult | None,
@@ -174,6 +220,13 @@ def apply_quest_completion_rewards(
             ProgressionRewardOutcome.NOT_APPLICABLE,
             False,
             reason="No authored reward matches the quest.",
+        )
+
+    if not _proves_canonical_quest_completion(state, story_result, story_result.quest_id):
+        return ProgressionRewardResult(
+            ProgressionRewardOutcome.NOT_APPLICABLE,
+            False,
+            reason="Story result does not prove the canonical quest completion transition.",
         )
 
     claims_valid, claimed_ids = read_reward_claims(state)
@@ -222,7 +275,7 @@ def apply_quest_completion_rewards(
                 new_points=result.new_points,
             )
             for result in grant_results
-            if result.changed
+            if result.new_points > result.prior_points
         ],
         unlocked_abilities=[
             NarratorUnlockedAbility(

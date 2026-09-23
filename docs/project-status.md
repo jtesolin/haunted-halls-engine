@@ -86,9 +86,11 @@ progression.
   an earned reward but never grant one.
 - The engine enforces internal authentication, trusted user resolution,
   campaign ownership, transaction rollback, and explicit migration execution.
-- Production observability work (D7), generic reward/achievement/rules DSLs,
-  combat progression, levels/classes, model-selected rewards, frontend
-  progression UI, and broad evaluation expansion remain deferred.
+- D7A's observability foundation (OpenTelemetry tracing) is implemented;
+  remaining D7 slices and production observability activation beyond D7A,
+  generic reward/achievement/rules DSLs, combat progression, levels/classes,
+  model-selected rewards, frontend progression UI, and broad evaluation
+  expansion remain deferred.
 
 See [architecture.md](architecture.md) for durable architecture decisions and
 the repository instructions for implementation boundaries.
