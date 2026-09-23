@@ -457,9 +457,9 @@ were introduced in 7B3.
 
 ## Phase 8 — Narrative Progression & Character Systems
 
-**Status: Active. 8D2 Director Narrative Context and 8D3 Narrative World
-Authority are both implemented. Phase 8 work remains tracked by #52, with the
-core 8A/8B/8C and 8D1/8D2/8D3 foundations now in place.**
+**Status: Active. Phase 8D Narrative Director Expansion is complete once
+8D1-8D4 are merged. Phase 8 work remains tracked by #52, with the core
+8A/8B/8C and 8D1/8D2/8D3/8D4 foundations now in place.**
 
 ### 8A — Story / Quest Model
 
@@ -592,23 +592,64 @@ under strict eligibility guards.
   `clue_not_eligible`, `malformed_narrative_state`) are non-mutating; the
   original state is returned unchanged.
 
-* `app/schemas/director.py` creates a `DirectorWorldAction` union containing
-  only the four existing Director actions (`move_npc`, `set_npc_status`,
-  `advance_clock`, `record_fact`), intentionally excluding `reveal_clue`.
-  The `DirectorProposal` schema uses `DirectorWorldAction`, preventing the
-  model-backed Director from proposing narrative reveals during this phase.
-  The broader `WorldAction` union (supported by the executor) includes
-  reveal_clue; this boundary is enforced at the schema/type level.
+* `app/schemas/director.py` kept `reveal_clue` out of the Director proposal
+  vocabulary during 8D3. The broader `WorldAction` union (supported by the
+  executor) included `reveal_clue`; the narrower Director/provider vocabulary
+  boundary was enforced at the schema/type level until the 8D4 promotion.
 
-* The narrative domain does not integrate with the Narrator, Director, or
-  Orchestrator during 8D3. Reveal-clue actions must be proposed by game code
-  or future deterministic authority systems, not by the model or narrator
-  agent. Quest progression isolation is preserved: revealing a clue does not
-  advance objectives or grant progression points.
+* The narrative domain did not integrate with the Narrator, Director, or
+  Orchestrator during 8D3. Quest progression isolation was preserved:
+  revealing a clue does not advance objectives or grant progression points.
 
 * No database migration was required; narrative state persists as part of
   the existing authoritative campaign-state JSON document, consistent with
   current persistence architecture.
+
+### 8D4 — Narrative Orchestration Integration
+
+**Status: Implemented**
+
+Phase 8D4 promotes the 8D3 `reveal_clue` authority across the model-backed
+Director, normal chat orchestration, and Narrator grounding boundaries while
+preserving deterministic authority.
+
+* `DirectorInput` now includes a bounded `narrative.revealable_clues`
+  projection derived from `list_revealable_clues(state)`. The Director sees
+  only currently eligible authored clue IDs and static clue text; it does not
+  receive raw `state["narrative"]`, historical revealed-clue lists,
+  ineligible/future clues, or arbitrary campaign-state JSON.
+* `RevealClueWorldAction` is now part of the Director's domain-facing and
+  provider-facing proposal vocabulary. The provider DTO accepts only
+  `reveal_clue` plus `clue_id`; it rejects cross-action fields and never
+  accepts model-authored clue text. `set_world_flag`, `advance_story_beat`,
+  quest/objective mutation, progression grants, ability unlocks/checks, and
+  generic narrative text actions remain unsupported.
+* The Director remains advisory. Eligibility, canonical clue lookup,
+  malformed narrative-state handling, duplicate/idempotent reveals, and
+  mutation all remain owned by `WorldAuthorityExecutor`; revealing a clue is
+  not a `StorySignal` and does not advance or complete quests/objectives.
+* Successful changed `reveal_clue` execution persists only the canonical clue
+  ID in `state["narrative"]["revealed_clues"]` through the existing
+  `game_state_updated` path and records the existing generic
+  `world_action_executed` event. Failed, unknown, ineligible, malformed, or
+  unchanged duplicate reveal attempts do not produce a narrator reveal.
+* `NarratorAgentInput` has a narrow optional current-turn reveal contract
+  containing only `clue_id` and canonical authored `text`. The Narrator
+  receives this effect only when the Director proposed `reveal_clue` and
+  `WorldAuthorityExecutor` returned `success=true, changed=true`; it never
+  receives raw narrative state, arbitrary world-action results, or the full
+  Director proposal.
+* Normal chat ordering is preserved: player tool execution, deterministic
+  story progression, bounded Director input, optional world-authority
+  execution, final authoritative state reload, narrator scene projection from
+  that final state, and optional narrow current-turn reveal grounding.
+* Existing chat idempotency, rollback semantics, and generic event contracts
+  remain in force. Completed idempotent replay returns the stored response
+  without re-running the Director or re-revealing the clue, and later turns no
+  longer project already revealed clues as revealable.
+* Character-progression and ability gameplay integration remains separate:
+  the Director receives read-only character context but still cannot grant
+  progression, unlock abilities, or resolve ability checks.
 
 ## Phase 8B — Character Progression Model
 

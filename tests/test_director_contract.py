@@ -128,9 +128,10 @@ def test_director_proposal_rejects_missing_conflicting_and_extra_fields() -> Non
         SetNpcStatusWorldAction(npc_id="old_caretaker", status="absent"),
         AdvanceClockWorldAction(ticks=1),
         RecordFactWorldAction(fact="A notable clue"),
+        RevealClueWorldAction(clue_id="ghost_points_to_old_book"),
     ],
 )
-def test_director_accepts_exactly_one_existing_world_action(
+def test_director_accepts_exactly_one_promoted_world_action(
     action: Any,
 ) -> None:
     proposal = PROPOSAL_ADAPTER.validate_python(
@@ -168,6 +169,17 @@ def test_director_proposal_rejects_malformed_parameters_through_world_action_sch
         )
 
 
+def test_director_proposal_rejects_story_and_world_flag_actions() -> None:
+    for action in (
+        {"action": "set_world_flag", "flag": "cellar_open"},
+        {"action": "advance_story_beat", "quest_id": "librarys_whisper"},
+    ):
+        with pytest.raises(ValidationError):
+            PROPOSAL_ADAPTER.validate_python(
+                {"decision": "act", "world_action": action}
+            )
+
+
 def test_director_context_is_bounded_deterministic_and_non_mutating() -> None:
     state = build_fresh_campaign_state()
     original = copy.deepcopy(state)
@@ -190,6 +202,7 @@ def test_director_context_is_bounded_deterministic_and_non_mutating() -> None:
     assert [track.track_id.value for track in context.character.progression_tracks] == list(
         PROGRESSION_TRACK_IDS
     )
+    assert context.narrative.revealable_clues == []
 
 
 def test_director_context_projects_initial_story_without_locked_future_details() -> None:
@@ -233,6 +246,12 @@ def test_director_context_projects_progressed_story_from_domain_state() -> None:
     ]
     assert quest.active_objective is not None
     assert quest.active_objective.objective_id == "acquire_old_book"
+    assert [clue.clue_id for clue in context.narrative.revealable_clues] == [
+        "ghost_points_to_old_book"
+    ]
+    assert context.narrative.revealable_clues[0].text == (
+        "The library ghost's attention settles on the old book."
+    )
 
     apply_story_signal(state, ItemAcquiredSignal(item_id="old_book"))
     context = _director_input(state)
@@ -244,6 +263,36 @@ def test_director_context_projects_progressed_story_from_domain_state() -> None:
         "acquire_old_book",
     ]
     assert quest.active_objective is None
+    assert context.narrative.revealable_clues == []
+
+
+def test_director_narrative_context_only_contains_eligible_unrevealed_clues() -> None:
+    state = build_fresh_campaign_state()
+    original = copy.deepcopy(state)
+
+    before_context = _director_input(state)
+    assert before_context.narrative.revealable_clues == []
+
+    apply_story_signal(state, RoomEnteredSignal(room_id="library"))
+    assert _director_input(state).narrative.revealable_clues == []
+
+    apply_story_signal(state, NpcSpokenToSignal(npc_id="library_ghost"))
+    eligible_context = _director_input(state)
+    repeated_context = _director_input(state)
+
+    assert eligible_context.narrative == repeated_context.narrative
+    assert [clue.clue_id for clue in eligible_context.narrative.revealable_clues] == [
+        "ghost_points_to_old_book"
+    ]
+    assert [clue.clue_id for clue in eligible_context.narrative.revealable_clues] == sorted(
+        clue.clue_id for clue in eligible_context.narrative.revealable_clues
+    )
+    assert "narrative" not in original
+    assert "narrative" not in state
+
+    state["narrative"] = {"revealed_clues": ["ghost_points_to_old_book"]}
+    revealed_context = _director_input(state)
+    assert revealed_context.narrative.revealable_clues == []
 
 
 def test_director_context_projects_character_capabilities_only_when_available() -> None:
@@ -438,17 +487,20 @@ def test_broad_world_action_accepts_reveal_clue() -> None:
     assert validated.clue_id == "ghost_points_to_old_book"
 
 
-def test_director_proposal_rejects_reveal_clue() -> None:
-    """DirectorProposal rejects reveal_clue during 8D3."""
+def test_director_proposal_accepts_reveal_clue() -> None:
+    """DirectorProposal accepts reveal_clue during 8D4."""
     reveal_action = {
         "action": "reveal_clue",
         "clue_id": "ghost_points_to_old_book",
     }
 
-    with pytest.raises(ValidationError):
-        PROPOSAL_ADAPTER.validate_python(
-            {"decision": "act", "world_action": reveal_action}
-        )
+    proposal = PROPOSAL_ADAPTER.validate_python(
+        {"decision": "act", "world_action": reveal_action}
+    )
+
+    assert isinstance(proposal, WorldActionProposal)
+    assert isinstance(proposal.world_action, RevealClueWorldAction)
+    assert proposal.world_action.clue_id == "ghost_points_to_old_book"
 
 
 def test_director_proposal_still_rejects_other_unsupported_actions() -> None:
@@ -457,7 +509,6 @@ def test_director_proposal_still_rejects_other_unsupported_actions() -> None:
         {"action": "spawn_npc", "npc_id": "new_npc"},
         {"action": "set_world_flag", "flag": "visited_library"},
         {"action": "advance_story_beat", "quest_id": "librarys_whisper"},
-        {"action": "reveal_clue", "clue_id": "some_clue"},
     ]
 
     for action in unsupported_actions:

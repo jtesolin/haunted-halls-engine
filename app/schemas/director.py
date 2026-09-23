@@ -11,6 +11,7 @@ from app.schemas.world import (
     AdvanceClockWorldAction,
     MoveNpcWorldAction,
     RecordFactWorldAction,
+    RevealClueWorldAction,
     SetNpcStatusWorldAction,
 )
 
@@ -82,6 +83,19 @@ class DirectorCharacterContext(BaseModel):
     available_abilities: list[DirectorAbilityContext] = Field(default_factory=list)
 
 
+class DirectorRevealableClueContext(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    clue_id: str = Field(min_length=1)
+    text: str = Field(min_length=1)
+
+
+class DirectorNarrativeContext(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    revealable_clues: list[DirectorRevealableClueContext] = Field(default_factory=list)
+
+
 class DirectorInput(BaseModel):
     """Bounded authoritative context supplied to a future Director."""
 
@@ -94,6 +108,7 @@ class DirectorInput(BaseModel):
     player_action: DirectorPlayerActionContext
     story: DirectorStoryContext
     character: DirectorCharacterContext
+    narrative: DirectorNarrativeContext = Field(default_factory=DirectorNarrativeContext)
 
 
 class NoActionProposal(BaseModel):
@@ -107,6 +122,7 @@ DirectorWorldAction = (
     | SetNpcStatusWorldAction
     | AdvanceClockWorldAction
     | RecordFactWorldAction
+    | RevealClueWorldAction
 )
 
 

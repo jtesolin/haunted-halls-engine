@@ -57,6 +57,17 @@ _DIRECTOR_CHARACTER_FIXTURE = {
     ],
     "available_abilities": [],
 }
+_DIRECTOR_NARRATIVE_FIXTURE = {
+    "revealable_clues": [],
+}
+_DIRECTOR_REVEALABLE_NARRATIVE_FIXTURE = {
+    "revealable_clues": [
+        {
+            "clue_id": "ghost_points_to_old_book",
+            "text": "The library ghost's attention settles on the old book.",
+        }
+    ],
+}
 
 _DIRECTOR_FIXTURE = {
     "current_player_room_id": "eval_foyer",
@@ -78,6 +89,7 @@ _DIRECTOR_FIXTURE = {
     },
     "story": _DIRECTOR_STORY_FIXTURE,
     "character": _DIRECTOR_CHARACTER_FIXTURE,
+    "narrative": _DIRECTOR_NARRATIVE_FIXTURE,
 }
 
 
@@ -109,6 +121,54 @@ def test_director_eval_rejects_spawn_npc_action() -> None:
     assert any(item.name == "allowed_world_action_vocab" and item.passed is False for item in result)
 
 
+def test_director_eval_accepts_bounded_reveal_clue_action() -> None:
+    scenario = Scenario(
+        scenario_id="director-reveal-clue-1",
+        description="Reveal a bounded canonical clue.",
+        target=ScenarioTarget.DIRECTOR,
+        authoritative_input={
+            **_DIRECTOR_FIXTURE,
+            "narrative": _DIRECTOR_REVEALABLE_NARRATIVE_FIXTURE,
+        },
+        actual_output={
+            "decision": "act",
+            "world_action": {
+                "action": "reveal_clue",
+                "clue_id": "ghost_points_to_old_book",
+            },
+        },
+    )
+
+    result = grade_scenario(scenario)
+    assert all(item.passed for item in result)
+    assert any(item.name == "reveal_clue_id_in_bounded_context" for item in result)
+
+
+def test_director_eval_rejects_unbounded_reveal_clue_id() -> None:
+    scenario = Scenario(
+        scenario_id="director-reveal-clue-unbounded",
+        description="Invented clue IDs are not in bounded context.",
+        target=ScenarioTarget.DIRECTOR,
+        authoritative_input={
+            **_DIRECTOR_FIXTURE,
+            "narrative": _DIRECTOR_REVEALABLE_NARRATIVE_FIXTURE,
+        },
+        actual_output={
+            "decision": "act",
+            "world_action": {
+                "action": "reveal_clue",
+                "clue_id": "invented_clue",
+            },
+        },
+    )
+
+    result = grade_scenario(scenario)
+    bounded_result = next(
+        item for item in result if item.name == "reveal_clue_id_in_bounded_context"
+    )
+    assert bounded_result.passed is False
+
+
 def test_runner_sets_passed_and_score() -> None:
     scenario = Scenario(
         scenario_id="director-score-1",
@@ -127,7 +187,7 @@ def test_runner_sets_passed_and_score() -> None:
 
 def test_checked_in_corpus_has_director_and_narrator_cases() -> None:
     scenarios = load_scenarios()
-    assert len(scenarios) == 8
+    assert len(scenarios) == 9
     assert {scenario.target for scenario in scenarios} == {
         ScenarioTarget.DIRECTOR,
         ScenarioTarget.NARRATOR,
@@ -642,7 +702,7 @@ def test_offline_runner_uses_fixtures_without_provider_calls(monkeypatch) -> Non
     monkeypatch.setattr("app.ai.model_client.model_client.generate_structured", fail_provider)
     results = run_scenarios(load_scenarios())
     assert all(result.passed for result in results)
-    assert len(results) == 8
+    assert len(results) == 9
 
 
 def test_runner_does_not_mutate_authoritative_fixture() -> None:
@@ -1624,7 +1684,7 @@ def test_offline_eval_execution_does_not_mutate_campaign_or_telemetry_persistenc
     _seed_persistence_rows()
     before = _persistence_row_snapshot()
     results = run_scenarios(load_scenarios())
-    assert len(results) == 8
+    assert len(results) == 9
     after = _persistence_row_snapshot()
     assert after == before
 

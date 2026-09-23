@@ -4,6 +4,7 @@ from typing import Any
 
 from app.game.abilities import VALIDATED_ABILITY_DEFINITIONS, evaluate_ability_availability
 from app.game.character_progression import PROGRESSION_TRACK_IDS, read_character_progression_state
+from app.game.narrative import InvalidNarrativeStateError, list_revealable_clues
 from app.game.story import STORY_QUESTS, read_story_state_snapshot
 from app.game.world import DEFAULT_WORLD, World
 from app.schemas.abilities import AbilityAvailabilityStatus
@@ -13,9 +14,11 @@ from app.schemas.director import (
     DirectorAbilityContext,
     DirectorCharacterContext,
     DirectorInput,
+    DirectorNarrativeContext,
     DirectorNPCContext,
     DirectorPlayerActionContext,
     DirectorProgressionTrackContext,
+    DirectorRevealableClueContext,
     DirectorStoryContext,
     DirectorStoryObjectiveContext,
     DirectorStoryQuestContext,
@@ -110,6 +113,7 @@ def build_director_input(
         ),
         story=_build_story_context(state),
         character=_build_character_context(state),
+        narrative=_build_narrative_context(state),
     )
 
 
@@ -181,4 +185,23 @@ def _build_character_context(state: dict[str, Any]) -> DirectorCharacterContext:
     return DirectorCharacterContext(
         progression_tracks=progression_tracks,
         available_abilities=available_abilities,
+    )
+
+
+def _build_narrative_context(state: dict[str, Any]) -> DirectorNarrativeContext:
+    try:
+        revealable_clues = list_revealable_clues(state)
+    except InvalidNarrativeStateError as exc:
+        raise InvalidDirectorContextError(
+            "Authoritative narrative state is malformed."
+        ) from exc
+
+    return DirectorNarrativeContext(
+        revealable_clues=[
+            DirectorRevealableClueContext(
+                clue_id=clue.clue_id,
+                text=clue.text,
+            )
+            for clue in revealable_clues
+        ]
     )

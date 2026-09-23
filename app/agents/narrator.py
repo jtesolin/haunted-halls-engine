@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import cast
 
 from openai.types.chat import ChatCompletionMessageParam
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.agents.base import BaseAgent
 from app.ai.model_client import ModelCallResult, model_client
@@ -11,6 +11,13 @@ from app.ai.prompts import narrator_prompt
 from app.guardrails.model_policy import ModelPolicy
 from app.guardrails.token_budget import TokenBudget
 from app.schemas.chat import NarratorSceneContext, ParsedAction, ToolExecutionResult
+
+
+class NarratorNarrativeReveal(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    clue_id: str = Field(min_length=1)
+    text: str = Field(min_length=1)
 
 
 class NarratorAgentInput(BaseModel):
@@ -21,6 +28,7 @@ class NarratorAgentInput(BaseModel):
     relevant_memories: list[dict[str, str]] = Field(default_factory=list)
     parsed_action: ParsedAction | None = None
     tool_result: ToolExecutionResult | None = None
+    current_turn_reveal: NarratorNarrativeReveal | None = None
 
 
 class NarratorAgentOutput(BaseModel):
@@ -61,6 +69,7 @@ class NarratorAgent(BaseAgent):
             message=payload.player_message,
             parsed_action=payload.parsed_action,
             tool_result=payload.tool_result,
+            current_turn_reveal=payload.current_turn_reveal,
         )
         result = await model_client.generate_text(
             messages=messages,
@@ -95,6 +104,7 @@ class NarratorAgent(BaseAgent):
         message: str,
         parsed_action: ParsedAction | None,
         tool_result: ToolExecutionResult | None,
+        current_turn_reveal: NarratorNarrativeReveal | None,
     ) -> list[ChatCompletionMessageParam]:
         messages: list[ChatCompletionMessageParam] = [
             {
@@ -160,6 +170,19 @@ class NarratorAgent(BaseAgent):
                         "Tool execution result:\n"
                         "Authoritative structured payload follows.\n"
                         f"{tool_result.model_dump_json(exclude_none=True, indent=2)}"
+                    ),
+                }
+            )
+
+        if current_turn_reveal is not None:
+            messages.append(
+                {
+                    "role": "user",
+                    "content": (
+                        "Current authoritative narrative reveal:\n"
+                        "Communicate this exact authored clue to the player this turn; "
+                        "do not invent additional state or quest progress.\n"
+                        f"{current_turn_reveal.model_dump_json(exclude_none=True, indent=2)}"
                     ),
                 }
             )

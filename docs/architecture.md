@@ -41,17 +41,18 @@ player text
   -> Narrator
 ```
 
-The Narrator describes authoritative results and the authoritative scene
-context. It must not invent state changes. Player-action authority is separate
-from privileged world/Director authority; a player-facing action cannot become
-a world-authority operation through narration or agent choice. The Director
-receives bounded read-only story and character projections after deterministic
+The Narrator describes authoritative results, the authoritative scene context,
+and narrow authoritative current-turn narrative effects when supplied. It must
+not invent state changes. Player-action authority is separate from privileged
+world/Director authority; a player-facing action cannot become a world-authority
+operation through narration or agent choice. The Director receives bounded
+read-only story, character, and revealable-clue projections after deterministic
 story/rule progression; those projections do not grant quest/objective
-mutation, progression-grant, ability-unlock, or ability-check authority. The
-Director never mutates campaign state directly; only `WorldAuthorityExecutor`
-may apply a privileged world-state transition, and only after the player's own
-authoritative result and deterministic story/rule progression are already
-final.
+mutation, progression-grant, ability-unlock, ability-check, or arbitrary
+narrative-writing authority. The Director never mutates campaign state
+directly; only `WorldAuthorityExecutor` may apply a privileged world-state
+transition, and only after the player's own authoritative result and
+deterministic story/rule progression are already final.
 
 The current world model includes a room graph, items, NPCs, deterministic
 interactions, authoritative narrator scene projection, campaign state, clock
@@ -71,14 +72,17 @@ player-authorized deterministic actions. Typed privileged `WorldAction` values
 execute separately through the deterministic `WorldAuthorityExecutor`.
 World authority may execute canonical deterministic narrative actions, but
 those actions operate only on authored IDs and static content rather than
-arbitrary model-authored mutations. Quest and objective completion remains
-owned exclusively by deterministic story progression.
+arbitrary model-authored mutations. Authored narrative actions such as
+`reveal_clue` remain deterministically validated and executed by
+`WorldAuthorityExecutor`, using canonical definitions and current eligibility
+rather than model-authored text. Quest and objective completion remains owned
+exclusively by deterministic story progression.
 
 The model-backed Director is integrated into the normal authoritative chat
 turn, after the player's own result/state plus deterministic story/rule
 progression and before narrator scene construction. It proposes at most one
-typed `WorldAction`, or no action, from a bounded, non-mutating projection of
-that authoritative post-player/post-story state.
+currently exposed typed `WorldAction`, or no action, from a bounded,
+non-mutating projection of that authoritative post-player/post-story state.
 Only `WorldAuthorityExecutor` may execute a proposed action; the Director
 itself never mutates campaign state. Director invocation, and any resulting
 privileged world-state transition, requires the same enabled provider model
@@ -88,3 +92,8 @@ deterministic/stub chat behavior.
 Executor support for a `WorldAction` does not automatically expose it to the
 model-backed Director: the Director has an independently bounded proposal and
 provider-facing action vocabulary.
+When a Director-proposed authored clue reveal succeeds and changes state, the
+Narrator receives only a narrow current-turn effect containing the canonical
+clue ID and authored text. The Narrator does not receive raw narrative state,
+the full Director proposal, or arbitrary world-action results as narrative
+grounding.

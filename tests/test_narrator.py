@@ -5,7 +5,11 @@ import asyncio
 import pytest
 from pydantic import ValidationError
 
-from app.agents.narrator import NarratorAgent, NarratorAgentInput
+from app.agents.narrator import (
+    NarratorAgent,
+    NarratorAgentInput,
+    NarratorNarrativeReveal,
+)
 from app.ai.prompts import narrator_prompt
 from app.schemas.chat import (
     ActionType,
@@ -78,6 +82,45 @@ def test_narrator_receives_authoritative_tool_result(monkeypatch) -> None:
     assert '"current_room_name": "Grand Corridor"' in tool_message["content"]
     assert '"id": "library_ghost"' in tool_message["content"]
     assert "NPC presence, location, status, and disposition are authoritative game state." in captured_messages[0]["content"]
+
+
+def test_narrator_receives_narrow_authoritative_reveal(monkeypatch) -> None:
+    agent = NarratorAgent()
+    captured_messages = []
+
+    async def fake_generate_text(*, messages, **kwargs) -> str:  # noqa: ANN202, ARG001
+        captured_messages.extend(messages)
+        return "The ghost points to the old book."
+
+    monkeypatch.setattr("app.agents.narrator.model_client.generate_text", fake_generate_text)
+
+    payload = NarratorAgentInput(
+        player_message="wait",
+        scene_context=NarratorSceneContext(
+            current_room=NarratorRoom(
+                id="library",
+                name="Library",
+                description="Tall shelves crowd the walls.",
+            ),
+        ),
+        current_turn_reveal=NarratorNarrativeReveal(
+            clue_id="ghost_points_to_old_book",
+            text="The library ghost's attention settles on the old book.",
+        ),
+    )
+
+    result = asyncio.run(agent.generate(payload=payload))
+
+    assert result.reply_text == "The ghost points to the old book."
+    reveal_message = next(
+        message
+        for message in captured_messages
+        if message["content"].startswith("Current authoritative narrative reveal")
+    )
+    assert '"clue_id": "ghost_points_to_old_book"' in reveal_message["content"]
+    assert "The library ghost's attention settles on the old book." in reveal_message["content"]
+    assert "revealed_clues" not in reveal_message["content"]
+    assert "current authoritative narrative reveal" in captured_messages[0]["content"].lower()
 
 
 def test_narrator_receives_authoritative_talk_target(monkeypatch) -> None:

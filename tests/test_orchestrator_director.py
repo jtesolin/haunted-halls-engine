@@ -27,13 +27,19 @@ from app.api.dependencies import INTERNAL_USER_ID_HEADER_NAME
 from app.core.config import settings
 from app.db.session import session
 from app.game.campaign_state import build_fresh_campaign_state
+from app.game.story import apply_story_signal
 from app.main import app
 from app.memory.services import MemoryService
 from app.orchestration import orchestrator as orchestrator_module
 from app.schemas.chat import ActionType, ChatRequest, ParsedAction
 from app.schemas.director import NoActionProposal
 from app.schemas.internal_auth import CANONICAL_GOOGLE_ISSUER
-from app.schemas.world import MoveNpcWorldAction, SetNpcStatusWorldAction
+from app.schemas.story import NpcSpokenToSignal, RoomEnteredSignal
+from app.schemas.world import (
+    MoveNpcWorldAction,
+    RevealClueWorldAction,
+    SetNpcStatusWorldAction,
+)
 
 
 def _enable_provider(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -92,6 +98,15 @@ async def _fake_parse_ambiguous(**kwargs) -> ParsedAction:  # noqa: ANN003, ARG0
     )
 
 
+async def _fake_parse_observe(**kwargs) -> ParsedAction:  # noqa: ANN003, ARG001
+    return ParsedAction(
+        raw_text="look around",
+        action=ActionType.OBSERVE,
+        confidence=0.95,
+        parse_status="ok",
+    )
+
+
 async def _fake_narrator_generate(*, payload, model=None):  # noqa: ANN001, ARG001, ANN202
     return NarratorAgentOutput(reply_text="A haunted reply")
 
@@ -111,6 +126,23 @@ def _install_move_and_narrator_stubs(monkeypatch) -> None:
 
 def _no_action_result() -> DirectorAgentResult:
     return DirectorAgentResult(proposal=NoActionProposal(), usage=None)
+
+
+def _create_revealable_campaign(owner_user_id: str) -> str:
+    state = build_fresh_campaign_state()
+    state["player"]["location"] = "library"
+    apply_story_signal(state, RoomEnteredSignal(room_id="library"))
+    apply_story_signal(state, NpcSpokenToSignal(npc_id="library_ghost"))
+    campaign_id = f"campaign_{uuid4().hex}"
+    with session() as db:
+        db.create_campaign(
+            campaign_id=campaign_id,
+            owner_user_id=owner_user_id,
+            name="Revealable campaign",
+            description="Test campaign",
+            state=state,
+        )
+    return campaign_id
 
 
 def test_director_invoked_once_with_post_player_state_projection(monkeypatch) -> None:
@@ -308,6 +340,352 @@ def test_world_action_executes_exactly_once_and_grounds_narrator_with_npc_presen
     scene = captured_scene["scene"]
     assert scene.current_room.id == "grand_corridor"
     assert any(npc.id == "old_caretaker" for npc in scene.nearby_npcs)
+
+
+def test_director_reveal_clue_executes_persists_and_grounds_narrator(
+    monkeypatch,
+) -> None:
+    _enable_provider(monkeypatch)
+    orchestrator_instance = orchestrator_module.orchestrator
+    monkeypatch.setattr(
+        orchestrator_instance.action_parser_agent,
+        "parse",
+        _fake_parse_observe,
+    )
+
+    reveal_action = RevealClueWorldAction(clue_id="ghost_points_to_old_book")
+
+    from app.schemas.director import WorldActionProposal
+
+    async def fake_propose(*, director_input, model=None):  # noqa: ANN001, ARG001, ANN202
+        assert [clue.clue_id for clue in director_input.narrative.revealable_clues] == [
+            "ghost_points_to_old_book"
+        ]
+        return DirectorAgentResult(
+            proposal=WorldActionProposal(world_action=reveal_action),
+            usage=None,
+        )
+
+    monkeypatch.setattr(orchestrator_instance.director_agent, "propose", fake_propose)
+
+    world_executor_calls = []
+    original_world_execute = orchestrator_instance.world_authority_executor.execute
+
+    def spy_world_execute(*args, **kwargs):  # noqa: ANN002, ANN003, ANN202
+        world_executor_calls.append((args, kwargs))
+        return original_world_execute(*args, **kwargs)
+
+    monkeypatch.setattr(
+        orchestrator_instance.world_authority_executor,
+        "execute",
+        spy_world_execute,
+    )
+
+    captured_payload = {}
+
+    async def capturing_narrator_generate(*, payload, model=None):  # noqa: ANN001, ARG001, ANN202
+        captured_payload["payload"] = payload
+        return NarratorAgentOutput(reply_text="A haunted reply")
+
+    monkeypatch.setattr(
+        orchestrator_instance.narrator_agent,
+        "generate",
+        capturing_narrator_generate,
+    )
+
+    client = TestClient(app)
+    _headers, user_id = _resolve_user(client, "director-reveal-success")
+    campaign_id = _create_revealable_campaign(user_id)
+
+    response = asyncio.run(
+        orchestrator_instance.handle_chat(
+            ChatRequest(message="look around", campaign_id=campaign_id),
+            owner_user_id=user_id,
+        )
+    )
+
+    assert response.reply == "A haunted reply"
+    assert len(world_executor_calls) == 1
+    assert world_executor_calls[0][0][0] == reveal_action
+
+    with session() as db:
+        campaign = db.get_campaign(campaign_id)
+        assert campaign is not None
+        assert campaign.state is not None
+        final_state = json.loads(campaign.state)
+        assert final_state["narrative"]["revealed_clues"] == [
+            "ghost_points_to_old_book"
+        ]
+        quest = final_state["story"]["quests"]["librarys_whisper"]
+        assert quest["status"] == "active"
+        assert quest["objectives"]["acquire_old_book"] == "active"
+
+        events = db.list_campaign_events(campaign_id)
+        event_types = [event.type for event in events]
+        assert event_types == [
+            "player_message_received",
+            "action_parsed",
+            "tool_executed",
+            "world_action_executed",
+            "game_state_updated",
+            "narrator_response_created",
+        ]
+        world_event_payload = json.loads(events[-3].payload_json or "{}")
+        assert world_event_payload["action"] == "reveal_clue"
+        assert world_event_payload["changed"] is True
+        assert world_event_payload["state_delta"] == {
+            "narrative": {
+                "revealed_clues": {
+                    "added": ["ghost_points_to_old_book"],
+                }
+            }
+        }
+
+    narrator_payload = captured_payload["payload"]
+    assert narrator_payload.scene_context.current_room.id == "library"
+    assert narrator_payload.current_turn_reveal is not None
+    assert narrator_payload.current_turn_reveal.clue_id == "ghost_points_to_old_book"
+    assert narrator_payload.current_turn_reveal.text == (
+        "The library ghost's attention settles on the old book."
+    )
+
+
+@pytest.mark.parametrize(
+    "proposal_action",
+    [
+        RevealClueWorldAction(clue_id="unknown_clue_id"),
+        MoveNpcWorldAction(npc_id="old_caretaker", destination_room_id="grand_corridor"),
+    ],
+    ids=["failed-reveal", "non-reveal-action"],
+)
+def test_director_reveal_context_not_sent_to_narrator_for_failed_or_non_reveal_actions(
+    monkeypatch,
+    proposal_action,
+) -> None:
+    _enable_provider(monkeypatch)
+    orchestrator_instance = orchestrator_module.orchestrator
+    monkeypatch.setattr(
+        orchestrator_instance.action_parser_agent,
+        "parse",
+        _fake_parse_observe,
+    )
+
+    from app.schemas.director import WorldActionProposal
+
+    async def fake_propose(*, director_input, model=None):  # noqa: ANN001, ARG001, ANN202
+        return DirectorAgentResult(
+            proposal=WorldActionProposal(world_action=proposal_action),
+            usage=None,
+        )
+
+    monkeypatch.setattr(orchestrator_instance.director_agent, "propose", fake_propose)
+
+    captured_payload = {}
+
+    async def capturing_narrator_generate(*, payload, model=None):  # noqa: ANN001, ARG001, ANN202
+        captured_payload["payload"] = payload
+        return NarratorAgentOutput(reply_text="A haunted reply")
+
+    monkeypatch.setattr(
+        orchestrator_instance.narrator_agent,
+        "generate",
+        capturing_narrator_generate,
+    )
+
+    client = TestClient(app)
+    _headers, user_id = _resolve_user(client, f"director-reveal-no-ground-{proposal_action.action}")
+    campaign_id = _create_revealable_campaign(user_id)
+
+    asyncio.run(
+        orchestrator_instance.handle_chat(
+            ChatRequest(message="look around", campaign_id=campaign_id),
+            owner_user_id=user_id,
+        )
+    )
+
+    assert captured_payload["payload"].current_turn_reveal is None
+
+
+def test_duplicate_reveal_noop_is_not_sent_to_narrator(monkeypatch) -> None:
+    _enable_provider(monkeypatch)
+    orchestrator_instance = orchestrator_module.orchestrator
+    monkeypatch.setattr(
+        orchestrator_instance.action_parser_agent,
+        "parse",
+        _fake_parse_observe,
+    )
+
+    reveal_action = RevealClueWorldAction(clue_id="ghost_points_to_old_book")
+
+    from app.schemas.director import WorldActionProposal
+
+    async def fake_propose(*, director_input, model=None):  # noqa: ANN001, ARG001, ANN202
+        assert director_input.narrative.revealable_clues == []
+        return DirectorAgentResult(
+            proposal=WorldActionProposal(world_action=reveal_action),
+            usage=None,
+        )
+
+    monkeypatch.setattr(orchestrator_instance.director_agent, "propose", fake_propose)
+
+    captured_payload = {}
+
+    async def capturing_narrator_generate(*, payload, model=None):  # noqa: ANN001, ARG001, ANN202
+        captured_payload["payload"] = payload
+        return NarratorAgentOutput(reply_text="A haunted reply")
+
+    monkeypatch.setattr(
+        orchestrator_instance.narrator_agent,
+        "generate",
+        capturing_narrator_generate,
+    )
+
+    client = TestClient(app)
+    _headers, user_id = _resolve_user(client, "director-reveal-duplicate")
+    campaign_id = _create_revealable_campaign(user_id)
+    with session() as db:
+        campaign = db.get_campaign(campaign_id)
+        assert campaign is not None
+        assert campaign.state is not None
+        state = json.loads(campaign.state)
+        state["narrative"] = {"revealed_clues": ["ghost_points_to_old_book"]}
+        db.update_campaign_state(campaign_id, state)
+
+    asyncio.run(
+        orchestrator_instance.handle_chat(
+            ChatRequest(message="look around", campaign_id=campaign_id),
+            owner_user_id=user_id,
+        )
+    )
+
+    assert captured_payload["payload"].current_turn_reveal is None
+    with session() as db:
+        events = db.list_campaign_events(campaign_id)
+        world_event_payload = json.loads(events[-2].payload_json or "{}")
+        assert world_event_payload["action"] == "reveal_clue"
+        assert world_event_payload["changed"] is False
+
+
+def test_completed_reveal_replay_does_not_reveal_or_narrate_again(monkeypatch) -> None:
+    _enable_provider(monkeypatch)
+    client = TestClient(app)
+    headers, user_id = _resolve_user(client, "director-reveal-idempotency")
+    headers["Idempotency-Key"] = str(uuid4())
+    campaign_id = _create_revealable_campaign(user_id)
+
+    orchestrator_instance = orchestrator_module.orchestrator
+    monkeypatch.setattr(
+        orchestrator_instance.action_parser_agent,
+        "parse",
+        _fake_parse_observe,
+    )
+    reveal_action = RevealClueWorldAction(clue_id="ghost_points_to_old_book")
+
+    from app.schemas.director import WorldActionProposal
+
+    async def fake_propose(*, director_input, model=None):  # noqa: ANN001, ARG001, ANN202
+        return DirectorAgentResult(
+            proposal=WorldActionProposal(world_action=reveal_action),
+            usage=None,
+        )
+
+    monkeypatch.setattr(orchestrator_instance.director_agent, "propose", fake_propose)
+    monkeypatch.setattr(orchestrator_instance.narrator_agent, "generate", _fake_narrator_generate)
+
+    first = client.post(
+        "/api/chat",
+        json={"message": "look around", "campaign_id": campaign_id},
+        headers=headers,
+    )
+
+    assert first.status_code == 200
+
+    with session() as db:
+        campaign = db.get_campaign(campaign_id)
+        assert campaign is not None and campaign.state is not None
+        state_after_first = json.loads(campaign.state)
+        assert state_after_first["narrative"]["revealed_clues"] == [
+            "ghost_points_to_old_book"
+        ]
+
+    def fail_if_called(*args, **kwargs):  # noqa: ANN002, ANN003, ANN202
+        raise AssertionError("Completed idempotent replay must not execute agents.")
+
+    monkeypatch.setattr(orchestrator_instance.action_parser_agent, "parse", fail_if_called)
+    monkeypatch.setattr(orchestrator_instance.director_agent, "propose", fail_if_called)
+    monkeypatch.setattr(orchestrator_instance.narrator_agent, "generate", fail_if_called)
+    monkeypatch.setattr(
+        orchestrator_instance.world_authority_executor,
+        "execute",
+        fail_if_called,
+    )
+
+    second = client.post(
+        "/api/chat",
+        json={"message": "look around", "campaign_id": campaign_id},
+        headers=headers,
+    )
+
+    assert second.status_code == 200
+    assert second.json() == first.json()
+    with session() as db:
+        campaign = db.get_campaign(campaign_id)
+        assert campaign is not None and campaign.state is not None
+        state_after_second = json.loads(campaign.state)
+        assert state_after_second["narrative"]["revealed_clues"] == [
+            "ghost_points_to_old_book"
+        ]
+
+
+def test_later_turn_excludes_already_revealed_clue_from_director_context(monkeypatch) -> None:
+    _enable_provider(monkeypatch)
+    orchestrator_instance = orchestrator_module.orchestrator
+    monkeypatch.setattr(
+        orchestrator_instance.action_parser_agent,
+        "parse",
+        _fake_parse_observe,
+    )
+    monkeypatch.setattr(orchestrator_instance.narrator_agent, "generate", _fake_narrator_generate)
+
+    reveal_action = RevealClueWorldAction(clue_id="ghost_points_to_old_book")
+
+    from app.schemas.director import WorldActionProposal
+
+    proposals = [
+        DirectorAgentResult(
+            proposal=WorldActionProposal(world_action=reveal_action),
+            usage=None,
+        ),
+        _no_action_result(),
+    ]
+    captured_revealable_ids: list[list[str]] = []
+
+    async def fake_propose(*, director_input, model=None):  # noqa: ANN001, ARG001, ANN202
+        captured_revealable_ids.append(
+            [clue.clue_id for clue in director_input.narrative.revealable_clues]
+        )
+        return proposals.pop(0)
+
+    monkeypatch.setattr(orchestrator_instance.director_agent, "propose", fake_propose)
+
+    client = TestClient(app)
+    _headers, user_id = _resolve_user(client, "director-reveal-later-turn")
+    campaign_id = _create_revealable_campaign(user_id)
+
+    asyncio.run(
+        orchestrator_instance.handle_chat(
+            ChatRequest(message="look around", campaign_id=campaign_id),
+            owner_user_id=user_id,
+        )
+    )
+    asyncio.run(
+        orchestrator_instance.handle_chat(
+            ChatRequest(message="look around again", campaign_id=campaign_id),
+            owner_user_id=user_id,
+        )
+    )
+
+    assert captured_revealable_ids == [["ghost_points_to_old_book"], []]
 
 
 def test_successful_no_op_world_action_records_event_without_state_replacement(
