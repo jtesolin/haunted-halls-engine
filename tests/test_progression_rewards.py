@@ -174,6 +174,30 @@ def test_preowned_ability_is_not_projected_as_newly_unlocked() -> None:
     ]
 
 
+def test_fully_no_op_reward_still_claims_but_reports_no_narrator_reward() -> None:
+    """When the authored reward's grant and unlock are both already at their
+    end state (capped track, pre-owned ability) but the reward has not yet
+    been claimed, the canonical claim must still be recorded and the outcome
+    must remain `APPLIED`, but there is no authoritative player-facing change
+    to narrate, so `narrator_reward` must be `None`."""
+    state = _state_with_library_whisper_completed()
+    progression = default_character_progression_state()
+    progression["tracks"]["investigation"] = MAX_TRACK_POINTS
+    progression["unlocked_abilities"] = ["keen_eye"]
+    state["player"]["progression"] = progression
+
+    result = apply_quest_completion_rewards(state, _completed_library_whisper())
+
+    assert result.outcome == ProgressionRewardOutcome.APPLIED
+    assert result.changed is True
+    assert result.narrator_reward is None
+    assert state["player"]["progression"]["tracks"]["investigation"] == MAX_TRACK_POINTS
+    assert state["player"]["progression"]["unlocked_abilities"] == ["keen_eye"]
+    assert state["player"]["progression_rewards"]["claimed_reward_ids"] == [
+        "librarys_whisper_completion"
+    ]
+
+
 def test_missing_transition_fields_are_not_eligible_for_a_reward() -> None:
     """A completion result lacking the objective-transition fields cannot
     prove the canonical first completion and must not be rewarded."""

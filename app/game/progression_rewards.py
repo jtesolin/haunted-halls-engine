@@ -266,25 +266,31 @@ def apply_quest_completion_rewards(
     }
     state.clear()
     state.update(candidate)
-    narrator_reward = NarratorProgressionReward(
-        reward_id=reward.reward_id,
-        progression_grants=[
-            NarratorProgressionGrant(
-                track_id=cast(ProgressionTrackId, result.track_id),
-                prior_points=result.prior_points,
-                new_points=result.new_points,
-            )
-            for result in grant_results
-            if result.new_points > result.prior_points
-        ],
-        unlocked_abilities=[
-            NarratorUnlockedAbility(
-                ability_id=result.ability_id,
-                display_name=ABILITY_REGISTRY[result.ability_id].display_name,
-            )
-            for result in unlock_results
-            if result.changed and not result.already_unlocked
-        ],
+    progression_grants = [
+        NarratorProgressionGrant(
+            track_id=cast(ProgressionTrackId, result.track_id),
+            prior_points=result.prior_points,
+            new_points=result.new_points,
+        )
+        for result in grant_results
+        if result.new_points > result.prior_points
+    ]
+    unlocked_abilities = [
+        NarratorUnlockedAbility(
+            ability_id=result.ability_id,
+            display_name=ABILITY_REGISTRY[result.ability_id].display_name,
+        )
+        for result in unlock_results
+        if result.changed and not result.already_unlocked
+    ]
+    narrator_reward = (
+        NarratorProgressionReward(
+            reward_id=reward.reward_id,
+            progression_grants=progression_grants,
+            unlocked_abilities=unlocked_abilities,
+        )
+        if progression_grants or unlocked_abilities
+        else None
     )
     return ProgressionRewardResult(
         ProgressionRewardOutcome.APPLIED,
