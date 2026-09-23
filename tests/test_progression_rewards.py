@@ -2,8 +2,10 @@ from copy import deepcopy
 
 from app.game.abilities import evaluate_ability_availability
 from app.game.campaign_state import build_fresh_campaign_state
+from app.game.character_progression import default_character_progression_state
 from app.game.progression_rewards import (
     AUTHORED_QUEST_COMPLETION_REWARDS,
+    ProgressionRewardOutcome,
     apply_quest_completion_rewards,
     read_reward_claims,
     validate_progression_reward_definitions,
@@ -53,7 +55,7 @@ def test_malformed_claims_fail_safely_without_partial_reward() -> None:
     result = apply_quest_completion_rewards(state, _completed_library_whisper())
 
     assert result.changed is False
-    assert result.applicable is True
+    assert result.outcome == ProgressionRewardOutcome.FAILED
     assert state == before
 
 
@@ -64,6 +66,7 @@ def test_library_completion_grants_and_claims_once() -> None:
     second = apply_quest_completion_rewards(state, _completed_library_whisper())
 
     assert first.changed is True
+    assert first.outcome == ProgressionRewardOutcome.APPLIED
     assert first.narrator_reward is not None
     assert first.narrator_reward.progression_grants[0].new_points == 2
     assert first.narrator_reward.unlocked_abilities[0].display_name == "Keen Eye"
@@ -73,6 +76,7 @@ def test_library_completion_grants_and_claims_once() -> None:
         "librarys_whisper_completion"
     ]
     assert second.changed is False
+    assert second.outcome == ProgressionRewardOutcome.ALREADY_CLAIMED
     assert second.narrator_reward is None
     assert evaluate_ability_availability(state, "keen_eye").status == AbilityAvailabilityStatus.AVAILABLE
 
@@ -90,6 +94,22 @@ def test_non_completion_does_not_mutate_story_or_progression() -> None:
         ),
     )
 
-    assert result.applicable is False
+    assert result.outcome == ProgressionRewardOutcome.NOT_APPLICABLE
     assert state.get("story") == story_before
     assert "progression" not in state["player"]
+
+
+def test_preowned_ability_is_not_projected_as_newly_unlocked() -> None:
+    state = build_fresh_campaign_state()
+    state["player"]["progression"] = default_character_progression_state()
+    state["player"]["progression"]["unlocked_abilities"] = ["keen_eye"]
+
+    result = apply_quest_completion_rewards(state, _completed_library_whisper())
+
+    assert result.outcome == ProgressionRewardOutcome.APPLIED
+    assert result.narrator_reward is not None
+    assert result.narrator_reward.unlocked_abilities == []
+    assert state["player"]["progression"]["unlocked_abilities"] == ["keen_eye"]
+    assert state["player"]["progression_rewards"]["claimed_reward_ids"] == [
+        "librarys_whisper_completion"
+    ]

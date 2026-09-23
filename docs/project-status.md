@@ -37,19 +37,30 @@ Stable cross-repository authority and security invariants belong in
 
 ## Completed phases
 
-- **Phases 1–2:** FastAPI campaign/chat foundation, persistent conversations,
-  model integration, narration, and request/model guardrails.
-- **Phases 3–5:** PostgreSQL-compatible persistence, explicit Alembic
-  deployment migrations, Cloud Run infrastructure/deployment, and production
-  operational foundations.
+- **Phase 1:** FastAPI campaign/chat foundation, persistent campaigns and
+  conversations, and the Next.js player experience.
+- **Phase 2:** Model-backed narration with centralized model policy, usage
+  accounting, token budgets, and request/model guardrails.
+- **Phase 3:** PostgreSQL-compatible persistence, explicit Alembic deployment
+  migrations, and deployed Cloud Run/Cloud SQL infrastructure with automated
+  delivery foundations.
+- **Phase 4:** Campaign-scoped recent-turn, summary, semantic, and reflection
+  memory behind dedicated agents and services. Semantic retrieval remains a
+  deliberately lightweight implementation rather than a vector database.
+- **Phase 5:** A structured agentic pipeline separates natural-language action
+  parsing, typed player intent, deterministic tool/rule execution, and
+  grounded narration, with local/MCP tool-registry support.
 - **Phase 6:** Authoritative deterministic world state, player tools, scene
   projections, ownership boundaries, and narrator grounding.
-- **Phase 7:** Deterministic story/quest progression for typed signals derived
-  from authoritative player outcomes.
-- **Phase 8A–8C:** Story definitions, bounded character progression, and
-  deterministic ability availability/check domain foundations.
-- **Phase 8D:** Director integration with bounded read-only context and
-  separately executed typed world authority actions.
+- **Phase 7:** A separate deterministic world-authority boundary and
+  model-backed Director proposal pipeline, with privileged actions executed
+  only through `WorldAuthorityExecutor`.
+- **Phase 8A–8C:** Authored story definitions and deterministic quest
+  progression, bounded character progression, and deterministic ability
+  availability/check domain foundations.
+- **Phase 8D:** Story progression was integrated into normal turns before
+  Director context; Director gained bounded story/character context and
+  authored narrative actions without direct state-mutation authority.
 - **Phase 8E:** Provider-free AI evaluation harness foundation.
 - **Phase 8F1:** Authored quest-completion rewards. The completed Library's
   Whisper quest grants +2 investigation and unlocks `keen_eye`; a persistent

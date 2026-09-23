@@ -34,6 +34,7 @@ from app.game.campaign_state import (
 from app.game.narrator_scene import build_narrator_scene_context
 from app.game.narrative import NARRATIVE_CLUES
 from app.game.progression_rewards import (
+    ProgressionRewardOutcome,
     apply_quest_completion_rewards,
 )
 from app.game.story import apply_story_signal, derive_story_signal
@@ -575,6 +576,18 @@ class ChatOrchestrator:
                 story_result = apply_story_signal(updated_state, story_signal)
                 story_state_changed = bool(story_result.changed)
             reward_result = apply_quest_completion_rewards(updated_state, story_result)
+            if reward_result.outcome == ProgressionRewardOutcome.FAILED:
+                logger.error(
+                    "progression_reward_failure owner_user_id=%s campaign_id=%s turn_id=%s reward_id=%s",
+                    owner_user_id,
+                    campaign_id,
+                    player_turn_id,
+                    reward_result.reward_id,
+                )
+                raise HTTPException(
+                    status_code=500,
+                    detail="Campaign state could not be processed.",
+                )
             current_turn_reward = reward_result.narrator_reward
             reward_state_changed = reward_result.changed
 

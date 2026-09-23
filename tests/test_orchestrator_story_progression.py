@@ -403,6 +403,66 @@ def test_take_after_objectives_1_and_2_completes_quest(monkeypatch) -> None:
         ]
 
 
+def test_malformed_reward_claims_roll_back_quest_completion(monkeypatch) -> None:
+    _enable_provider(monkeypatch)
+
+    async def fake_parse(**kwargs):
+        return ParsedAction(
+            raw_text="take the old book",
+            action=ActionType.TAKE,
+            target="old_book",
+            confidence=1.0,
+            parse_status="ok",
+        )
+
+    def fake_tool_execute(self, *, parsed_action, campaign_state):
+        state = json.loads(campaign_state)
+        return state, ToolExecutionResult(
+            success=True,
+            applied_tools=["take_item"],
+            summary="You take the old book.",
+            state_delta={},
+            item_id="old_book",
+        )
+
+    monkeypatch.setattr(
+        orchestrator_module.orchestrator.action_parser_agent, "parse", fake_parse
+    )
+    monkeypatch.setattr(orchestrator_module.ToolExecutor, "execute", fake_tool_execute)
+
+    client = TestClient(app)
+    user_id = _resolve_user(client, "story-malformed-reward-claims")
+    campaign_id = "campaign_story_malformed_reward_claims"
+    initial_state = _story_state(
+        objective_1="completed",
+        objective_2="completed",
+        objective_3="active",
+    )
+    initial_state["player"]["progression_rewards"] = {
+        "claimed_reward_ids": ["librarys_whisper_completion", 3]
+    }
+    _create_campaign(user_id=user_id, campaign_id=campaign_id, state=initial_state)
+
+    with pytest.raises(HTTPException, match="Campaign state could not be processed"):
+        asyncio.run(
+            orchestrator_module.orchestrator.handle_chat(
+                ChatRequest(message="take the old book", campaign_id=campaign_id),
+                owner_user_id=user_id,
+            )
+        )
+
+    with session() as db:
+        campaign = db.get_campaign(campaign_id)
+        state = _load_campaign_state(campaign)
+        quest = state["story"]["quests"]["librarys_whisper"]
+        assert quest["status"] == "active"
+        assert quest["objectives"]["acquire_old_book"] == "active"
+        assert "progression" not in state["player"]
+        assert state["player"]["progression_rewards"] == {
+            "claimed_reward_ids": ["librarys_whisper_completion", 3]
+        }
+
+
 @pytest.mark.parametrize(
     ("message", "action", "tool_result"),
     [

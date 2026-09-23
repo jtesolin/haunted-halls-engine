@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import Any, cast
 
 from app.game.abilities import ABILITY_REGISTRY
@@ -120,9 +121,16 @@ def read_reward_claims(state: dict[str, Any]) -> tuple[bool, tuple[str, ...]]:
     return True, tuple(raw_ids)
 
 
+class ProgressionRewardOutcome(StrEnum):
+    NOT_APPLICABLE = "not_applicable"
+    APPLIED = "applied"
+    ALREADY_CLAIMED = "already_claimed"
+    FAILED = "failed"
+
+
 @dataclass(frozen=True)
 class ProgressionRewardResult:
-    applicable: bool
+    outcome: ProgressionRewardOutcome
     changed: bool
     reward_id: str | None = None
     reason: str = ""
@@ -140,23 +148,37 @@ def apply_quest_completion_rewards(
         or story_result.outcome != StoryProgressionOutcome.QUEST_COMPLETED
         or story_result.quest_id is None
     ):
-        return ProgressionRewardResult(False, False, reason="Story result is not a quest completion.")
+        return ProgressionRewardResult(
+            ProgressionRewardOutcome.NOT_APPLICABLE,
+            False,
+            reason="Story result is not a quest completion.",
+        )
 
     reward = next(
         (item for item in AUTHORED_QUEST_COMPLETION_REWARDS if item.quest_id == story_result.quest_id),
         None,
     )
     if reward is None:
-        return ProgressionRewardResult(False, False, reason="No authored reward matches the quest.")
+        return ProgressionRewardResult(
+            ProgressionRewardOutcome.NOT_APPLICABLE,
+            False,
+            reason="No authored reward matches the quest.",
+        )
 
     claims_valid, claimed_ids = read_reward_claims(state)
     if not claims_valid:
         return ProgressionRewardResult(
-            True, False, reward.reward_id, "Reward claim state is malformed."
+            ProgressionRewardOutcome.FAILED,
+            False,
+            reward.reward_id,
+            "Reward claim state is malformed.",
         )
     if reward.reward_id in claimed_ids:
         return ProgressionRewardResult(
-            True, False, reward.reward_id, "Reward has already been claimed."
+            ProgressionRewardOutcome.ALREADY_CLAIMED,
+            False,
+            reward.reward_id,
+            "Reward has already been claimed.",
         )
 
     candidate = deepcopy(state)
@@ -169,7 +191,10 @@ def apply_quest_completion_rewards(
     ]
     if any(not result.success for result in (*grant_results, *unlock_results)):
         return ProgressionRewardResult(
-            True, False, reward.reward_id, "Authored reward could not be applied."
+            ProgressionRewardOutcome.FAILED,
+            False,
+            reward.reward_id,
+            "Authored reward could not be applied.",
         )
 
     candidate.setdefault("player", {})[REWARD_CLAIMS_KEY] = {
@@ -190,12 +215,17 @@ def apply_quest_completion_rewards(
         ],
         unlocked_abilities=[
             NarratorUnlockedAbility(
-                ability_id=ability_id,
-                display_name=ABILITY_REGISTRY[ability_id].display_name,
+                ability_id=result.ability_id,
+                display_name=ABILITY_REGISTRY[result.ability_id].display_name,
             )
-            for ability_id in reward.ability_unlock_ids
+            for result in unlock_results
+            if result.changed and not result.already_unlocked
         ],
     )
     return ProgressionRewardResult(
-        True, True, reward.reward_id, "Authored reward applied.", narrator_reward
+        ProgressionRewardOutcome.APPLIED,
+        True,
+        reward.reward_id,
+        "Authored reward applied.",
+        narrator_reward,
     )
