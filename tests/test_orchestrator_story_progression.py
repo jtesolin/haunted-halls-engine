@@ -453,6 +453,137 @@ def test_final_objective_completion_forwards_authoritative_reward_to_narrator(mo
     assert reward.unlocked_abilities[0].display_name == "Keen Eye"
 
 
+def test_idempotent_replay_does_not_regrant_or_renarrate_final_objective_reward(
+    monkeypatch,
+) -> None:
+    """Issue #76 requires that a completed idempotent chat replay neither
+    grants nor narrates the authored quest-completion reward again. This
+    exercises the actual `librarys_whisper` final-objective/reward turn
+    through the real orchestration/idempotency path, rather than a generic
+    replay scenario, so it proves the reward-specific acceptance
+    requirement directly."""
+    _enable_provider(monkeypatch)
+    captured_narrator_payloads: list[NarratorAgentInput] = []
+
+    async def fake_parse(**kwargs):
+        return ParsedAction(
+            raw_text="take the old book",
+            action=ActionType.TAKE,
+            target="old_book",
+            confidence=1.0,
+            parse_status="ok",
+        )
+
+    def fake_tool_execute(self, *, parsed_action, campaign_state):
+        state = _story_state(objective_1="completed", objective_2="completed", objective_3="active")
+        tool_result = ToolExecutionResult(
+            success=True,
+            applied_tools=["take_item"],
+            summary="You take the old book.",
+            state_delta={},
+            item_id="old_book",
+        )
+        return state, tool_result
+
+    async def capture_narrator_generate(*, payload, model=None):
+        captured_narrator_payloads.append(payload)
+        return await _async_stub_narrator_reply("The book settles into your hands.")
+
+    monkeypatch.setattr(orchestrator_module.orchestrator.action_parser_agent, "parse", fake_parse)
+    monkeypatch.setattr(orchestrator_module.ToolExecutor, "execute", fake_tool_execute)
+    monkeypatch.setattr(orchestrator_module.orchestrator.narrator_agent, "generate", capture_narrator_generate)
+    monkeypatch.setattr(orchestrator_module.orchestrator.director_agent, "propose", _stub_director_response)
+
+    client = TestClient(app)
+    user_id = _resolve_user(client, "story-idempotent-final-objective-reward")
+    campaign_id = "campaign_story_idempotent_final_objective_reward"
+    initial_state = _story_state(objective_1="completed", objective_2="completed", objective_3="active")
+    _create_campaign(user_id=user_id, campaign_id=campaign_id, state=initial_state)
+    idempotency_key = "final-objective-reward-replay-key"
+
+    first = asyncio.run(
+        orchestrator_module.orchestrator.handle_chat(
+            ChatRequest(message="take the old book", campaign_id=campaign_id),
+            owner_user_id=user_id,
+            idempotency_key=idempotency_key,
+        )
+    )
+
+    with session() as db:
+        campaign = db.get_campaign(campaign_id)
+        state_after_first = _load_campaign_state(campaign)
+    quest_after_first = state_after_first["story"]["quests"]["librarys_whisper"]
+    assert quest_after_first["status"] == "completed"
+    assert quest_after_first["objectives"]["acquire_old_book"] == "completed"
+    assert state_after_first["player"]["progression"]["tracks"]["investigation"] == 2
+    assert state_after_first["player"]["progression"]["unlocked_abilities"] == ["keen_eye"]
+    assert state_after_first["player"]["progression_rewards"]["claimed_reward_ids"] == [
+        "librarys_whisper_completion"
+    ]
+
+    assert len(captured_narrator_payloads) == 1
+    first_reward = captured_narrator_payloads[0].current_turn_reward
+    assert first_reward is not None
+    assert first_reward.reward_id == "librarys_whisper_completion"
+    assert first_reward.progression_grants[0].prior_points == 0
+    assert first_reward.progression_grants[0].new_points == 2
+    assert first_reward.unlocked_abilities[0].ability_id == "keen_eye"
+
+    def fail_if_called_parse(**kwargs):
+        raise AssertionError("Action parser must not run again on completed replay.")
+
+    def fail_if_called_execute(*args, **kwargs):
+        raise AssertionError("Tool executor must not run again on completed replay.")
+
+    async def fail_if_called_generate(*args, **kwargs):
+        raise AssertionError("Narrator must not run again on completed replay.")
+
+    def fail_story_derivation(*args, **kwargs):
+        raise AssertionError("Story derivation should not run on a replayed completed request.")
+
+    def fail_story_progression(*args, **kwargs):
+        raise AssertionError("apply_story_signal should not run on a replayed completed request.")
+
+    def fail_reward_application(*args, **kwargs):
+        raise AssertionError(
+            "apply_quest_completion_rewards should not run on a replayed completed request."
+        )
+
+    monkeypatch.setattr(orchestrator_module.orchestrator.action_parser_agent, "parse", fail_if_called_parse)
+    monkeypatch.setattr(orchestrator_module.ToolExecutor, "execute", fail_if_called_execute)
+    monkeypatch.setattr(orchestrator_module.orchestrator.narrator_agent, "generate", fail_if_called_generate)
+    monkeypatch.setattr(orchestrator_module, "derive_story_signal", fail_story_derivation)
+    monkeypatch.setattr(orchestrator_module, "apply_story_signal", fail_story_progression)
+    monkeypatch.setattr(
+        orchestrator_module, "apply_quest_completion_rewards", fail_reward_application
+    )
+
+    second = asyncio.run(
+        orchestrator_module.orchestrator.handle_chat(
+            ChatRequest(message="take the old book", campaign_id=campaign_id),
+            owner_user_id=user_id,
+            idempotency_key=idempotency_key,
+        )
+    )
+
+    assert second.reply == first.reply
+    assert second.campaign_id == first.campaign_id
+    assert second.turn_id == first.turn_id
+    assert len(captured_narrator_payloads) == 1
+
+    with session() as db:
+        campaign = db.get_campaign(campaign_id)
+        state_after_replay = _load_campaign_state(campaign)
+    assert state_after_replay == state_after_first
+    quest_after_replay = state_after_replay["story"]["quests"]["librarys_whisper"]
+    assert quest_after_replay["status"] == "completed"
+    assert state_after_replay["player"]["progression"]["tracks"]["investigation"] == 2
+    assert state_after_replay["player"]["progression"]["unlocked_abilities"] == ["keen_eye"]
+    assert state_after_replay["player"]["progression_rewards"]["claimed_reward_ids"] == [
+        "librarys_whisper_completion"
+    ]
+
+
 def test_malformed_reward_claims_roll_back_quest_completion(monkeypatch) -> None:
     _enable_provider(monkeypatch)
 
