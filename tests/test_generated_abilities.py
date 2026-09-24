@@ -13,7 +13,7 @@ from app.game.abilities import (
     resolve_gameplay_ability_check,
     validate_starter_ability_definitions,
 )
-from app.game.campaign_state import build_fresh_campaign_state
+from app.game.campaign_state import InvalidCampaignStateError, build_fresh_campaign_state
 from app.game.character_progression import ensure_character_progression_state, unlock_ability
 from app.schemas.abilities import AbilityCheckOutcome, AbilityCheckResult
 from app.schemas.character_progression import ProgressionTrackId
@@ -64,6 +64,40 @@ def test_invalid_generated_content_and_built_in_collision_are_rejected() -> None
     )
     with pytest.raises(ValueError, match="bypass"):
         validate_starter_ability_definitions((unsupported, generation.abilities[1]))
+
+
+def test_generated_mechanic_collections_have_bounded_distinct_values() -> None:
+    generation = StarterAbilityGenerator()._stub_generation()
+
+    too_many_requirements = generation.abilities[0].model_copy(
+        update={
+            "mechanics": generation.abilities[0].mechanics.model_copy(
+                update={"requires": ("nearby", "line_of_sight", "nearby")}
+            )
+        }
+    )
+    with pytest.raises(ValueError, match="at most 2 items"):
+        validate_starter_ability_definitions((too_many_requirements, generation.abilities[1]))
+
+    duplicate_requirements = generation.abilities[0].model_copy(
+        update={
+            "mechanics": generation.abilities[0].mechanics.model_copy(
+                update={"requires": ("nearby", "nearby")}
+            )
+        }
+    )
+    with pytest.raises(ValueError, match="duplicates"):
+        validate_starter_ability_definitions((duplicate_requirements, generation.abilities[1]))
+
+    bypass = generation.abilities[0].model_copy(
+        update={
+            "mechanics": generation.abilities[0].mechanics.model_copy(
+                update={"bypasses": ("darkness",)}
+            )
+        }
+    )
+    with pytest.raises(ValueError, match="bypass"):
+        validate_starter_ability_definitions((bypass, generation.abilities[1]))
 
 
 def test_blank_generated_display_text_is_rejected() -> None:
@@ -227,9 +261,24 @@ def test_generated_ability_is_known_but_not_yet_executable() -> None:
     assert result.error_code == "unsupported_generated_mechanic"
 
 
-def test_invalid_persisted_generated_definition_fails_explicitly() -> None:
+def test_invalid_persisted_generated_definition_raises_campaign_state_error_everywhere() -> None:
     state = _state_with_starters()
     state["player"]["generated_abilities"][0]["mechanics"]["bypasses"] = ["darkness"]
 
-    with pytest.raises(ValueError, match="Persisted generated ability definition is invalid"):
+    with pytest.raises(InvalidCampaignStateError, match="generated ability definitions"):
         resolve_gameplay_ability_check(state, "echo_sense")
+
+    with pytest.raises(InvalidCampaignStateError, match="generated ability definitions"):
+        ActionParserAgent()._build_parser_context(json.dumps(state))
+
+    with pytest.raises(InvalidCampaignStateError, match="generated ability definitions"):
+        ToolExecutor().execute(
+            parsed_action=ParsedAction(
+                raw_text="use echo sense",
+                action=ActionType.ABILITY_CHECK,
+                parameters={"ability_id": "echo_sense"},
+                confidence=1,
+                parse_status="ok",
+            ),
+            campaign_state=json.dumps(state),
+        )

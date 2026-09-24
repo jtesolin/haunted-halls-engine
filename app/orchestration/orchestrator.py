@@ -33,7 +33,10 @@ from app.game.campaign_state import (
     load_authoritative_campaign_state,
     validate_persisted_campaign_state_json,
 )
-from app.game.abilities import validate_starter_ability_definitions
+from app.game.abilities import (
+    generated_ability_definitions,
+    validate_starter_ability_definitions,
+)
 from app.game.character_progression import ensure_character_progression_state, unlock_ability
 from app.game.narrator_scene import build_narrator_scene_context
 from app.game.narrative import NARRATIVE_CLUES
@@ -302,6 +305,9 @@ class ChatOrchestrator:
             )
             try:
                 validate_persisted_campaign_state_json(campaign_state)
+                generated_ability_definitions(
+                    load_authoritative_campaign_state(campaign_state)
+                )
             except InvalidCampaignStateError as exc:
                 logger.error(
                     "campaign_state_integrity_failure owner_user_id=%s campaign_id=%s turn_id=%s error_type=%s",
@@ -326,23 +332,6 @@ class ChatOrchestrator:
             )
 
             validate_daily_request_limit(db, owner_user_id)
-            parser_estimated_input_tokens = 0
-            if parser_model_enabled:
-                parser_estimated_input_tokens = (
-                    self.action_parser_agent.estimate_provider_input_tokens(
-                        message=request.message,
-                        campaign_state=campaign_state,
-                        recent_turns=recent_turns,
-                        memory_context=memory_context,
-                    )
-                )
-                self._check_model_call_budget(
-                    db,
-                    owner_user_id,
-                    parser_estimated_input_tokens,
-                    TokenBudget.action_parser_max_output_tokens(),
-                    provider_model_enabled=True,
-                )
 
             if idempotency_key is not None:
                 claim = db.claim_chat_request_idempotency(
@@ -393,6 +382,24 @@ class ChatOrchestrator:
                     query=request.message,
                     campaign_state=campaign_state,
                     recent_turns=recent_turns,
+                )
+
+            parser_estimated_input_tokens = 0
+            if parser_model_enabled:
+                parser_estimated_input_tokens = (
+                    self.action_parser_agent.estimate_provider_input_tokens(
+                        message=request.message,
+                        campaign_state=campaign_state,
+                        recent_turns=recent_turns,
+                        memory_context=memory_context,
+                    )
+                )
+                self._check_model_call_budget(
+                    db,
+                    owner_user_id,
+                    parser_estimated_input_tokens,
+                    TokenBudget.action_parser_max_output_tokens(),
+                    provider_model_enabled=True,
                 )
 
             db.create_campaign(

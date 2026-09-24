@@ -1405,6 +1405,46 @@ def test_provider_backed_starter_generation_respects_project_request_limit(monke
         settings.MAX_DAILY_PROJECT_REQUESTS = original_limit
 
 
+def test_auto_created_chat_rechecks_parser_budget_after_starter_generation(monkeypatch) -> None:
+    settings.AI_ENABLED = True
+    settings.OPENAI_API_KEY = "test-key"
+    original_limit = settings.MAX_DAILY_PROJECT_REQUESTS
+    settings.MAX_DAILY_PROJECT_REQUESTS = 1
+    generated = orchestrator_module.orchestrator.starter_ability_generator._stub_generation()
+
+    async def fake_starter_generate(*, provider_model_enabled, return_usage=False):  # noqa: ANN202
+        assert provider_model_enabled is True
+        assert return_usage is True
+        return ModelCallResult(output=generated, usage=None)
+
+    async def fail_if_parser_executes(**kwargs):  # noqa: ANN003, ANN202
+        raise AssertionError("parser provider must not execute after the refreshed budget check")
+
+    monkeypatch.setattr(
+        orchestrator_module.orchestrator.starter_ability_generator,
+        "generate",
+        fake_starter_generate,
+    )
+    monkeypatch.setattr(
+        orchestrator_module.orchestrator.action_parser_agent,
+        "parse",
+        fail_if_parser_executes,
+    )
+
+    try:
+        with pytest.raises(HTTPException, match="Daily project request limit reached"):
+            asyncio.run(
+                orchestrator_module.orchestrator.handle_chat(
+                    ChatRequest(message="look around"),
+                    owner_user_id=_resolved_internal_user_id(
+                        TestClient(app), "auto-created-parser-refreshed-budget"
+                    ),
+                )
+            )
+    finally:
+        settings.MAX_DAILY_PROJECT_REQUESTS = original_limit
+
+
 def test_ai_disabled_still_runs_parser_and_tools() -> None:
     settings.AI_ENABLED = False
     settings.OPENAI_API_KEY = None

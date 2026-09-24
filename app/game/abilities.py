@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Any, Mapping, Sequence
 
+from app.game.campaign_state import InvalidCampaignStateError
 from app.game.character_progression import (
     MAX_TRACK_POINTS,
     MIN_TRACK_POINTS,
@@ -48,21 +49,23 @@ def generated_ability_definitions(state: dict[str, Any]) -> tuple[GeneratedAbili
     present field must be a complete validated starter set, rather than being
     partially ignored or repaired during a later lookup.
     """
-    player = state.get("player")
-    raw_definitions = player.get("generated_abilities") if isinstance(player, dict) else None
-    if raw_definitions is None:
-        return ()
-    if not isinstance(raw_definitions, list):
-        raise ValueError("Persisted generated ability definitions must be a list.")
-    definitions: list[GeneratedAbilityDefinition] = []
-    for raw_definition in raw_definitions:
-        try:
+    try:
+        player = state.get("player")
+        raw_definitions = player.get("generated_abilities") if isinstance(player, dict) else None
+        if raw_definitions is None:
+            return ()
+        if not isinstance(raw_definitions, list):
+            raise ValueError("Persisted generated ability definitions must be a list.")
+        definitions: list[GeneratedAbilityDefinition] = []
+        for raw_definition in raw_definitions:
             definition = GeneratedAbilityDefinition.model_validate(raw_definition)
             validate_generated_ability_definition(definition)
-        except (TypeError, ValueError) as exc:
-            raise ValueError("Persisted generated ability definition is invalid.") from exc
-        definitions.append(definition)
-    return validate_starter_ability_definitions(definitions)
+            definitions.append(definition)
+        return validate_starter_ability_definitions(definitions)
+    except (TypeError, ValueError) as exc:
+        raise InvalidCampaignStateError(
+            "Persisted generated ability definitions are invalid."
+        ) from exc
 
 
 def validate_generated_ability_definition(definition: GeneratedAbilityDefinition) -> None:
@@ -89,8 +92,16 @@ def validate_generated_ability_definition(definition: GeneratedAbilityDefinition
             raise ValueError("Utility abilities must use the object minor-utility mechanic.")
     if definition.mechanics.detail not in {AbilityDetail.LIMITED, AbilityDetail.PRACTICAL}:
         raise ValueError("Generated ability detail is not supported.")
+    if len(definition.mechanics.requires) > 2:
+        raise ValueError("Generated ability requirements may contain at most 2 items.")
+    if len(definition.mechanics.requires) != len(set(definition.mechanics.requires)):
+        raise ValueError("Generated ability requirements must not contain duplicates.")
     if any(requirement not in {"line_of_sight", "nearby"} for requirement in definition.mechanics.requires):
         raise ValueError("Generated ability uses an unsupported requirement.")
+    if len(definition.mechanics.bypasses) > 2:
+        raise ValueError("Generated ability bypasses may contain at most 2 items.")
+    if len(definition.mechanics.bypasses) != len(set(definition.mechanics.bypasses)):
+        raise ValueError("Generated ability bypasses must not contain duplicates.")
     if definition.mechanics.bypasses:
         raise ValueError("Generated starter abilities may not bypass core gameplay constraints.")
 
