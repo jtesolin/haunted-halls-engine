@@ -143,6 +143,9 @@ class ChatOrchestrator:
         assistant_turn_id = f"turn_{uuid4().hex}"
         agent_name = "Narrator"
         model = ModelPolicy.narrator_model()
+        starter_error: HTTPException | None = None
+        assistant_turn = None
+        campaign_name = ""
 
         with session() as db:
             self._validate_campaign_creation(db, owner_user_id)
@@ -150,50 +153,29 @@ class ChatOrchestrator:
             has_openai_key = bool((settings.OPENAI_API_KEY or "").strip())
             provider_model_enabled = has_openai_key
             ai_enabled = settings.AI_ENABLED or provider_model_enabled
-            initial_state = await self._build_initial_campaign_state(
-                db=db,
-                owner_user_id=owner_user_id,
-                campaign_id=campaign_id,
-                turn_id=assistant_turn_id,
-                provider_model_enabled=provider_model_enabled,
-            )
-            initial_state_json = json.dumps(initial_state)
-            scene_context = build_narrator_scene_context(initial_state_json)
-            if not ai_enabled:
-                opening_prompt = self._stub_campaign_opening(scene_context)
-                campaign_name = self._stub_campaign_title()
-            else:
-                recent_turns: list[dict[str, str]] = []
+            try:
+                initial_state = await self._build_initial_campaign_state(
+                    db=db,
+                    owner_user_id=owner_user_id,
+                    campaign_id=campaign_id,
+                    turn_id=assistant_turn_id,
+                    provider_model_enabled=provider_model_enabled,
+                )
+            except HTTPException as exc:
+                starter_error = exc
 
-                opening_request = self._build_campaign_opening_request()
-                if provider_model_enabled:
-                    opening_prompt = await self._generate_narrator_response(
-                        db=db,
-                        owner_user_id=owner_user_id,
-                        campaign_id=campaign_id,
-                        turn_id=assistant_turn_id,
-                        agent_name=agent_name,
-                        model=model,
-                        scene_context=scene_context,
-                        recent_turns=recent_turns,
-                        message=opening_request,
-                    )
+            if starter_error is None:
+                initial_state_json = json.dumps(initial_state)
+                scene_context = build_narrator_scene_context(initial_state_json)
+                if not ai_enabled:
+                    opening_prompt = self._stub_campaign_opening(scene_context)
+                    campaign_name = self._stub_campaign_title()
                 else:
-                    opening_prompt = (
-                        await self.narrator_agent.generate(
-                            payload=NarratorAgentInput(
-                                player_message=opening_request,
-                                scene_context=scene_context,
-                                recent_turns=recent_turns,
-                            ),
-                            model=model,
-                        )
-                    ).reply_text
+                    recent_turns: list[dict[str, str]] = []
 
-                title_request = self._build_campaign_title_request(opening_prompt)
-                if provider_model_enabled:
-                    campaign_name = self._normalize_campaign_title(
-                        await self._generate_narrator_response(
+                    opening_request = self._build_campaign_opening_request()
+                    if provider_model_enabled:
+                        opening_prompt = await self._generate_narrator_response(
                             db=db,
                             owner_user_id=owner_user_id,
                             campaign_id=campaign_id,
@@ -202,43 +184,74 @@ class ChatOrchestrator:
                             model=model,
                             scene_context=scene_context,
                             recent_turns=recent_turns,
-                            message=title_request,
+                            message=opening_request,
                         )
-                    )
-                else:
-                    campaign_name = self._normalize_campaign_title(
-                        (
+                    else:
+                        opening_prompt = (
                             await self.narrator_agent.generate(
                                 payload=NarratorAgentInput(
-                                    player_message=title_request,
+                                    player_message=opening_request,
                                     scene_context=scene_context,
                                     recent_turns=recent_turns,
                                 ),
                                 model=model,
                             )
                         ).reply_text
-                    )
 
-            db.create_campaign(
-                campaign_id=campaign_id,
-                owner_user_id=owner_user_id,
-                name=campaign_name,
-                description="AI-created campaign",
-                state=initial_state,
-            )
-            assistant_turn = db.create_turn(
-                turn_id=assistant_turn_id,
-                campaign_id=campaign_id,
-                role="assistant",
-                content=opening_prompt,
-            )
-            db.add_event(
-                event_id=f"evt_{uuid4().hex}",
-                campaign_id=campaign_id,
-                turn_id=assistant_turn_id,
-                type="narrator_response_created",
-                payload=NarratorResponseCreatedPayload(reply=opening_prompt),
-            )
+                    title_request = self._build_campaign_title_request(opening_prompt)
+                    if provider_model_enabled:
+                        campaign_name = self._normalize_campaign_title(
+                            await self._generate_narrator_response(
+                                db=db,
+                                owner_user_id=owner_user_id,
+                                campaign_id=campaign_id,
+                                turn_id=assistant_turn_id,
+                                agent_name=agent_name,
+                                model=model,
+                                scene_context=scene_context,
+                                recent_turns=recent_turns,
+                                message=title_request,
+                            )
+                        )
+                    else:
+                        campaign_name = self._normalize_campaign_title(
+                            (
+                                await self.narrator_agent.generate(
+                                    payload=NarratorAgentInput(
+                                        player_message=title_request,
+                                        scene_context=scene_context,
+                                        recent_turns=recent_turns,
+                                    ),
+                                    model=model,
+                                )
+                            ).reply_text
+                        )
+
+                db.create_campaign(
+                    campaign_id=campaign_id,
+                    owner_user_id=owner_user_id,
+                    name=campaign_name,
+                    description="AI-created campaign",
+                    state=initial_state,
+                )
+                assistant_turn = db.create_turn(
+                    turn_id=assistant_turn_id,
+                    campaign_id=campaign_id,
+                    role="assistant",
+                    content=opening_prompt,
+                )
+                db.add_event(
+                    event_id=f"evt_{uuid4().hex}",
+                    campaign_id=campaign_id,
+                    turn_id=assistant_turn_id,
+                    type="narrator_response_created",
+                    payload=NarratorResponseCreatedPayload(reply=opening_prompt),
+                )
+
+        if starter_error is not None:
+            raise starter_error
+
+        assert assistant_turn is not None
 
         return CampaignDetail(
             campaign_id=campaign_id,
@@ -1055,15 +1068,12 @@ class ChatOrchestrator:
             turn_id=turn_id,
             provider_model_enabled=provider_model_enabled,
         )
-        starter_abilities = validate_starter_ability_definitions(
-            generated_abilities.abilities
-        )
         initial_state = build_fresh_campaign_state()
         ensure_character_progression_state(initial_state)
         initial_state["player"]["generated_abilities"] = [
-            ability.model_dump(mode="json") for ability in starter_abilities
+            ability.model_dump(mode="json") for ability in generated_abilities.abilities
         ]
-        for ability in starter_abilities:
+        for ability in generated_abilities.abilities:
             unlock_result = unlock_ability(initial_state, ability.ability_id)
             if not unlock_result.success:
                 raise ValueError("Starter ability ownership could not be initialized.")
@@ -1079,9 +1089,13 @@ class ChatOrchestrator:
         provider_model_enabled: bool,
     ) -> StarterAbilityGeneration:
         if not provider_model_enabled:
-            return await self.starter_ability_generator.generate(
+            generated = await self.starter_ability_generator.generate(
                 provider_model_enabled=False
             )
+            starter_abilities = validate_starter_ability_definitions(
+                generated.abilities
+            )
+            return StarterAbilityGeneration(abilities=starter_abilities)
 
         model = ModelPolicy.narrator_model()
         estimated_input_tokens = (
@@ -1103,6 +1117,9 @@ class ChatOrchestrator:
             )
             if not isinstance(generated, ModelCallResult) or generated.output is None:
                 raise ValueError("Starter ability generator did not return valid structured output.")
+            starter_abilities = validate_starter_ability_definitions(
+                generated.output.abilities
+            )
             usage = generated.usage
             latency_ms = int((time.perf_counter() - start_time) * 1000)
             db.log_model_request(
@@ -1123,7 +1140,7 @@ class ChatOrchestrator:
                 latency_ms=latency_ms,
                 success=True,
             )
-            return generated.output
+            return StarterAbilityGeneration(abilities=starter_abilities)
         except Exception as exc:
             latency_ms = int((time.perf_counter() - start_time) * 1000)
             logger.error(

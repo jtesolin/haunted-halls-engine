@@ -1405,6 +1405,82 @@ def test_provider_backed_starter_generation_respects_project_request_limit(monke
         settings.MAX_DAILY_PROJECT_REQUESTS = original_limit
 
 
+def test_provider_backed_starter_generation_semantic_failure_is_logged_and_rolls_back(
+    monkeypatch,
+) -> None:
+    settings.AI_ENABLED = True
+    settings.OPENAI_API_KEY = "test-key"
+    generated = orchestrator_module.orchestrator.starter_ability_generator._stub_generation()
+    invalid_generation = generated.model_copy(
+        update={
+            "abilities": (
+                generated.abilities[0].model_copy(update={"ability_id": "duplicate_echo"}),
+                generated.abilities[1].model_copy(update={"ability_id": "duplicate_echo"}),
+            )
+        }
+    )
+    owner_user_id = _resolved_internal_user_id(
+        TestClient(app), "provider-starter-semantic-failure"
+    )
+
+    async def fake_starter_generate(*, provider_model_enabled, return_usage=False):  # noqa: ANN202
+        assert provider_model_enabled is True
+        assert return_usage is True
+        return ModelCallResult(
+            output=invalid_generation,
+            usage=ModelUsage(input_tokens=11, output_tokens=22, total_tokens=33),
+        )
+
+    async def fail_if_narrator_called(self, **kwargs):  # noqa: ANN001, ANN202, ARG001
+        raise AssertionError("narrator must not run after invalid starter generation")
+
+    monkeypatch.setattr(
+        orchestrator_module.orchestrator.starter_ability_generator,
+        "generate",
+        fake_starter_generate,
+    )
+    monkeypatch.setattr(
+        orchestrator_module.ChatOrchestrator,
+        "_generate_narrator_response",
+        fail_if_narrator_called,
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(
+            orchestrator_module.orchestrator.create_campaign(
+                CampaignCreateRequest(),
+                owner_user_id=owner_user_id,
+            )
+        )
+
+    assert exc_info.value.status_code == 502
+    assert exc_info.value.detail == "Starter ability service failed."
+    with session() as db:
+        campaign_count = db.conn.execute(
+            text("SELECT COUNT(*) FROM campaigns WHERE owner_user_id = :owner_user_id"),
+            {"owner_user_id": owner_user_id},
+        ).scalar_one()
+        row = db.conn.execute(
+            text(
+                "SELECT success, actual_input_tokens, actual_output_tokens, "
+                "actual_total_tokens, failure_reason FROM model_requests "
+                "WHERE owner_user_id = :owner_user_id "
+                "AND agent_name = :agent_name"
+            ),
+            {
+                "owner_user_id": owner_user_id,
+                "agent_name": "StarterAbilityGenerator",
+            },
+        ).mappings().one()
+
+    assert campaign_count == 0
+    assert bool(row["success"]) is False
+    assert row["actual_input_tokens"] is None
+    assert row["actual_output_tokens"] is None
+    assert row["actual_total_tokens"] is None
+    assert "ids must be distinct" in row["failure_reason"]
+
+
 def test_auto_created_chat_rechecks_parser_budget_after_starter_generation(monkeypatch) -> None:
     settings.AI_ENABLED = True
     settings.OPENAI_API_KEY = "test-key"
