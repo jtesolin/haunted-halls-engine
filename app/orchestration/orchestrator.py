@@ -12,6 +12,7 @@ from fastapi import HTTPException
 
 from app.agents.action_parser import ActionParseProviderError, ActionParserAgent
 from app.agents.starter_abilities import StarterAbilityGenerator
+from app.ai.model_client import ModelCallResult
 from app.agents.director import (
     DirectorAgent,
     DirectorProposalOutputError,
@@ -79,6 +80,7 @@ from app.schemas.events import (
     WorldActionExecutedPayload,
     WorldActionFailedPayload,
 )
+from app.schemas.generated_abilities import StarterAbilityGeneration
 from app.services.director_context import InvalidDirectorContextError, build_director_input
 from app.services.tool_executor import ToolExecutor
 from app.services.world_authority import WorldAuthorityExecutor
@@ -145,19 +147,13 @@ class ChatOrchestrator:
             has_openai_key = bool((settings.OPENAI_API_KEY or "").strip())
             provider_model_enabled = has_openai_key
             ai_enabled = settings.AI_ENABLED or provider_model_enabled
-            generated_abilities = await self.starter_ability_generator.generate(
-                provider_model_enabled=provider_model_enabled
+            initial_state = await self._build_initial_campaign_state(
+                db=db,
+                owner_user_id=owner_user_id,
+                campaign_id=campaign_id,
+                turn_id=assistant_turn_id,
+                provider_model_enabled=provider_model_enabled,
             )
-            starter_abilities = validate_starter_ability_definitions(generated_abilities.abilities)
-            initial_state = build_fresh_campaign_state()
-            ensure_character_progression_state(initial_state)
-            initial_state["player"]["generated_abilities"] = [
-                ability.model_dump(mode="json") for ability in starter_abilities
-            ]
-            for ability in starter_abilities:
-                unlock_result = unlock_ability(initial_state, ability.ability_id)
-                if not unlock_result.success:
-                    raise ValueError("Starter ability ownership could not be initialized.")
             initial_state_json = json.dumps(initial_state)
             scene_context = build_narrator_scene_context(initial_state_json)
             if not ai_enabled:
@@ -381,11 +377,30 @@ class ChatOrchestrator:
                         detail="Idempotent request is already in progress; retry.",
                     )
 
+            initial_state = None
+            if request.campaign_id is None:
+                initial_state = await self._build_initial_campaign_state(
+                    db=db,
+                    owner_user_id=owner_user_id,
+                    campaign_id=campaign_id,
+                    turn_id=player_turn_id,
+                    provider_model_enabled=provider_model_enabled,
+                )
+                campaign_state = json.dumps(initial_state)
+                memory_context = memory_service.load_memory_context(
+                    owner_user_id=owner_user_id,
+                    campaign_id=campaign_id,
+                    query=request.message,
+                    campaign_state=campaign_state,
+                    recent_turns=recent_turns,
+                )
+
             db.create_campaign(
                 campaign_id=campaign_id,
                 owner_user_id=owner_user_id,
                 name=f"Campaign {campaign_id}",
                 description="Auto-created campaign",
+                state=initial_state,
             )
             db.create_turn(
                 turn_id=player_turn_id,
@@ -608,6 +623,7 @@ class ChatOrchestrator:
 
             authoritative_state_changed = (
                 bool(tool_result.state_delta)
+                or initial_state is not None
                 or campaign_state == "No campaign state yet."
                 or story_state_changed
                 or reward_state_changed
@@ -1015,6 +1031,121 @@ class ChatOrchestrator:
             "Based on the campaign opening below, provide only a short haunted campaign title with no quotes "
             f"and no extra commentary.\n\n{opening_prompt}"
         )
+
+    async def _build_initial_campaign_state(
+        self,
+        *,
+        db,
+        owner_user_id: str,
+        campaign_id: str,
+        turn_id: str,
+        provider_model_enabled: bool,
+    ) -> dict[str, Any]:
+        generated_abilities = await self._generate_starter_abilities(
+            db=db,
+            owner_user_id=owner_user_id,
+            campaign_id=campaign_id,
+            turn_id=turn_id,
+            provider_model_enabled=provider_model_enabled,
+        )
+        starter_abilities = validate_starter_ability_definitions(
+            generated_abilities.abilities
+        )
+        initial_state = build_fresh_campaign_state()
+        ensure_character_progression_state(initial_state)
+        initial_state["player"]["generated_abilities"] = [
+            ability.model_dump(mode="json") for ability in starter_abilities
+        ]
+        for ability in starter_abilities:
+            unlock_result = unlock_ability(initial_state, ability.ability_id)
+            if not unlock_result.success:
+                raise ValueError("Starter ability ownership could not be initialized.")
+        return initial_state
+
+    async def _generate_starter_abilities(
+        self,
+        *,
+        db,
+        owner_user_id: str,
+        campaign_id: str,
+        turn_id: str,
+        provider_model_enabled: bool,
+    ) -> StarterAbilityGeneration:
+        if not provider_model_enabled:
+            return await self.starter_ability_generator.generate(
+                provider_model_enabled=False
+            )
+
+        model = ModelPolicy.narrator_model()
+        estimated_input_tokens = (
+            self.starter_ability_generator.estimate_provider_input_tokens()
+        )
+        self._check_model_call_budget(
+            db,
+            owner_user_id,
+            estimated_input_tokens,
+            TokenBudget.starter_ability_max_output_tokens(),
+            provider_model_enabled=True,
+        )
+
+        start_time = time.perf_counter()
+        try:
+            generated = await self.starter_ability_generator.generate(
+                provider_model_enabled=True,
+                return_usage=True,
+            )
+            if not isinstance(generated, ModelCallResult) or generated.output is None:
+                raise ValueError("Starter ability generator did not return valid structured output.")
+            usage = generated.usage
+            latency_ms = int((time.perf_counter() - start_time) * 1000)
+            db.log_model_request(
+                request_id=f"req_{uuid4().hex}",
+                owner_user_id=owner_user_id,
+                campaign_id=campaign_id,
+                turn_id=turn_id,
+                agent_name=self.starter_ability_generator.name,
+                model=model,
+                estimated_input_tokens=estimated_input_tokens,
+                estimated_output_tokens=TokenBudget.starter_ability_max_output_tokens(),
+                actual_input_tokens=usage.input_tokens if usage else None,
+                cached_input_tokens=usage.cached_input_tokens if usage else None,
+                cache_write_input_tokens=usage.cache_write_input_tokens if usage else None,
+                actual_output_tokens=usage.output_tokens if usage else None,
+                reasoning_output_tokens=usage.reasoning_output_tokens if usage else None,
+                actual_total_tokens=usage.total_tokens if usage else None,
+                latency_ms=latency_ms,
+                success=True,
+            )
+            return generated.output
+        except Exception as exc:
+            latency_ms = int((time.perf_counter() - start_time) * 1000)
+            logger.error(
+                "starter_ability_provider_failed owner_user_id=%s campaign_id=%s turn_id=%s model=%s latency_ms=%s error_type=%s error_message=%s",
+                owner_user_id,
+                campaign_id,
+                turn_id,
+                model,
+                latency_ms,
+                type(exc).__name__,
+                str(exc),
+                exc_info=True,
+            )
+            db.log_model_request(
+                request_id=f"req_{uuid4().hex}",
+                owner_user_id=owner_user_id,
+                campaign_id=campaign_id,
+                turn_id=turn_id,
+                agent_name=self.starter_ability_generator.name,
+                model=model,
+                estimated_input_tokens=estimated_input_tokens,
+                estimated_output_tokens=TokenBudget.starter_ability_max_output_tokens(),
+                actual_input_tokens=None,
+                actual_output_tokens=None,
+                latency_ms=latency_ms,
+                success=False,
+                failure_reason=str(exc),
+            )
+            raise HTTPException(status_code=502, detail="Starter ability service failed.") from exc
 
     async def _maybe_update_memory_layers(
         self,

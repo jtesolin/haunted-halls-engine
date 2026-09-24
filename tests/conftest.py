@@ -6,7 +6,9 @@ import pytest
 from alembic import command
 from alembic.config import Config
 
+from app.agents.starter_abilities import StarterAbilityGenerator
 from app.core.config import settings
+from app.ai.model_client import ModelCallResult, ModelUsage
 from app.db.schema import metadata
 from app.db.session import get_engine
 
@@ -29,6 +31,27 @@ def internal_engine_service_token() -> Iterator[None]:
         yield
     finally:
         settings.INTERNAL_ENGINE_SERVICE_TOKEN = original_token
+
+
+@pytest.fixture(autouse=True)
+def no_live_starter_ability_provider(monkeypatch) -> None:
+    async def fake_generate(
+        self,
+        *,
+        provider_model_enabled: bool,
+        return_usage: bool = False,
+    ):
+        generation = self._stub_generation()
+        if return_usage:
+            return ModelCallResult(
+                output=generation,
+                usage=ModelUsage(input_tokens=1, output_tokens=1, total_tokens=2)
+                if provider_model_enabled
+                else None,
+            )
+        return generation
+
+    monkeypatch.setattr(StarterAbilityGenerator, "generate", fake_generate)
 
 
 @pytest.fixture(autouse=True)

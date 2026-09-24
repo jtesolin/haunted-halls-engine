@@ -22,6 +22,7 @@ from app.game.npcs import (
 from app.core.config import settings
 from app.game.world import DEFAULT_WORLD, World
 from app.schemas.chat import ActionType, ParsedAction, ToolExecutionResult
+from app.schemas.generated_abilities import AbilityGameplayStatus
 from app.tools.mcp_client import build_mcp_client
 from app.tools.registry import RegistryTransportError, ToolRegistry
 
@@ -106,14 +107,20 @@ class ToolExecutor:
                 )
             else:
                 ability_result = resolve_gameplay_ability_check(state, ability_id)
+                resolved = ability_result.status == AbilityGameplayStatus.RESOLVED
+                succeeded = (
+                    resolved
+                    and ability_result.check_result is not None
+                    and ability_result.check_result.success is True
+                )
                 result = ToolExecutionResult(
-                    success=ability_result.status.value == "resolved",
+                    success=succeeded,
                     applied_tools=["resolve_ability_check"]
-                    if ability_result.status.value == "resolved"
+                    if resolved
                     else [],
                     summary=(
                         f"Resolved {ability_result.display_name}."
-                        if ability_result.status.value == "resolved"
+                        if resolved
                         else ability_result.reason or "Ability check could not be resolved."
                     ),
                     error_code=ability_result.error_code,

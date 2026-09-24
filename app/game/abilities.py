@@ -69,6 +69,18 @@ def validate_generated_ability_definition(definition: GeneratedAbilityDefinition
     """Validate generated content against the small engine-owned vocabulary."""
     if definition.ability_id in ABILITY_REGISTRY:
         raise ValueError(f"Generated ability id '{definition.ability_id}' collides with a built-in ability.")
+    if not definition.display_name.strip():
+        raise ValueError("Generated ability display_name must not be blank.")
+    if not definition.description.strip():
+        raise ValueError("Generated ability description must not be blank.")
+    built_in_names = {
+        ability.display_name.strip().casefold()
+        for ability in VALIDATED_ABILITY_DEFINITIONS
+    }
+    if definition.display_name.strip().casefold() in built_in_names:
+        raise ValueError(
+            f"Generated ability display_name '{definition.display_name}' collides with a built-in ability."
+        )
     if definition.kind == GeneratedAbilityKind.SENSORY:
         if definition.mechanics.effect != AbilityEffect.SENSE or definition.mechanics.domain != AbilityDomain.SURROUNDINGS:
             raise ValueError("Sensory abilities must use the surroundings sense mechanic.")
@@ -96,7 +108,7 @@ def validate_starter_ability_definitions(
         validate_generated_ability_definition(definition)
         if definition.ability_id in seen_ids:
             raise ValueError("Generated starter ability ids must be distinct.")
-        normalized_name = definition.display_name.casefold()
+        normalized_name = definition.display_name.strip().casefold()
         if normalized_name in seen_names:
             raise ValueError("Generated starter ability names must be distinct.")
         seen_ids.add(definition.ability_id)

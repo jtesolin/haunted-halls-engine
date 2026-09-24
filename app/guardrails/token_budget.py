@@ -6,6 +6,7 @@ from app.core.config import settings
 class TokenBudget:
     NARRATOR_MAX_OUTPUT_TOKENS = 500
     ACTION_PARSER_MAX_OUTPUT_TOKENS = 320
+    STARTER_ABILITY_MAX_OUTPUT_TOKENS = 300
     SUMMARIZER_MAX_OUTPUT_TOKENS = 180
     MEMORY_REFLECTION_MAX_OUTPUT_TOKENS = 180
     DIRECTOR_MAX_OUTPUT_TOKENS = 128
@@ -17,6 +18,10 @@ class TokenBudget:
     @classmethod
     def action_parser_max_output_tokens(cls) -> int:
         return cls.ACTION_PARSER_MAX_OUTPUT_TOKENS
+
+    @classmethod
+    def starter_ability_max_output_tokens(cls) -> int:
+        return cls.STARTER_ABILITY_MAX_OUTPUT_TOKENS
 
     @classmethod
     def summarizer_max_output_tokens(cls) -> int:

@@ -1,8 +1,13 @@
 """Campaign-creation generation for bounded starter ability content."""
 
+from typing import Literal, overload
+
+from openai.types.chat import ChatCompletionMessageParam
+
 from app.agents.base import BaseAgent
 from app.ai.model_client import ModelCallResult, model_client
 from app.guardrails.model_policy import ModelPolicy
+from app.guardrails.token_budget import TokenBudget, estimate_tokens
 from app.schemas.character_progression import ProgressionTrackId
 from app.schemas.generated_abilities import (
     AbilityChannel,
@@ -21,32 +26,61 @@ class StarterAbilityGenerator(BaseAgent):
     def name(self) -> str:
         return "StarterAbilityGenerator"
 
-    async def generate(self, *, provider_model_enabled: bool) -> StarterAbilityGeneration:
+    def build_provider_request(self) -> list[ChatCompletionMessageParam]:
+        return [
+            {
+                "role": "developer",
+                "content": (
+                    "Generate exactly two modest non-combat Haunted Halls starter abilities. "
+                    "Return only the schema. Include one sensory ability using sense/surroundings "
+                    "and one utility ability using minor_utility/object. Use range 0 or 1, no "
+                    "bypasses, and only nearby or line_of_sight requirements. Do not use keen_eye "
+                    "or any existing built-in ability id or display name."
+                ),
+            }
+        ]
+
+    def estimate_provider_input_tokens(self) -> int:
+        return sum(
+            estimate_tokens(str(message.get("content", "")))
+            for message in self.build_provider_request()
+            if isinstance(message, dict) and isinstance(message.get("content"), str)
+        )
+
+    @overload
+    async def generate(
+        self, *, provider_model_enabled: bool, return_usage: Literal[False] = False
+    ) -> StarterAbilityGeneration: ...
+
+    @overload
+    async def generate(
+        self, *, provider_model_enabled: bool, return_usage: Literal[True]
+    ) -> ModelCallResult[StarterAbilityGeneration]: ...
+
+    async def generate(
+        self, *, provider_model_enabled: bool, return_usage: bool = False
+    ) -> StarterAbilityGeneration | ModelCallResult[StarterAbilityGeneration]:
         if not provider_model_enabled:
-            return self._stub_generation()
+            generation = self._stub_generation()
+            return ModelCallResult(output=generation, usage=None) if return_usage else generation
         result = await model_client.generate_structured(
-            messages=[
-                {
-                    "role": "developer",
-                    "content": (
-                        "Generate exactly two modest non-combat Haunted Halls starter abilities. "
-                        "Return only the schema. Include one sensory ability using sense/surroundings "
-                        "and one utility ability using minor_utility/object. Use range 0 or 1, no "
-                        "bypasses, and only nearby or line_of_sight requirements. Do not use keen_eye "
-                        "or any existing built-in ability id."
-                    ),
-                }
-            ],
+            messages=self.build_provider_request(),
             response_model=StarterAbilityGeneration,
             model=ModelPolicy.narrator_model(),
-            max_output_tokens=300,
+            max_output_tokens=TokenBudget.starter_ability_max_output_tokens(),
             reasoning_effort=ModelPolicy.narrator_reasoning_effort(),
             timeout=20,
+            return_usage=return_usage,
         )
-        output = result.output if isinstance(result, ModelCallResult) else result
+        if return_usage:
+            if not isinstance(result, ModelCallResult):
+                raise ValueError("Starter ability generator did not return model usage.")
+            output = result.output
+        else:
+            output = result.output if isinstance(result, ModelCallResult) else result
         if not isinstance(output, StarterAbilityGeneration):
             raise ValueError("Starter ability generator did not return valid structured output.")
-        return output
+        return result if return_usage and isinstance(result, ModelCallResult) else output
 
     def _stub_generation(self) -> StarterAbilityGeneration:
         return StarterAbilityGeneration(

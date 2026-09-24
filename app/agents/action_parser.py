@@ -290,7 +290,15 @@ class ActionParserAgent(BaseAgent):
             confidence = 0.7
             target, with_item = self._extract_use_items(lower)
             return self._parsed_interaction(
-                message, action, target, self._interaction_mode(lower), with_item, stealth, confidence, parse_status, notes
+                message,
+                action,
+                target,
+                None if re.match(r"^\s*use\b", lower) else self._interaction_mode(lower),
+                with_item,
+                stealth,
+                confidence,
+                parse_status,
+                notes,
             )
         elif self._contains_any_phrase(lower, ["attack", "hit", "strike", "fight"]):
             action = ActionType.ATTACK
@@ -430,16 +438,30 @@ class ActionParserAgent(BaseAgent):
         )
 
     def _requested_ability_id(self, lower: str, campaign_state: str) -> str | None:
-        if not any(phrase in lower for phrase in ("use ", "using ", "with ")):
-            return None
         for ability in self._build_parser_context(campaign_state).abilities:
             ability_id = ability["ability_id"]
             name = ability["name"]
-            if isinstance(ability_id, str) and isinstance(name, str) and (
-                ability_id.replace("_", " ") in lower or name.casefold() in lower
-            ):
+            if not isinstance(ability_id, str) or not isinstance(name, str):
+                continue
+            references = {
+                ability_id.replace("_", " ").strip().casefold(),
+                name.strip().casefold(),
+            }
+            references.discard("")
+            if any(self._has_explicit_ability_reference(lower, reference) for reference in references):
                 return ability_id
         return None
+
+    def _has_explicit_ability_reference(self, lower: str, reference: str) -> bool:
+        reference_pattern = re.escape(reference).replace(r"\ ", r"\s+")
+        pattern = (
+            r"\b(?:use|using|activate|invoke)\s+"
+            r"(?:my\s+|the\s+|an?\s+)?"
+            r"(?:ability\s+)?"
+            f"{reference_pattern}"
+            r"\b(?!\s+(?:on|with)\b)"
+        )
+        return re.search(pattern, lower) is not None
 
     def _dict_value(self, source: dict[str, Any], key: str | None) -> dict[str, Any]:
         if key is None:
@@ -533,13 +555,13 @@ class ActionParserAgent(BaseAgent):
         return self._extract_object_target(text, [mode])
 
     def _extract_use_items(self, text: str) -> tuple[str | None, str | None]:
-        if self._interaction_mode(text) == "light":
+        if not re.match(r"^\s*use\b", text) and self._interaction_mode(text) == "light":
             target = self._extract_object_target(text, ["light"])
             match = re.search(r"\b(?:with|using)\s+(?:the\s+)?(.+?)(?:[.!?]|$)", text)
             return target, match.group(1).strip() if match else None
 
         match = re.search(
-            r"\buse\s+(?:the\s+)?(.+?)\s+\b(?:on|with)\s+(?:the\s+)?(.+?)(?:[.!?]|$)",
+            r"\buse\s+(?:the\s+)?(.+?)\s+(?:on|with)\s+(?:the\s+)?(.+?)(?:[.!?]|$)",
             text,
         )
         if match:

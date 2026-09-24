@@ -12,13 +12,17 @@ from sqlalchemy import text
 from app.agents import action_parser as action_parser_module
 from app.agents import narrator as narrator_module
 from app.agents.director import DirectorAgentResult
+from app.ai.model_client import ModelCallResult, ModelUsage
 from app.api.dependencies import INTERNAL_USER_ID_HEADER_NAME
 from app.core.config import settings
 from app.db.session import session
+from app.game.campaign_state import build_fresh_campaign_state
+from app.game.character_progression import ensure_character_progression_state, unlock_ability
 from app.guardrails.model_policy import ModelPolicy
 from app.guardrails.token_budget import estimate_tokens
 from app.main import app
 from app.orchestration import orchestrator as orchestrator_module
+from app.schemas.campaign import CampaignCreateRequest
 from app.schemas.chat import (
     ActionParserOutput,
     ActionParserParameters,
@@ -1249,6 +1253,156 @@ def test_orchestrator_persists_genesis_state_for_non_mutating_first_action(
         campaign_state = json.loads(campaign.state)
         assert "items" in campaign_state
         assert campaign_state["player"]["inventory"]
+
+
+def test_auto_created_campaign_receives_starter_abilities() -> None:
+    settings.AI_ENABLED = False
+    settings.OPENAI_API_KEY = None
+
+    response = asyncio.run(
+        orchestrator_module.orchestrator.handle_chat(
+            ChatRequest(message="What do I see?"),
+            owner_user_id=_resolved_internal_user_id(
+                TestClient(app), "auto-created-starter-abilities"
+            ),
+        )
+    )
+
+    with session() as db:
+        campaign = db.get_campaign(response.campaign_id)
+        assert campaign is not None
+        assert campaign.state is not None
+        campaign_state = json.loads(campaign.state)
+
+    generated_abilities = campaign_state["player"]["generated_abilities"]
+    unlocked = campaign_state["player"]["progression"]["unlocked_abilities"]
+    assert len(generated_abilities) == 2
+    assert {ability["kind"] for ability in generated_abilities} == {"sensory", "utility"}
+    assert {ability["ability_id"] for ability in generated_abilities} <= set(unlocked)
+
+
+def test_existing_campaign_chat_does_not_regenerate_starter_abilities() -> None:
+    settings.AI_ENABLED = False
+    settings.OPENAI_API_KEY = None
+    user_id = _resolved_internal_user_id(TestClient(app), "existing-starter-abilities")
+    state = build_fresh_campaign_state()
+    generated = orchestrator_module.orchestrator.starter_ability_generator._stub_generation()
+    sentinel_ability = generated.abilities[0].model_copy(update={"display_name": "Sentinel Echo"})
+    state["player"]["generated_abilities"] = [
+        sentinel_ability.model_dump(mode="json"),
+        generated.abilities[1].model_dump(mode="json"),
+    ]
+    ensure_character_progression_state(state)
+    for ability in (sentinel_ability, generated.abilities[1]):
+        assert unlock_ability(state, ability.ability_id).success
+
+    with session() as db:
+        db.create_campaign(
+            campaign_id="campaign_existing_starters",
+            owner_user_id=user_id,
+            name="Existing Starters",
+            state=state,
+        )
+
+    asyncio.run(
+        orchestrator_module.orchestrator.handle_chat(
+            ChatRequest(message="What do I see?", campaign_id="campaign_existing_starters"),
+            owner_user_id=user_id,
+        )
+    )
+
+    with session() as db:
+        campaign = db.get_campaign("campaign_existing_starters")
+        assert campaign is not None
+        assert campaign.state is not None
+        campaign_state = json.loads(campaign.state)
+
+    assert campaign_state["player"]["generated_abilities"] == state["player"]["generated_abilities"]
+
+
+def test_provider_backed_starter_generation_is_logged_without_live_model(monkeypatch) -> None:
+    settings.AI_ENABLED = True
+    settings.OPENAI_API_KEY = "test-key"
+    generated = orchestrator_module.orchestrator.starter_ability_generator._stub_generation()
+
+    async def fake_starter_generate(*, provider_model_enabled, return_usage=False):  # noqa: ANN202
+        assert provider_model_enabled is True
+        assert return_usage is True
+        return ModelCallResult(
+            output=generated,
+            usage=ModelUsage(input_tokens=11, output_tokens=22, total_tokens=33),
+        )
+
+    async def fake_narrator_response(self, **kwargs):  # noqa: ANN001, ANN202
+        message = kwargs["message"]
+        return "Metered Starter Campaign" if "campaign title" in message else "Opening scene."
+
+    monkeypatch.setattr(
+        orchestrator_module.orchestrator.starter_ability_generator,
+        "generate",
+        fake_starter_generate,
+    )
+    monkeypatch.setattr(
+        orchestrator_module.ChatOrchestrator,
+        "_generate_narrator_response",
+        fake_narrator_response,
+    )
+
+    response = asyncio.run(
+        orchestrator_module.orchestrator.create_campaign(
+            CampaignCreateRequest(),
+            owner_user_id=_resolved_internal_user_id(
+                TestClient(app), "provider-starter-metered"
+            ),
+        )
+    )
+
+    with session() as db:
+        row = db.conn.execute(
+            text(
+                "SELECT agent_name, success, actual_input_tokens, actual_output_tokens, "
+                "actual_total_tokens FROM model_requests WHERE campaign_id = :campaign_id "
+                "AND agent_name = :agent_name"
+            ),
+            {
+                "campaign_id": response.campaign_id,
+                "agent_name": "StarterAbilityGenerator",
+            },
+        ).mappings().one()
+
+    assert bool(row["success"]) is True
+    assert row["actual_input_tokens"] == 11
+    assert row["actual_output_tokens"] == 22
+    assert row["actual_total_tokens"] == 33
+
+
+def test_provider_backed_starter_generation_respects_project_request_limit(monkeypatch) -> None:
+    settings.AI_ENABLED = True
+    settings.OPENAI_API_KEY = "test-key"
+    original_limit = settings.MAX_DAILY_PROJECT_REQUESTS
+    settings.MAX_DAILY_PROJECT_REQUESTS = 0
+
+    async def fail_if_called(*args, **kwargs):  # noqa: ANN002, ANN003, ANN202
+        raise AssertionError("starter provider must not be called after project limit rejection")
+
+    monkeypatch.setattr(
+        orchestrator_module.orchestrator.starter_ability_generator,
+        "generate",
+        fail_if_called,
+    )
+
+    try:
+        with pytest.raises(HTTPException, match="Daily project request limit reached"):
+            asyncio.run(
+                orchestrator_module.orchestrator.create_campaign(
+                    CampaignCreateRequest(),
+                    owner_user_id=_resolved_internal_user_id(
+                        TestClient(app), "provider-starter-project-limit"
+                    ),
+                )
+            )
+    finally:
+        settings.MAX_DAILY_PROJECT_REQUESTS = original_limit
 
 
 def test_ai_disabled_still_runs_parser_and_tools() -> None:
