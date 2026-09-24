@@ -1481,6 +1481,78 @@ def test_provider_backed_starter_generation_semantic_failure_is_logged_and_rolls
     assert "ids must be distinct" in row["failure_reason"]
 
 
+def test_auto_created_chat_starter_failure_keeps_audit_without_chat_side_effects(
+    monkeypatch,
+) -> None:
+    settings.AI_ENABLED = True
+    settings.OPENAI_API_KEY = "test-key"
+    generated = orchestrator_module.orchestrator.starter_ability_generator._stub_generation()
+    invalid_generation = generated.model_copy(
+        update={
+            "abilities": (
+                generated.abilities[0].model_copy(update={"minimum_points": 1}),
+                generated.abilities[1],
+            )
+        }
+    )
+    owner_user_id = _resolved_internal_user_id(
+        TestClient(app), "auto-created-starter-failure"
+    )
+
+    async def fake_starter_generate(*, provider_model_enabled, return_usage=False):  # noqa: ANN202
+        assert provider_model_enabled is True
+        assert return_usage is True
+        return ModelCallResult(
+            output=invalid_generation,
+            usage=ModelUsage(input_tokens=11, output_tokens=22, total_tokens=33),
+        )
+
+    monkeypatch.setattr(
+        orchestrator_module.orchestrator.starter_ability_generator,
+        "generate",
+        fake_starter_generate,
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(
+            orchestrator_module.orchestrator.handle_chat(
+                ChatRequest(message="look around"),
+                owner_user_id=owner_user_id,
+            )
+        )
+
+    assert exc_info.value.status_code == 502
+    with session() as db:
+        assert db.conn.execute(
+            text("SELECT COUNT(*) FROM campaigns WHERE owner_user_id = :owner_user_id"),
+            {"owner_user_id": owner_user_id},
+        ).scalar_one() == 0
+        assert db.conn.execute(
+            text(
+                "SELECT COUNT(*) FROM turns WHERE campaign_id IN "
+                "(SELECT campaign_id FROM campaigns WHERE owner_user_id = :owner_user_id)"
+            ),
+            {"owner_user_id": owner_user_id},
+        ).scalar_one() == 0
+        assert db.conn.execute(
+            text(
+                "SELECT COUNT(*) FROM game_events WHERE campaign_id IN "
+                "(SELECT campaign_id FROM campaigns WHERE owner_user_id = :owner_user_id)"
+            ),
+            {"owner_user_id": owner_user_id},
+        ).scalar_one() == 0
+        row = db.conn.execute(
+            text(
+                "SELECT success, failure_reason FROM model_requests "
+                "WHERE owner_user_id = :owner_user_id "
+                "AND agent_name = 'StarterAbilityGenerator'"
+            ),
+            {"owner_user_id": owner_user_id},
+        ).mappings().one()
+    assert bool(row["success"]) is False
+    assert "baseline" in row["failure_reason"]
+
+
 def test_auto_created_chat_rechecks_parser_budget_after_starter_generation(monkeypatch) -> None:
     settings.AI_ENABLED = True
     settings.OPENAI_API_KEY = "test-key"

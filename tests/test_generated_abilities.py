@@ -65,6 +65,10 @@ def test_invalid_generated_content_and_built_in_collision_are_rejected() -> None
     with pytest.raises(ValueError, match="bypass"):
         validate_starter_ability_definitions((unsupported, generation.abilities[1]))
 
+    unavailable = generation.abilities[0].model_copy(update={"minimum_points": 1})
+    with pytest.raises(ValueError, match="baseline"):
+        validate_starter_ability_definitions((unavailable, generation.abilities[1]))
+
 
 def test_generated_mechanic_collections_have_bounded_distinct_values() -> None:
     generation = StarterAbilityGenerator()._stub_generation()

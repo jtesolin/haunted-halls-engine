@@ -117,6 +117,8 @@ def validate_starter_ability_definitions(
     kinds: set[GeneratedAbilityKind] = set()
     for definition in definitions:
         validate_generated_ability_definition(definition)
+        if definition.minimum_points != 0:
+            raise ValueError("Generated starter abilities must be available at baseline.")
         if definition.ability_id in seen_ids:
             raise ValueError("Generated starter ability ids must be distinct.")
         normalized_name = definition.display_name.strip().casefold()

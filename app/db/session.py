@@ -75,9 +75,11 @@ def session() -> Iterator[Repository]:
     transaction = conn.begin()
     try:
         yield Repository(conn)
-        transaction.commit()
+        if transaction.is_active:
+            transaction.commit()
     except Exception:
-        transaction.rollback()
+        if transaction.is_active:
+            transaction.rollback()
         raise
     finally:
         conn.close()

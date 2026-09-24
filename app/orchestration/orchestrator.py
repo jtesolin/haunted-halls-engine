@@ -346,48 +346,19 @@ class ChatOrchestrator:
 
             validate_daily_request_limit(db, owner_user_id)
 
-            if idempotency_key is not None:
-                claim = db.claim_chat_request_idempotency(
-                    owner_user_id=owner_user_id,
-                    idempotency_key=idempotency_key,
-                    request_fingerprint=request_fingerprint,
-                    requested_campaign_id=request.campaign_id,
-                    requested_character_id=request.character_id,
-                )
-                if claim.row is None:
-                    raise HTTPException(
-                        status_code=503,
-                        detail="Idempotent request could not be claimed; retry.",
-                    )
-                if claim.row["request_fingerprint"] != request_fingerprint:
-                    raise HTTPException(
-                        status_code=409,
-                        detail="Idempotency-Key was already used for a different request.",
-                    )
-                if claim.row["status"] == "completed":
-                    return ChatResponse(
-                        reply=claim.row["reply"],
-                        campaign_id=claim.row["resolved_campaign_id"],
-                        turn_id=claim.row["turn_id"],
-                    )
-                if not claim.acquired:
-                    # Another transaction owns this in-progress claim. Only the
-                    # transaction that actually inserted the row may execute;
-                    # everyone else must retry rather than proceed.
-                    raise HTTPException(
-                        status_code=503,
-                        detail="Idempotent request is already in progress; retry.",
-                    )
-
             initial_state = None
             if request.campaign_id is None:
-                initial_state = await self._build_initial_campaign_state(
-                    db=db,
-                    owner_user_id=owner_user_id,
-                    campaign_id=campaign_id,
-                    turn_id=player_turn_id,
-                    provider_model_enabled=provider_model_enabled,
-                )
+                try:
+                    initial_state = await self._build_initial_campaign_state(
+                        db=db,
+                        owner_user_id=owner_user_id,
+                        campaign_id=campaign_id,
+                        turn_id=player_turn_id,
+                        provider_model_enabled=provider_model_enabled,
+                    )
+                except HTTPException:
+                    db.conn.commit()
+                    raise
                 campaign_state = json.dumps(initial_state)
                 memory_context = memory_service.load_memory_context(
                     owner_user_id=owner_user_id,
@@ -396,6 +367,17 @@ class ChatOrchestrator:
                     campaign_state=campaign_state,
                     recent_turns=recent_turns,
                 )
+
+            if idempotency_key is not None:
+                replay = self._claim_chat_request(
+                    db,
+                    owner_user_id=owner_user_id,
+                    idempotency_key=idempotency_key,
+                    request_fingerprint=request_fingerprint,
+                    request=request,
+                )
+                if replay is not None:
+                    return replay
 
             parser_estimated_input_tokens = 0
             if parser_model_enabled:
@@ -1037,6 +1019,45 @@ class ChatOrchestrator:
             separators=(",", ":"),
         ).encode("utf-8")
         return hashlib.sha256(canonical_request).hexdigest()
+
+    def _claim_chat_request(
+        self,
+        db,
+        *,
+        owner_user_id: str,
+        idempotency_key: str,
+        request_fingerprint: str,
+        request: ChatRequest,
+    ) -> ChatResponse | None:
+        claim = db.claim_chat_request_idempotency(
+            owner_user_id=owner_user_id,
+            idempotency_key=idempotency_key,
+            request_fingerprint=request_fingerprint,
+            requested_campaign_id=request.campaign_id,
+            requested_character_id=request.character_id,
+        )
+        if claim.row is None:
+            raise HTTPException(
+                status_code=503,
+                detail="Idempotent request could not be claimed; retry.",
+            )
+        if claim.row["request_fingerprint"] != request_fingerprint:
+            raise HTTPException(
+                status_code=409,
+                detail="Idempotency-Key was already used for a different request.",
+            )
+        if claim.row["status"] == "completed":
+            return ChatResponse(
+                reply=claim.row["reply"],
+                campaign_id=claim.row["resolved_campaign_id"],
+                turn_id=claim.row["turn_id"],
+            )
+        if not claim.acquired:
+            raise HTTPException(
+                status_code=503,
+                detail="Idempotent request is already in progress; retry.",
+            )
+        return None
 
     def _build_campaign_opening_request(self) -> str:
         return (

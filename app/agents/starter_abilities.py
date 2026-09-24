@@ -33,7 +33,8 @@ class StarterAbilityGenerator(BaseAgent):
                 "content": (
                     "Generate exactly two modest non-combat Haunted Halls starter abilities. "
                     "Return only the schema. Include one sensory ability using sense/surroundings "
-                    "and one utility ability using minor_utility/object. Use range 0 or 1, no "
+                    "and one utility ability using minor_utility/object. Set minimum_points to 0 "
+                    "so both abilities are available immediately. Use range 0 or 1, no "
                     "bypasses, and only nearby or line_of_sight requirements. Do not use keen_eye "
                     "or any existing built-in ability id or display name."
                 ),
