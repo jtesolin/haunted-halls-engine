@@ -1347,6 +1347,11 @@ def test_provider_backed_starter_generation_is_logged_without_live_model(monkeyp
         "_generate_narrator_response",
         fake_narrator_response,
     )
+    monkeypatch.setattr(
+        orchestrator_module.orchestrator.director_agent,
+        "propose",
+        _fake_no_action_director_propose,
+    )
 
     response = asyncio.run(
         orchestrator_module.orchestrator.create_campaign(
@@ -1462,8 +1467,10 @@ def test_provider_backed_starter_generation_semantic_failure_is_logged_and_rolls
         ).scalar_one()
         row = db.conn.execute(
             text(
-                "SELECT success, actual_input_tokens, actual_output_tokens, "
-                "actual_total_tokens, failure_reason FROM model_requests "
+                "SELECT success, actual_input_tokens, cached_input_tokens, "
+                "cache_write_input_tokens, actual_output_tokens, "
+                "reasoning_output_tokens, actual_total_tokens, failure_reason "
+                "FROM model_requests "
                 "WHERE owner_user_id = :owner_user_id "
                 "AND agent_name = :agent_name"
             ),
@@ -1475,9 +1482,12 @@ def test_provider_backed_starter_generation_semantic_failure_is_logged_and_rolls
 
     assert campaign_count == 0
     assert bool(row["success"]) is False
-    assert row["actual_input_tokens"] is None
-    assert row["actual_output_tokens"] is None
-    assert row["actual_total_tokens"] is None
+    assert row["actual_input_tokens"] == 11
+    assert row["cached_input_tokens"] is None
+    assert row["cache_write_input_tokens"] is None
+    assert row["actual_output_tokens"] == 22
+    assert row["reasoning_output_tokens"] is None
+    assert row["actual_total_tokens"] == 33
     assert "ids must be distinct" in row["failure_reason"]
 
 
@@ -1498,6 +1508,7 @@ def test_auto_created_chat_starter_failure_keeps_audit_without_chat_side_effects
     owner_user_id = _resolved_internal_user_id(
         TestClient(app), "auto-created-starter-failure"
     )
+    idempotency_key = str(uuid4())
 
     async def fake_starter_generate(*, provider_model_enabled, return_usage=False):  # noqa: ANN202
         assert provider_model_enabled is True
@@ -1518,6 +1529,7 @@ def test_auto_created_chat_starter_failure_keeps_audit_without_chat_side_effects
             orchestrator_module.orchestrator.handle_chat(
                 ChatRequest(message="look around"),
                 owner_user_id=owner_user_id,
+                idempotency_key=idempotency_key,
             )
         )
 
@@ -1543,14 +1555,98 @@ def test_auto_created_chat_starter_failure_keeps_audit_without_chat_side_effects
         ).scalar_one() == 0
         row = db.conn.execute(
             text(
-                "SELECT success, failure_reason FROM model_requests "
+                "SELECT success, actual_input_tokens, cached_input_tokens, "
+                "cache_write_input_tokens, actual_output_tokens, "
+                "reasoning_output_tokens, actual_total_tokens, failure_reason "
+                "FROM model_requests "
                 "WHERE owner_user_id = :owner_user_id "
                 "AND agent_name = 'StarterAbilityGenerator'"
             ),
             {"owner_user_id": owner_user_id},
         ).mappings().one()
+        assert db.get_chat_request_idempotency(owner_user_id, idempotency_key) is None
     assert bool(row["success"]) is False
+    assert row["actual_input_tokens"] == 11
+    assert row["cached_input_tokens"] is None
+    assert row["cache_write_input_tokens"] is None
+    assert row["actual_output_tokens"] == 22
+    assert row["reasoning_output_tokens"] is None
+    assert row["actual_total_tokens"] == 33
     assert "baseline" in row["failure_reason"]
+
+
+def test_auto_created_chat_idempotency_claim_prevents_duplicate_starter_generation(
+    monkeypatch,
+) -> None:
+    settings.AI_ENABLED = True
+    settings.OPENAI_API_KEY = "test-key"
+    generated = orchestrator_module.orchestrator.starter_ability_generator._stub_generation()
+    owner_user_id = _resolved_internal_user_id(
+        TestClient(app), "auto-created-idempotency-starter-claim"
+    )
+    idempotency_key = str(uuid4())
+    starter_calls = 0
+
+    async def fake_starter_generate(*, provider_model_enabled, return_usage=False):  # noqa: ANN202
+        nonlocal starter_calls
+        assert provider_model_enabled is True
+        assert return_usage is True
+        starter_calls += 1
+        await asyncio.sleep(0)
+        return ModelCallResult(output=generated, usage=None)
+
+    async def fake_parse(**kwargs):  # noqa: ANN003, ANN202
+        return ParsedAction(
+            raw_text=kwargs["message"],
+            action=ActionType.OBSERVE,
+            parameters={},
+            confidence=1,
+            parse_status="ok",
+        )
+
+    async def fake_narrator_response(self, **kwargs):  # noqa: ANN001, ANN202
+        return "The corridor waits."
+
+    monkeypatch.setattr(
+        orchestrator_module.orchestrator.starter_ability_generator,
+        "generate",
+        fake_starter_generate,
+    )
+    monkeypatch.setattr(
+        orchestrator_module.orchestrator.action_parser_agent,
+        "parse",
+        fake_parse,
+    )
+    monkeypatch.setattr(
+        orchestrator_module.ChatOrchestrator,
+        "_generate_narrator_response",
+        fake_narrator_response,
+    )
+    monkeypatch.setattr(
+        orchestrator_module.orchestrator.director_agent,
+        "propose",
+        _fake_no_action_director_propose,
+    )
+
+    async def run_concurrent_requests() -> tuple[object, object]:
+        return await asyncio.gather(
+            orchestrator_module.orchestrator.handle_chat(
+                ChatRequest(message="look around"),
+                owner_user_id=owner_user_id,
+                idempotency_key=idempotency_key,
+            ),
+            orchestrator_module.orchestrator.handle_chat(
+                ChatRequest(message="look around"),
+                owner_user_id=owner_user_id,
+                idempotency_key=idempotency_key,
+            ),
+            return_exceptions=True,
+        )
+
+    results = asyncio.run(run_concurrent_requests())
+
+    assert starter_calls == 1
+    assert sum(isinstance(result, HTTPException) and result.status_code == 503 for result in results) == 1
 
 
 def test_auto_created_chat_rechecks_parser_budget_after_starter_generation(monkeypatch) -> None:

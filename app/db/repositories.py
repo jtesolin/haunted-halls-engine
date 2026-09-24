@@ -157,6 +157,25 @@ class Repository:
                 "chat request idempotency claim was not owned in_progress at completion time"
             )
 
+    def release_chat_request_idempotency(
+        self,
+        *,
+        owner_user_id: str,
+        idempotency_key: str,
+        request_fingerprint: str,
+    ) -> None:
+        """Release an owned claim when execution fails before completion."""
+        self.conn.execute(
+            delete(chat_request_idempotency).where(
+                and_(
+                    chat_request_idempotency.c.owner_user_id == owner_user_id,
+                    chat_request_idempotency.c.idempotency_key == idempotency_key,
+                    chat_request_idempotency.c.request_fingerprint == request_fingerprint,
+                    chat_request_idempotency.c.status == "in_progress",
+                )
+            )
+        )
+
     def _row_to_internal_user(self, row) -> InternalUserDBModel:
         return InternalUserDBModel(
             id=row["user_id"],

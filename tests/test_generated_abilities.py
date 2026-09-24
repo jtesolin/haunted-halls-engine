@@ -203,6 +203,7 @@ def test_resolved_failed_ability_check_keeps_outer_success_false(monkeypatch) ->
 
     assert tool_result.success is False
     assert tool_result.applied_tools == ["resolve_ability_check"]
+    assert tool_result.summary == "Keen Eye check failed."
     assert tool_result.ability_result is not None
     assert tool_result.ability_result.status == AbilityGameplayStatus.RESOLVED
     assert tool_result.ability_result.check_result is not None

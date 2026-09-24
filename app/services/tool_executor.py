@@ -119,7 +119,11 @@ class ToolExecutor:
                     if resolved
                     else [],
                     summary=(
-                        f"Resolved {ability_result.display_name}."
+                        (
+                            f"{ability_result.display_name} check succeeded."
+                            if succeeded
+                            else f"{ability_result.display_name} check failed."
+                        )
                         if resolved
                         else ability_result.reason or "Ability check could not be resolved."
                     ),

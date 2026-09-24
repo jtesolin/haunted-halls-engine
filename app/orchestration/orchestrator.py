@@ -299,6 +299,17 @@ class ChatOrchestrator:
             validate_chat_request(db, request, owner_user_id)
             validate_campaign_turn_limit(db, owner_user_id, campaign_id)
 
+            if idempotency_key is not None:
+                replay = self._claim_chat_request(
+                    db,
+                    owner_user_id=owner_user_id,
+                    idempotency_key=idempotency_key,
+                    request_fingerprint=request_fingerprint,
+                    request=request,
+                )
+                if replay is not None:
+                    return replay
+
             has_openai_key = bool((settings.OPENAI_API_KEY or "").strip())
             provider_model_enabled = has_openai_key
             ai_enabled = settings.AI_ENABLED or provider_model_enabled
@@ -357,6 +368,12 @@ class ChatOrchestrator:
                         provider_model_enabled=provider_model_enabled,
                     )
                 except HTTPException:
+                    if idempotency_key is not None:
+                        db.release_chat_request_idempotency(
+                            owner_user_id=owner_user_id,
+                            idempotency_key=idempotency_key,
+                            request_fingerprint=request_fingerprint,
+                        )
                     db.conn.commit()
                     raise
                 campaign_state = json.dumps(initial_state)
@@ -367,17 +384,6 @@ class ChatOrchestrator:
                     campaign_state=campaign_state,
                     recent_turns=recent_turns,
                 )
-
-            if idempotency_key is not None:
-                replay = self._claim_chat_request(
-                    db,
-                    owner_user_id=owner_user_id,
-                    idempotency_key=idempotency_key,
-                    request_fingerprint=request_fingerprint,
-                    request=request,
-                )
-                if replay is not None:
-                    return replay
 
             parser_estimated_input_tokens = 0
             if parser_model_enabled:
@@ -1131,6 +1137,7 @@ class ChatOrchestrator:
         )
 
         start_time = time.perf_counter()
+        usage = None
         try:
             generated = await self.starter_ability_generator.generate(
                 provider_model_enabled=True,
@@ -1138,10 +1145,10 @@ class ChatOrchestrator:
             )
             if not isinstance(generated, ModelCallResult) or generated.output is None:
                 raise ValueError("Starter ability generator did not return valid structured output.")
+            usage = generated.usage
             starter_abilities = validate_starter_ability_definitions(
                 generated.output.abilities
             )
-            usage = generated.usage
             latency_ms = int((time.perf_counter() - start_time) * 1000)
             db.log_model_request(
                 request_id=f"req_{uuid4().hex}",
@@ -1184,8 +1191,12 @@ class ChatOrchestrator:
                 model=model,
                 estimated_input_tokens=estimated_input_tokens,
                 estimated_output_tokens=TokenBudget.starter_ability_max_output_tokens(),
-                actual_input_tokens=None,
-                actual_output_tokens=None,
+                actual_input_tokens=usage.input_tokens if usage else None,
+                cached_input_tokens=usage.cached_input_tokens if usage else None,
+                cache_write_input_tokens=usage.cache_write_input_tokens if usage else None,
+                actual_output_tokens=usage.output_tokens if usage else None,
+                reasoning_output_tokens=usage.reasoning_output_tokens if usage else None,
+                actual_total_tokens=usage.total_tokens if usage else None,
                 latency_ms=latency_ms,
                 success=False,
                 failure_reason=str(exc),
