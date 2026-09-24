@@ -66,16 +66,19 @@ Stable cross-repository authority and security invariants belong in
   Whisper quest grants +2 investigation and unlocks `keen_eye`; a persistent
   campaign-state claim prevents duplicate grants, and only a narrow
   authoritative effect is exposed to the Narrator.
+- **Phase 8F2:** New campaigns receive two validated AI-generated, persisted
+  starter abilities, represented with a bounded engine-owned mechanical
+  vocabulary. `keen_eye` is the first player-invokable deterministic gameplay
+  check, with an authored Library inspection at difficulty 2.
 
 ## Current Phase 8 status
 
-**8F1 is implemented. The next intended slice is 8F2 — Ability / Check
-Gameplay Integration.**
+**8F2 is implemented. The next intended slice generalizes deterministic
+execution of validated generated-ability mechanics.**
 
-8F2 will connect existing deterministic ability/check resolution to gameplay
-interactions. It is not part of 8F1: abilities are not parser actions, the
-Director cannot grant or invoke them, and models do not choose rewards or
-progression.
+The future character-details frontend may expose owned built-in/generated
+abilities alongside inventory and player-facing mechanical summaries. It
+remains out of scope for this engine slice.
 
 ## Stable invariants and explicit deferrals
 
@@ -91,6 +94,9 @@ progression.
   generic reward/achievement/rules DSLs, combat progression, levels/classes,
   model-selected rewards, frontend progression UI, and broad evaluation
   expansion remain deferred.
+- General deterministic execution of generated ability mechanics remains the
+  next Phase 8 slice; generated starter definitions are persisted now but
+  unsupported mechanics never receive model-adjudicated effects.
 
 See [architecture.md](architecture.md) for durable architecture decisions and
 the repository instructions for implementation boundaries.

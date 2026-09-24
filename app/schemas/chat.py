@@ -2,6 +2,7 @@ from enum import StrEnum
 from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
+from app.schemas.generated_abilities import AbilityGameplayResult
 
 
 class ChatRequest(BaseModel):
@@ -41,6 +42,7 @@ class ActionType(StrEnum):
     ATTACK = "attack"
     WAIT = "wait"
     INTERACT = "interact"
+    ABILITY_CHECK = "ability_check"
     UNKNOWN = "unknown"
 
 
@@ -55,6 +57,7 @@ class ActionParserParameters(BaseModel):
     duration: Optional[str] = None
     with_item: Optional[str] = None
     interaction_mode: Optional[str] = None
+    ability_id: Optional[str] = None
 
 
 class ActionParserOutput(BaseModel):
@@ -148,3 +151,4 @@ class ToolExecutionResult(BaseModel):
     npc_name: str | None = None
     npc_status: str | None = None
     npc_disposition: str | None = None
+    ability_result: AbilityGameplayResult | None = None

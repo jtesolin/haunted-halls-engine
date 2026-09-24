@@ -11,6 +11,7 @@ from uuid import uuid4
 from fastapi import HTTPException
 
 from app.agents.action_parser import ActionParseProviderError, ActionParserAgent
+from app.agents.starter_abilities import StarterAbilityGenerator
 from app.agents.director import (
     DirectorAgent,
     DirectorProposalOutputError,
@@ -31,6 +32,8 @@ from app.game.campaign_state import (
     load_authoritative_campaign_state,
     validate_persisted_campaign_state_json,
 )
+from app.game.abilities import validate_starter_ability_definitions
+from app.game.character_progression import ensure_character_progression_state, unlock_ability
 from app.game.narrator_scene import build_narrator_scene_context
 from app.game.narrative import NARRATIVE_CLUES
 from app.game.progression_rewards import (
@@ -126,6 +129,7 @@ class ChatOrchestrator:
         self.tool_executor = ToolExecutor()
         self.director_agent = DirectorAgent()
         self.world_authority_executor = WorldAuthorityExecutor()
+        self.starter_ability_generator = StarterAbilityGenerator()
 
     async def create_campaign(
         self, _request: CampaignCreateRequest, owner_user_id: str
@@ -138,13 +142,24 @@ class ChatOrchestrator:
         with session() as db:
             self._validate_campaign_creation(db, owner_user_id)
 
-            initial_state = build_fresh_campaign_state()
-            initial_state_json = json.dumps(initial_state)
-            scene_context = build_narrator_scene_context(initial_state_json)
-
             has_openai_key = bool((settings.OPENAI_API_KEY or "").strip())
             provider_model_enabled = has_openai_key
             ai_enabled = settings.AI_ENABLED or provider_model_enabled
+            generated_abilities = await self.starter_ability_generator.generate(
+                provider_model_enabled=provider_model_enabled
+            )
+            starter_abilities = validate_starter_ability_definitions(generated_abilities.abilities)
+            initial_state = build_fresh_campaign_state()
+            ensure_character_progression_state(initial_state)
+            initial_state["player"]["generated_abilities"] = [
+                ability.model_dump(mode="json") for ability in starter_abilities
+            ]
+            for ability in starter_abilities:
+                unlock_result = unlock_ability(initial_state, ability.ability_id)
+                if not unlock_result.success:
+                    raise ValueError("Starter ability ownership could not be initialized.")
+            initial_state_json = json.dumps(initial_state)
+            scene_context = build_narrator_scene_context(initial_state_json)
             if not ai_enabled:
                 opening_prompt = self._stub_campaign_opening(scene_context)
                 campaign_name = self._stub_campaign_title()

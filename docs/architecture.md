@@ -104,3 +104,14 @@ Authored character-progression rewards are deterministic static content triggere
 only by authoritative story outcomes. Persistent campaign-state reward claims
 prevent duplicate grants; models may observe and narrate an earned reward but
 never select or grant progression or abilities.
+
+At campaign creation, AI may propose structured campaign-specific starter
+abilities, but the engine validates them against its bounded mechanical
+vocabulary before persisting their definitions and ownership. Those persisted,
+validated definitions are authoritative; their vocabulary and execution
+semantics remain engine-owned. The Action Parser may identify an explicit
+player ability request but cannot choose mechanics, difficulty, or outcome.
+Player ability checks execute through the player ToolExecutor, never through
+the Director or WorldAuthorityExecutor. The Narrator receives only the
+authoritative ability definition/result projection and cannot invent an
+unexecuted generated-ability effect.

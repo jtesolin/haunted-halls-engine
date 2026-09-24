@@ -16,6 +16,15 @@ from app.schemas.abilities import (
     AbilityCheckResult,
 )
 from app.schemas.character_progression import ProgressionTrackId
+from app.schemas.generated_abilities import (
+    AbilityGameplayResult,
+    AbilityGameplayStatus,
+    AbilityDetail,
+    AbilityDomain,
+    AbilityEffect,
+    GeneratedAbilityDefinition,
+    GeneratedAbilityKind,
+)
 
 MIN_CHECK_DIFFICULTY = MIN_TRACK_POINTS
 MAX_CHECK_DIFFICULTY = MAX_TRACK_POINTS
@@ -30,6 +39,72 @@ class AbilityDefinition:
     short_description: str
     track: ProgressionTrackId
     minimum_points: int
+
+
+def generated_ability_definitions(state: dict[str, Any]) -> tuple[GeneratedAbilityDefinition, ...]:
+    """Read persisted generated definitions without repairing legacy state.
+
+    The missing field is the compatible legacy-campaign representation. Any
+    present field must be a complete validated starter set, rather than being
+    partially ignored or repaired during a later lookup.
+    """
+    player = state.get("player")
+    raw_definitions = player.get("generated_abilities") if isinstance(player, dict) else None
+    if raw_definitions is None:
+        return ()
+    if not isinstance(raw_definitions, list):
+        raise ValueError("Persisted generated ability definitions must be a list.")
+    definitions: list[GeneratedAbilityDefinition] = []
+    for raw_definition in raw_definitions:
+        try:
+            definition = GeneratedAbilityDefinition.model_validate(raw_definition)
+            validate_generated_ability_definition(definition)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Persisted generated ability definition is invalid.") from exc
+        definitions.append(definition)
+    return validate_starter_ability_definitions(definitions)
+
+
+def validate_generated_ability_definition(definition: GeneratedAbilityDefinition) -> None:
+    """Validate generated content against the small engine-owned vocabulary."""
+    if definition.ability_id in ABILITY_REGISTRY:
+        raise ValueError(f"Generated ability id '{definition.ability_id}' collides with a built-in ability.")
+    if definition.kind == GeneratedAbilityKind.SENSORY:
+        if definition.mechanics.effect != AbilityEffect.SENSE or definition.mechanics.domain != AbilityDomain.SURROUNDINGS:
+            raise ValueError("Sensory abilities must use the surroundings sense mechanic.")
+    elif definition.kind == GeneratedAbilityKind.UTILITY:
+        if definition.mechanics.effect != AbilityEffect.MINOR_UTILITY or definition.mechanics.domain != AbilityDomain.OBJECT:
+            raise ValueError("Utility abilities must use the object minor-utility mechanic.")
+    if definition.mechanics.detail not in {AbilityDetail.LIMITED, AbilityDetail.PRACTICAL}:
+        raise ValueError("Generated ability detail is not supported.")
+    if any(requirement not in {"line_of_sight", "nearby"} for requirement in definition.mechanics.requires):
+        raise ValueError("Generated ability uses an unsupported requirement.")
+    if definition.mechanics.bypasses:
+        raise ValueError("Generated starter abilities may not bypass core gameplay constraints.")
+
+
+def validate_starter_ability_definitions(
+    definitions: Sequence[GeneratedAbilityDefinition],
+) -> tuple[GeneratedAbilityDefinition, GeneratedAbilityDefinition]:
+    """Validate the exactly-two modest starter set before it reaches state."""
+    if len(definitions) != 2:
+        raise ValueError("Exactly two generated starter abilities are required.")
+    seen_ids: set[str] = set()
+    seen_names: set[str] = set()
+    kinds: set[GeneratedAbilityKind] = set()
+    for definition in definitions:
+        validate_generated_ability_definition(definition)
+        if definition.ability_id in seen_ids:
+            raise ValueError("Generated starter ability ids must be distinct.")
+        normalized_name = definition.display_name.casefold()
+        if normalized_name in seen_names:
+            raise ValueError("Generated starter ability names must be distinct.")
+        seen_ids.add(definition.ability_id)
+        seen_names.add(normalized_name)
+        kinds.add(definition.kind)
+    if kinds != {GeneratedAbilityKind.SENSORY, GeneratedAbilityKind.UTILITY}:
+        raise ValueError("Starter abilities require one sensory and one utility definition.")
+    return (definitions[0], definitions[1])
 
 
 CANONICAL_ABILITY_DEFINITIONS: tuple[AbilityDefinition, ...] = (
@@ -114,12 +189,31 @@ def get_ability_definition(ability_id: str) -> AbilityDefinition | None:
     return ABILITY_REGISTRY.get(ability_id)
 
 
+def _generated_definition_by_id(
+    state: dict[str, Any], ability_id: str
+) -> GeneratedAbilityDefinition | None:
+    return next(
+        (definition for definition in generated_ability_definitions(state) if definition.ability_id == ability_id),
+        None,
+    )
+
+
 def evaluate_ability_availability(
     state: dict[str, Any], ability_id: str
 ) -> AbilityAvailabilityResult:
     """Evaluate ability availability from normalized progression without mutation."""
     definition = get_ability_definition(ability_id)
-    if definition is None:
+    generated_definition = _generated_definition_by_id(state, ability_id)
+    if generated_definition is not None:
+        track_id = generated_definition.track
+        minimum_points = generated_definition.minimum_points
+    elif definition is not None:
+        track_id = definition.track
+        minimum_points = definition.minimum_points
+    else:
+        track_id = None
+        minimum_points = None
+    if track_id is None or minimum_points is None:
         return AbilityAvailabilityResult(
             ability_id=ability_id,
             available=False,
@@ -133,7 +227,6 @@ def evaluate_ability_availability(
         )
 
     progression = read_character_progression_state(state)
-    track_id = definition.track
     track_points = progression["tracks"][track_id.value]
     owned = ability_id in progression["unlocked_abilities"]
 
@@ -144,25 +237,25 @@ def evaluate_ability_availability(
             owned=False,
             track_id=track_id,
             track_points=track_points,
-            minimum_points=definition.minimum_points,
+            minimum_points=minimum_points,
             status=AbilityAvailabilityStatus.LOCKED,
             error_code="not_owned",
             reason=f"Ability '{ability_id}' is not unlocked for the player.",
         )
 
-    if track_points < definition.minimum_points:
+    if track_points < minimum_points:
         return AbilityAvailabilityResult(
             ability_id=ability_id,
             available=False,
             owned=True,
             track_id=track_id,
             track_points=track_points,
-            minimum_points=definition.minimum_points,
+            minimum_points=minimum_points,
             status=AbilityAvailabilityStatus.INSUFFICIENT_PROGRESSION,
             error_code="insufficient_progression",
             reason=(
                 f"Ability '{ability_id}' requires {track_id.value} at least "
-                f"{definition.minimum_points} points, but the player has {track_points}."
+                f"{minimum_points} points, but the player has {track_points}."
             ),
         )
 
@@ -172,7 +265,7 @@ def evaluate_ability_availability(
         owned=True,
         track_id=track_id,
         track_points=track_points,
-        minimum_points=definition.minimum_points,
+        minimum_points=minimum_points,
         status=AbilityAvailabilityStatus.AVAILABLE,
         error_code=None,
         reason=None,
@@ -199,6 +292,7 @@ def resolve_ability_check(
                 f"{MAX_CHECK_DIFFICULTY}."
             ),
         )
+
     if difficulty < MIN_CHECK_DIFFICULTY or difficulty > MAX_CHECK_DIFFICULTY:
         return AbilityCheckResult(
             ability_id=ability_id,
@@ -291,6 +385,72 @@ def resolve_ability_check(
     )
 
 
+def resolve_gameplay_ability_check(
+    state: dict[str, Any], ability_id: str
+) -> AbilityGameplayResult:
+    """Resolve the small authored player-check vocabulary for the current state."""
+    built_in = get_ability_definition(ability_id)
+    generated = _generated_definition_by_id(state, ability_id)
+    if built_in is None and generated is None:
+        return AbilityGameplayResult(
+            ability_id=ability_id,
+            status=AbilityGameplayStatus.UNKNOWN_ABILITY,
+            error_code="unknown_ability",
+            reason="The requested ability is not known for this campaign.",
+        )
+
+    if built_in is not None:
+        display_name = built_in.display_name
+        description = built_in.short_description
+    else:
+        assert generated is not None
+        display_name = generated.display_name
+        description = generated.description
+    availability = evaluate_ability_availability(state, ability_id)
+    if not availability.available:
+        return AbilityGameplayResult(
+            ability_id=ability_id,
+            display_name=display_name,
+            description=description,
+            available=False,
+            status=AbilityGameplayStatus.UNAVAILABLE,
+            error_code=availability.error_code,
+            reason=availability.reason,
+        )
+    if generated is not None:
+        return AbilityGameplayResult(
+            ability_id=ability_id,
+            display_name=display_name,
+            description=description,
+            available=True,
+            status=AbilityGameplayStatus.UNSUPPORTED,
+            error_code="unsupported_generated_mechanic",
+            reason="This generated ability has no deterministic gameplay rule yet.",
+        )
+    player = state.get("player")
+    location = player.get("location") if isinstance(player, dict) else None
+    if ability_id != "keen_eye" or location != "library":
+        return AbilityGameplayResult(
+            ability_id=ability_id,
+            display_name=display_name,
+            description=description,
+            available=True,
+            status=AbilityGameplayStatus.INELIGIBLE_CONTEXT,
+            error_code="no_authored_check_for_context",
+            reason="No authored gameplay check applies to this ability in the current context.",
+        )
+    check_result = resolve_ability_check(state, ability_id, difficulty=2)
+    return AbilityGameplayResult(
+        ability_id=ability_id,
+        display_name=display_name,
+        description=description,
+        available=True,
+        status=AbilityGameplayStatus.RESOLVED,
+        check_id="keen_eye_library_inspection",
+        check_result=check_result,
+    )
+
+
 __all__ = [
     "AbilityDefinition",
     "CANONICAL_ABILITY_DEFINITIONS",
@@ -302,4 +462,8 @@ __all__ = [
     "validate_ability_definitions",
     "evaluate_ability_availability",
     "resolve_ability_check",
+    "generated_ability_definitions",
+    "validate_generated_ability_definition",
+    "validate_starter_ability_definitions",
+    "resolve_gameplay_ability_check",
 ]

@@ -4,6 +4,7 @@ import copy
 from typing import Any
 
 from app.game.campaign_state import load_authoritative_campaign_state
+from app.game.abilities import resolve_gameplay_ability_check
 from app.game.items import (
     PLAYER_INVENTORY_LOCATION,
     available_items_for_room,
@@ -95,6 +96,29 @@ class ToolExecutor:
                 error_code="combat_not_supported",
                 summary="Combat is not supported yet.",
             )
+        elif action == ActionType.ABILITY_CHECK:
+            ability_id = parsed_action.parameters.get("ability_id")
+            if not isinstance(ability_id, str) or not ability_id:
+                result = ToolExecutionResult(
+                    success=False,
+                    summary="No ability was identified for this check.",
+                    error_code="invalid_ability_request",
+                )
+            else:
+                ability_result = resolve_gameplay_ability_check(state, ability_id)
+                result = ToolExecutionResult(
+                    success=ability_result.status.value == "resolved",
+                    applied_tools=["resolve_ability_check"]
+                    if ability_result.status.value == "resolved"
+                    else [],
+                    summary=(
+                        f"Resolved {ability_result.display_name}."
+                        if ability_result.status.value == "resolved"
+                        else ability_result.reason or "Ability check could not be resolved."
+                    ),
+                    error_code=ability_result.error_code,
+                    ability_result=ability_result,
+                )
 
         elif action in {ActionType.USE, ActionType.INTERACT}:
             result = self.interact_with_item(state, parsed_action)
