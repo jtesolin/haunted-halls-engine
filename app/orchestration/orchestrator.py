@@ -395,13 +395,24 @@ class ChatOrchestrator:
                         memory_context=memory_context,
                     )
                 )
-                self._check_model_call_budget(
-                    db,
-                    owner_user_id,
-                    parser_estimated_input_tokens,
-                    TokenBudget.action_parser_max_output_tokens(),
-                    provider_model_enabled=True,
-                )
+                try:
+                    self._check_model_call_budget(
+                        db,
+                        owner_user_id,
+                        parser_estimated_input_tokens,
+                        TokenBudget.action_parser_max_output_tokens(),
+                        provider_model_enabled=True,
+                    )
+                except HTTPException:
+                    if request.campaign_id is None:
+                        if idempotency_key is not None:
+                            db.release_chat_request_idempotency(
+                                owner_user_id=owner_user_id,
+                                idempotency_key=idempotency_key,
+                                request_fingerprint=request_fingerprint,
+                            )
+                        db.conn.commit()
+                    raise
 
             db.create_campaign(
                 campaign_id=campaign_id,

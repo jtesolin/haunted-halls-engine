@@ -2,6 +2,7 @@ import asyncio
 from concurrent.futures import ThreadPoolExecutor
 import json
 import threading
+from collections.abc import Iterator
 from uuid import uuid4
 
 import pytest
@@ -33,6 +34,17 @@ from app.schemas.chat import (
 )
 from app.schemas.director import NoActionProposal
 from app.schemas.internal_auth import CANONICAL_GOOGLE_ISSUER
+
+
+@pytest.fixture(autouse=True)
+def restore_settings_after_chat_test() -> Iterator[None]:
+    original_settings = settings.model_dump()
+    original_model_client = action_parser_module.model_client._client
+    action_parser_module.model_client._client = None
+    yield
+    action_parser_module.model_client._client = original_model_client
+    for name, value in original_settings.items():
+        setattr(settings, name, value)
 
 
 async def _fake_no_action_director_propose(*, director_input, model=None):  # noqa: ANN001, ARG001, ANN202
@@ -1321,8 +1333,8 @@ def test_existing_campaign_chat_does_not_regenerate_starter_abilities() -> None:
 
 
 def test_provider_backed_starter_generation_is_logged_without_live_model(monkeypatch) -> None:
-    settings.AI_ENABLED = True
-    settings.OPENAI_API_KEY = "test-key"
+    monkeypatch.setattr(settings, "AI_ENABLED", True)
+    monkeypatch.setattr(settings, "OPENAI_API_KEY", "test-key")
     generated = orchestrator_module.orchestrator.starter_ability_generator._stub_generation()
 
     async def fake_starter_generate(*, provider_model_enabled, return_usage=False):  # noqa: ANN202
@@ -1382,10 +1394,9 @@ def test_provider_backed_starter_generation_is_logged_without_live_model(monkeyp
 
 
 def test_provider_backed_starter_generation_respects_project_request_limit(monkeypatch) -> None:
-    settings.AI_ENABLED = True
-    settings.OPENAI_API_KEY = "test-key"
-    original_limit = settings.MAX_DAILY_PROJECT_REQUESTS
-    settings.MAX_DAILY_PROJECT_REQUESTS = 0
+    monkeypatch.setattr(settings, "AI_ENABLED", True)
+    monkeypatch.setattr(settings, "OPENAI_API_KEY", "test-key")
+    monkeypatch.setattr(settings, "MAX_DAILY_PROJECT_REQUESTS", 0)
 
     async def fail_if_called(*args, **kwargs):  # noqa: ANN002, ANN003, ANN202
         raise AssertionError("starter provider must not be called after project limit rejection")
@@ -1396,25 +1407,22 @@ def test_provider_backed_starter_generation_respects_project_request_limit(monke
         fail_if_called,
     )
 
-    try:
-        with pytest.raises(HTTPException, match="Daily project request limit reached"):
-            asyncio.run(
-                orchestrator_module.orchestrator.create_campaign(
-                    CampaignCreateRequest(),
-                    owner_user_id=_resolved_internal_user_id(
-                        TestClient(app), "provider-starter-project-limit"
-                    ),
-                )
+    with pytest.raises(HTTPException, match="Daily project request limit reached"):
+        asyncio.run(
+            orchestrator_module.orchestrator.create_campaign(
+                CampaignCreateRequest(),
+                owner_user_id=_resolved_internal_user_id(
+                    TestClient(app), "provider-starter-project-limit"
+                ),
             )
-    finally:
-        settings.MAX_DAILY_PROJECT_REQUESTS = original_limit
+        )
 
 
 def test_provider_backed_starter_generation_semantic_failure_is_logged_and_rolls_back(
     monkeypatch,
 ) -> None:
-    settings.AI_ENABLED = True
-    settings.OPENAI_API_KEY = "test-key"
+    monkeypatch.setattr(settings, "AI_ENABLED", True)
+    monkeypatch.setattr(settings, "OPENAI_API_KEY", "test-key")
     generated = orchestrator_module.orchestrator.starter_ability_generator._stub_generation()
     invalid_generation = generated.model_copy(
         update={
@@ -1494,8 +1502,8 @@ def test_provider_backed_starter_generation_semantic_failure_is_logged_and_rolls
 def test_auto_created_chat_starter_failure_keeps_audit_without_chat_side_effects(
     monkeypatch,
 ) -> None:
-    settings.AI_ENABLED = True
-    settings.OPENAI_API_KEY = "test-key"
+    monkeypatch.setattr(settings, "AI_ENABLED", True)
+    monkeypatch.setattr(settings, "OPENAI_API_KEY", "test-key")
     generated = orchestrator_module.orchestrator.starter_ability_generator._stub_generation()
     invalid_generation = generated.model_copy(
         update={
@@ -1650,16 +1658,22 @@ def test_auto_created_chat_idempotency_claim_prevents_duplicate_starter_generati
 
 
 def test_auto_created_chat_rechecks_parser_budget_after_starter_generation(monkeypatch) -> None:
-    settings.AI_ENABLED = True
-    settings.OPENAI_API_KEY = "test-key"
-    original_limit = settings.MAX_DAILY_PROJECT_REQUESTS
-    settings.MAX_DAILY_PROJECT_REQUESTS = 1
+    monkeypatch.setattr(settings, "AI_ENABLED", True)
+    monkeypatch.setattr(settings, "OPENAI_API_KEY", "test-key")
+    monkeypatch.setattr(settings, "MAX_DAILY_PROJECT_REQUESTS", 1)
     generated = orchestrator_module.orchestrator.starter_ability_generator._stub_generation()
+    owner_user_id = _resolved_internal_user_id(
+        TestClient(app), "auto-created-parser-refreshed-budget"
+    )
+    idempotency_key = str(uuid4())
 
     async def fake_starter_generate(*, provider_model_enabled, return_usage=False):  # noqa: ANN202
         assert provider_model_enabled is True
         assert return_usage is True
-        return ModelCallResult(output=generated, usage=None)
+        return ModelCallResult(
+            output=generated,
+            usage=ModelUsage(input_tokens=11, output_tokens=22, total_tokens=33),
+        )
 
     async def fail_if_parser_executes(**kwargs):  # noqa: ANN003, ANN202
         raise AssertionError("parser provider must not execute after the refreshed budget check")
@@ -1675,18 +1689,41 @@ def test_auto_created_chat_rechecks_parser_budget_after_starter_generation(monke
         fail_if_parser_executes,
     )
 
-    try:
-        with pytest.raises(HTTPException, match="Daily project request limit reached"):
-            asyncio.run(
-                orchestrator_module.orchestrator.handle_chat(
-                    ChatRequest(message="look around"),
-                    owner_user_id=_resolved_internal_user_id(
-                        TestClient(app), "auto-created-parser-refreshed-budget"
-                    ),
-                )
+    with pytest.raises(HTTPException, match="Daily project request limit reached"):
+        asyncio.run(
+            orchestrator_module.orchestrator.handle_chat(
+                ChatRequest(message="look around"),
+                owner_user_id=owner_user_id,
+                idempotency_key=idempotency_key,
             )
-    finally:
-        settings.MAX_DAILY_PROJECT_REQUESTS = original_limit
+        )
+
+    with session() as db:
+        assert db.conn.execute(
+            text("SELECT COUNT(*) FROM campaigns WHERE owner_user_id = :owner_user_id"),
+            {"owner_user_id": owner_user_id},
+        ).scalar_one() == 0
+        assert db.conn.execute(
+            text("SELECT COUNT(*) FROM turns"),
+        ).scalar_one() == 0
+        assert db.conn.execute(
+            text("SELECT COUNT(*) FROM game_events"),
+        ).scalar_one() == 0
+        row = db.conn.execute(
+            text(
+                "SELECT success, actual_input_tokens, actual_output_tokens, "
+                "actual_total_tokens FROM model_requests "
+                "WHERE owner_user_id = :owner_user_id "
+                "AND agent_name = 'StarterAbilityGenerator'"
+            ),
+            {"owner_user_id": owner_user_id},
+        ).mappings().one()
+        assert db.get_chat_request_idempotency(owner_user_id, idempotency_key) is None
+
+    assert bool(row["success"]) is True
+    assert row["actual_input_tokens"] == 11
+    assert row["actual_output_tokens"] == 22
+    assert row["actual_total_tokens"] == 33
 
 
 def test_ai_disabled_still_runs_parser_and_tools() -> None:
