@@ -29,6 +29,7 @@ from app.schemas.chat import (
     ActionParserParameters,
     ActionType,
     ChatRequest,
+    ChatResponse,
     ParsedAction,
     ToolExecutionResult,
 )
@@ -1517,19 +1518,49 @@ def test_auto_created_chat_starter_failure_keeps_audit_without_chat_side_effects
         TestClient(app), "auto-created-starter-failure"
     )
     idempotency_key = str(uuid4())
+    starter_attempts = 0
 
     async def fake_starter_generate(*, provider_model_enabled, return_usage=False):  # noqa: ANN202
+        nonlocal starter_attempts
         assert provider_model_enabled is True
         assert return_usage is True
+        starter_attempts += 1
         return ModelCallResult(
-            output=invalid_generation,
+            output=invalid_generation if starter_attempts == 1 else generated,
             usage=ModelUsage(input_tokens=11, output_tokens=22, total_tokens=33),
         )
+
+    async def fake_parse(**kwargs):  # noqa: ANN003, ANN202
+        return ParsedAction(
+            raw_text=kwargs["message"],
+            action=ActionType.OBSERVE,
+            parameters={},
+            confidence=1,
+            parse_status="ok",
+        )
+
+    async def fake_narrator_generate(**kwargs):  # noqa: ANN003, ANN202
+        return narrator_module.NarratorAgentOutput(reply_text="The corridor waits.")
 
     monkeypatch.setattr(
         orchestrator_module.orchestrator.starter_ability_generator,
         "generate",
         fake_starter_generate,
+    )
+    monkeypatch.setattr(
+        orchestrator_module.orchestrator.action_parser_agent,
+        "parse",
+        fake_parse,
+    )
+    monkeypatch.setattr(
+        orchestrator_module.orchestrator.narrator_agent,
+        "generate",
+        fake_narrator_generate,
+    )
+    monkeypatch.setattr(
+        orchestrator_module.orchestrator.director_agent,
+        "propose",
+        _fake_no_action_director_propose,
     )
 
     with pytest.raises(HTTPException) as exc_info:
@@ -1582,18 +1613,29 @@ def test_auto_created_chat_starter_failure_keeps_audit_without_chat_side_effects
     assert row["actual_total_tokens"] == 33
     assert "baseline" in row["failure_reason"]
 
+    retry = asyncio.run(
+        orchestrator_module.orchestrator.handle_chat(
+            ChatRequest(message="look around"),
+            owner_user_id=owner_user_id,
+            idempotency_key=idempotency_key,
+        )
+    )
+    assert retry.campaign_id
+    assert starter_attempts == 2
+
 
 def test_auto_created_chat_idempotency_claim_prevents_duplicate_starter_generation(
     monkeypatch,
 ) -> None:
-    settings.AI_ENABLED = True
-    settings.OPENAI_API_KEY = "test-key"
+    monkeypatch.setattr(settings, "AI_ENABLED", True)
+    monkeypatch.setattr(settings, "OPENAI_API_KEY", "test-key")
     generated = orchestrator_module.orchestrator.starter_ability_generator._stub_generation()
     owner_user_id = _resolved_internal_user_id(
         TestClient(app), "auto-created-idempotency-starter-claim"
     )
     idempotency_key = str(uuid4())
     starter_calls = 0
+    parser_calls = 0
 
     async def fake_starter_generate(*, provider_model_enabled, return_usage=False):  # noqa: ANN202
         nonlocal starter_calls
@@ -1604,6 +1646,8 @@ def test_auto_created_chat_idempotency_claim_prevents_duplicate_starter_generati
         return ModelCallResult(output=generated, usage=None)
 
     async def fake_parse(**kwargs):  # noqa: ANN003, ANN202
+        nonlocal parser_calls
+        parser_calls += 1
         return ParsedAction(
             raw_text=kwargs["message"],
             action=ActionType.OBSERVE,
@@ -1612,8 +1656,8 @@ def test_auto_created_chat_idempotency_claim_prevents_duplicate_starter_generati
             parse_status="ok",
         )
 
-    async def fake_narrator_response(self, **kwargs):  # noqa: ANN001, ANN202
-        return "The corridor waits."
+    async def fake_narrator_generate(**kwargs):  # noqa: ANN003, ANN202
+        return narrator_module.NarratorAgentOutput(reply_text="The corridor waits.")
 
     monkeypatch.setattr(
         orchestrator_module.orchestrator.starter_ability_generator,
@@ -1626,9 +1670,9 @@ def test_auto_created_chat_idempotency_claim_prevents_duplicate_starter_generati
         fake_parse,
     )
     monkeypatch.setattr(
-        orchestrator_module.ChatOrchestrator,
-        "_generate_narrator_response",
-        fake_narrator_response,
+        orchestrator_module.orchestrator.narrator_agent,
+        "generate",
+        fake_narrator_generate,
     )
     monkeypatch.setattr(
         orchestrator_module.orchestrator.director_agent,
@@ -1654,7 +1698,26 @@ def test_auto_created_chat_idempotency_claim_prevents_duplicate_starter_generati
     results = asyncio.run(run_concurrent_requests())
 
     assert starter_calls == 1
-    assert sum(isinstance(result, HTTPException) and result.status_code == 503 for result in results) == 1
+    completed = [result for result in results if isinstance(result, ChatResponse)]
+    rejected = [
+        result
+        for result in results
+        if isinstance(result, HTTPException) and result.status_code == 503
+    ]
+    assert len(completed) == 1
+    assert len(rejected) == 1
+    assert parser_calls == 1
+
+    replay = asyncio.run(
+        orchestrator_module.orchestrator.handle_chat(
+            ChatRequest(message="look around"),
+            owner_user_id=owner_user_id,
+            idempotency_key=idempotency_key,
+        )
+    )
+    assert replay == completed[0]
+    assert starter_calls == 1
+    assert parser_calls == 1
 
 
 def test_auto_created_chat_rechecks_parser_budget_after_starter_generation(monkeypatch) -> None:

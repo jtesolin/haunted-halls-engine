@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from datetime import datetime
 from datetime import timezone
@@ -91,6 +92,24 @@ class Repository:
         treat a visible ``in_progress`` row as license to execute unless
         ``acquired`` is True.
         """
+        if self.conn.dialect.name == "postgresql":
+            lock_key = f"{owner_user_id}:{idempotency_key}".encode("utf-8")
+            lock_id = int.from_bytes(
+                hashlib.blake2b(lock_key, digest_size=8).digest(),
+                byteorder="big",
+                signed=True,
+            )
+            lock_acquired = self.conn.execute(
+                select(func.pg_try_advisory_xact_lock(lock_id))
+            ).scalar_one()
+            if not lock_acquired:
+                return ChatRequestIdempotencyClaim(
+                    acquired=False,
+                    row=self.get_chat_request_idempotency(
+                        owner_user_id, idempotency_key
+                    ),
+                )
+
         acquired = False
         try:
             with self.conn.begin_nested():
