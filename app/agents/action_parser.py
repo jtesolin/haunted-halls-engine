@@ -12,6 +12,12 @@ from app.agents.base import BaseAgent
 from app.ai.model_client import ModelCallResult, model_client
 from app.ai.prompts import action_parser_prompt
 from app.game.items import ensure_items_state, inventory_item_ids, room_item_ids
+from app.game.abilities import (
+    AbilityDefinition,
+    evaluate_ability_availability,
+    generated_ability_definitions,
+    get_ability_definition,
+)
 from app.game.npcs import ensure_npcs_state, nearby_npc_ids_for_room, parser_npc_projection
 from app.game.world import DEFAULT_WORLD
 from app.guardrails.model_policy import ModelPolicy
@@ -43,6 +49,7 @@ class ParserContext(BaseModel):
     inventory: list[str] = Field(default_factory=list)
     nearby_npcs: list[dict[str, Any]] = Field(default_factory=list)
     status_flags: dict[str, Any] = Field(default_factory=dict)
+    abilities: list[dict[str, str | bool]] = Field(default_factory=list)
 
 
 class ActionParserAgent(BaseAgent):
@@ -101,7 +108,7 @@ class ActionParserAgent(BaseAgent):
                 "action_parser_deterministic_mode message_length=%s",
                 len(message),
             )
-            return self._fallback_parse(message)
+            return self._fallback_parse(message, campaign_state)
 
         messages = self.build_provider_request(
             message=message,
@@ -219,7 +226,7 @@ class ActionParserAgent(BaseAgent):
         )
         return messages
 
-    def _fallback_parse(self, message: str) -> ParsedAction:
+    def _fallback_parse(self, message: str, campaign_state: str) -> ParsedAction:
         lower = message.lower()
         stealth = any(token in lower for token in ("quiet", "quietly", "stealth", "sneak", "silently", "hidden"))
 
@@ -229,6 +236,16 @@ class ActionParserAgent(BaseAgent):
         confidence = 0.45
         notes = "Deterministic heuristic parser was used."
 
+        ability_id = self._requested_ability_id(lower, campaign_state)
+        if ability_id is not None:
+            return ParsedAction(
+                raw_text=message,
+                action=ActionType.ABILITY_CHECK,
+                parameters={"ability_id": ability_id},
+                confidence=0.82,
+                parse_status="ok",
+                parser_notes="Explicit ability request recognized deterministically.",
+            )
         if self._contains_any_phrase(lower, ["climb", "scale"]):
             action = ActionType.CLIMB
             parse_status = "ok"
@@ -273,7 +290,15 @@ class ActionParserAgent(BaseAgent):
             confidence = 0.7
             target, with_item = self._extract_use_items(lower)
             return self._parsed_interaction(
-                message, action, target, self._interaction_mode(lower), with_item, stealth, confidence, parse_status, notes
+                message,
+                action,
+                target,
+                None if re.match(r"^\s*use\b", lower) else self._interaction_mode(lower),
+                with_item,
+                stealth,
+                confidence,
+                parse_status,
+                notes,
             )
         elif self._contains_any_phrase(lower, ["attack", "hit", "strike", "fight"]):
             action = ActionType.ATTACK
@@ -376,6 +401,29 @@ class ActionParserAgent(BaseAgent):
         nearby_objects = room_item_ids(items, location) if isinstance(location, str) else []
 
         status_flags = self._dict_value(state, "status")
+        abilities: list[dict[str, str | bool]] = []
+        built_ins = (
+            get_ability_definition(ability_id)
+            for ability_id in ("keen_eye", "steady_nerves", "read_the_room", "occult_insight")
+        )
+        for definition in (*built_ins, *generated_ability_definitions(state)):
+            if definition is None:
+                continue
+            availability = evaluate_ability_availability(state, definition.ability_id)
+            if availability.available:
+                description = (
+                    definition.short_description
+                    if isinstance(definition, AbilityDefinition)
+                    else definition.description
+                )
+                abilities.append(
+                    {
+                        "ability_id": definition.ability_id,
+                        "name": definition.display_name,
+                        "description": description,
+                        "available": True,
+                    }
+                )
         return ParserContext(
             location=location,
             current_room_id=current_room_id,
@@ -386,7 +434,34 @@ class ActionParserAgent(BaseAgent):
             inventory=inventory,
             nearby_npcs=nearby_npcs,
             status_flags=status_flags,
+            abilities=abilities,
         )
+
+    def _requested_ability_id(self, lower: str, campaign_state: str) -> str | None:
+        for ability in self._build_parser_context(campaign_state).abilities:
+            ability_id = ability["ability_id"]
+            name = ability["name"]
+            if not isinstance(ability_id, str) or not isinstance(name, str):
+                continue
+            references = {
+                ability_id.replace("_", " ").strip().casefold(),
+                name.strip().casefold(),
+            }
+            references.discard("")
+            if any(self._has_explicit_ability_reference(lower, reference) for reference in references):
+                return ability_id
+        return None
+
+    def _has_explicit_ability_reference(self, lower: str, reference: str) -> bool:
+        reference_pattern = re.escape(reference).replace(r"\ ", r"\s+")
+        pattern = (
+            r"\b(?:use|using|activate|invoke)\s+"
+            r"(?:my\s+|the\s+|an?\s+)?"
+            r"(?:ability\s+)?"
+            f"{reference_pattern}"
+            r"\b(?!\s+(?:on|with)\b)"
+        )
+        return re.search(pattern, lower) is not None
 
     def _dict_value(self, source: dict[str, Any], key: str | None) -> dict[str, Any]:
         if key is None:
@@ -480,13 +555,13 @@ class ActionParserAgent(BaseAgent):
         return self._extract_object_target(text, [mode])
 
     def _extract_use_items(self, text: str) -> tuple[str | None, str | None]:
-        if self._interaction_mode(text) == "light":
+        if not re.match(r"^\s*use\b", text) and self._interaction_mode(text) == "light":
             target = self._extract_object_target(text, ["light"])
             match = re.search(r"\b(?:with|using)\s+(?:the\s+)?(.+?)(?:[.!?]|$)", text)
             return target, match.group(1).strip() if match else None
 
         match = re.search(
-            r"\buse\s+(?:the\s+)?(.+?)\s+\b(?:on|with)\s+(?:the\s+)?(.+?)(?:[.!?]|$)",
+            r"\buse\s+(?:the\s+)?(.+?)\s+(?:on|with)\s+(?:the\s+)?(.+?)(?:[.!?]|$)",
             text,
         )
         if match:

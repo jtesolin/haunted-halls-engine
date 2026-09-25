@@ -11,6 +11,8 @@ from uuid import uuid4
 from fastapi import HTTPException
 
 from app.agents.action_parser import ActionParseProviderError, ActionParserAgent
+from app.agents.starter_abilities import StarterAbilityGenerator
+from app.ai.model_client import ModelCallResult
 from app.agents.director import (
     DirectorAgent,
     DirectorProposalOutputError,
@@ -31,6 +33,11 @@ from app.game.campaign_state import (
     load_authoritative_campaign_state,
     validate_persisted_campaign_state_json,
 )
+from app.game.abilities import (
+    generated_ability_definitions,
+    validate_starter_ability_definitions,
+)
+from app.game.character_progression import ensure_character_progression_state, unlock_ability
 from app.game.narrator_scene import build_narrator_scene_context
 from app.game.narrative import NARRATIVE_CLUES
 from app.game.progression_rewards import (
@@ -76,6 +83,7 @@ from app.schemas.events import (
     WorldActionExecutedPayload,
     WorldActionFailedPayload,
 )
+from app.schemas.generated_abilities import StarterAbilityGeneration
 from app.services.director_context import InvalidDirectorContextError, build_director_input
 from app.services.tool_executor import ToolExecutor
 from app.services.world_authority import WorldAuthorityExecutor
@@ -126,6 +134,7 @@ class ChatOrchestrator:
         self.tool_executor = ToolExecutor()
         self.director_agent = DirectorAgent()
         self.world_authority_executor = WorldAuthorityExecutor()
+        self.starter_ability_generator = StarterAbilityGenerator()
 
     async def create_campaign(
         self, _request: CampaignCreateRequest, owner_user_id: str
@@ -134,52 +143,39 @@ class ChatOrchestrator:
         assistant_turn_id = f"turn_{uuid4().hex}"
         agent_name = "Narrator"
         model = ModelPolicy.narrator_model()
+        starter_error: HTTPException | None = None
+        assistant_turn = None
+        campaign_name = ""
 
         with session() as db:
             self._validate_campaign_creation(db, owner_user_id)
 
-            initial_state = build_fresh_campaign_state()
-            initial_state_json = json.dumps(initial_state)
-            scene_context = build_narrator_scene_context(initial_state_json)
-
             has_openai_key = bool((settings.OPENAI_API_KEY or "").strip())
             provider_model_enabled = has_openai_key
             ai_enabled = settings.AI_ENABLED or provider_model_enabled
-            if not ai_enabled:
-                opening_prompt = self._stub_campaign_opening(scene_context)
-                campaign_name = self._stub_campaign_title()
-            else:
-                recent_turns: list[dict[str, str]] = []
+            try:
+                initial_state = await self._build_initial_campaign_state(
+                    db=db,
+                    owner_user_id=owner_user_id,
+                    campaign_id=campaign_id,
+                    turn_id=assistant_turn_id,
+                    provider_model_enabled=provider_model_enabled,
+                )
+            except HTTPException as exc:
+                starter_error = exc
 
-                opening_request = self._build_campaign_opening_request()
-                if provider_model_enabled:
-                    opening_prompt = await self._generate_narrator_response(
-                        db=db,
-                        owner_user_id=owner_user_id,
-                        campaign_id=campaign_id,
-                        turn_id=assistant_turn_id,
-                        agent_name=agent_name,
-                        model=model,
-                        scene_context=scene_context,
-                        recent_turns=recent_turns,
-                        message=opening_request,
-                    )
+            if starter_error is None:
+                initial_state_json = json.dumps(initial_state)
+                scene_context = build_narrator_scene_context(initial_state_json)
+                if not ai_enabled:
+                    opening_prompt = self._stub_campaign_opening(scene_context)
+                    campaign_name = self._stub_campaign_title()
                 else:
-                    opening_prompt = (
-                        await self.narrator_agent.generate(
-                            payload=NarratorAgentInput(
-                                player_message=opening_request,
-                                scene_context=scene_context,
-                                recent_turns=recent_turns,
-                            ),
-                            model=model,
-                        )
-                    ).reply_text
+                    recent_turns: list[dict[str, str]] = []
 
-                title_request = self._build_campaign_title_request(opening_prompt)
-                if provider_model_enabled:
-                    campaign_name = self._normalize_campaign_title(
-                        await self._generate_narrator_response(
+                    opening_request = self._build_campaign_opening_request()
+                    if provider_model_enabled:
+                        opening_prompt = await self._generate_narrator_response(
                             db=db,
                             owner_user_id=owner_user_id,
                             campaign_id=campaign_id,
@@ -188,43 +184,74 @@ class ChatOrchestrator:
                             model=model,
                             scene_context=scene_context,
                             recent_turns=recent_turns,
-                            message=title_request,
+                            message=opening_request,
                         )
-                    )
-                else:
-                    campaign_name = self._normalize_campaign_title(
-                        (
+                    else:
+                        opening_prompt = (
                             await self.narrator_agent.generate(
                                 payload=NarratorAgentInput(
-                                    player_message=title_request,
+                                    player_message=opening_request,
                                     scene_context=scene_context,
                                     recent_turns=recent_turns,
                                 ),
                                 model=model,
                             )
                         ).reply_text
-                    )
 
-            db.create_campaign(
-                campaign_id=campaign_id,
-                owner_user_id=owner_user_id,
-                name=campaign_name,
-                description="AI-created campaign",
-                state=initial_state,
-            )
-            assistant_turn = db.create_turn(
-                turn_id=assistant_turn_id,
-                campaign_id=campaign_id,
-                role="assistant",
-                content=opening_prompt,
-            )
-            db.add_event(
-                event_id=f"evt_{uuid4().hex}",
-                campaign_id=campaign_id,
-                turn_id=assistant_turn_id,
-                type="narrator_response_created",
-                payload=NarratorResponseCreatedPayload(reply=opening_prompt),
-            )
+                    title_request = self._build_campaign_title_request(opening_prompt)
+                    if provider_model_enabled:
+                        campaign_name = self._normalize_campaign_title(
+                            await self._generate_narrator_response(
+                                db=db,
+                                owner_user_id=owner_user_id,
+                                campaign_id=campaign_id,
+                                turn_id=assistant_turn_id,
+                                agent_name=agent_name,
+                                model=model,
+                                scene_context=scene_context,
+                                recent_turns=recent_turns,
+                                message=title_request,
+                            )
+                        )
+                    else:
+                        campaign_name = self._normalize_campaign_title(
+                            (
+                                await self.narrator_agent.generate(
+                                    payload=NarratorAgentInput(
+                                        player_message=title_request,
+                                        scene_context=scene_context,
+                                        recent_turns=recent_turns,
+                                    ),
+                                    model=model,
+                                )
+                            ).reply_text
+                        )
+
+                db.create_campaign(
+                    campaign_id=campaign_id,
+                    owner_user_id=owner_user_id,
+                    name=campaign_name,
+                    description="AI-created campaign",
+                    state=initial_state,
+                )
+                assistant_turn = db.create_turn(
+                    turn_id=assistant_turn_id,
+                    campaign_id=campaign_id,
+                    role="assistant",
+                    content=opening_prompt,
+                )
+                db.add_event(
+                    event_id=f"evt_{uuid4().hex}",
+                    campaign_id=campaign_id,
+                    turn_id=assistant_turn_id,
+                    type="narrator_response_created",
+                    payload=NarratorResponseCreatedPayload(reply=opening_prompt),
+                )
+
+        if starter_error is not None:
+            raise starter_error
+
+        assert assistant_turn is not None
 
         return CampaignDetail(
             campaign_id=campaign_id,
@@ -272,6 +299,17 @@ class ChatOrchestrator:
             validate_chat_request(db, request, owner_user_id)
             validate_campaign_turn_limit(db, owner_user_id, campaign_id)
 
+            if idempotency_key is not None:
+                replay = self._claim_chat_request(
+                    db,
+                    owner_user_id=owner_user_id,
+                    idempotency_key=idempotency_key,
+                    request_fingerprint=request_fingerprint,
+                    request=request,
+                )
+                if replay is not None:
+                    return replay
+
             has_openai_key = bool((settings.OPENAI_API_KEY or "").strip())
             provider_model_enabled = has_openai_key
             ai_enabled = settings.AI_ENABLED or provider_model_enabled
@@ -291,6 +329,9 @@ class ChatOrchestrator:
             )
             try:
                 validate_persisted_campaign_state_json(campaign_state)
+                generated_ability_definitions(
+                    load_authoritative_campaign_state(campaign_state)
+                )
             except InvalidCampaignStateError as exc:
                 logger.error(
                     "campaign_state_integrity_failure owner_user_id=%s campaign_id=%s turn_id=%s error_type=%s",
@@ -315,6 +356,35 @@ class ChatOrchestrator:
             )
 
             validate_daily_request_limit(db, owner_user_id)
+
+            initial_state = None
+            if request.campaign_id is None:
+                try:
+                    initial_state = await self._build_initial_campaign_state(
+                        db=db,
+                        owner_user_id=owner_user_id,
+                        campaign_id=campaign_id,
+                        turn_id=player_turn_id,
+                        provider_model_enabled=provider_model_enabled,
+                    )
+                except HTTPException:
+                    if idempotency_key is not None:
+                        db.release_chat_request_idempotency(
+                            owner_user_id=owner_user_id,
+                            idempotency_key=idempotency_key,
+                            request_fingerprint=request_fingerprint,
+                        )
+                    db.conn.commit()
+                    raise
+                campaign_state = json.dumps(initial_state)
+                memory_context = memory_service.load_memory_context(
+                    owner_user_id=owner_user_id,
+                    campaign_id=campaign_id,
+                    query=request.message,
+                    campaign_state=campaign_state,
+                    recent_turns=recent_turns,
+                )
+
             parser_estimated_input_tokens = 0
             if parser_model_enabled:
                 parser_estimated_input_tokens = (
@@ -325,52 +395,31 @@ class ChatOrchestrator:
                         memory_context=memory_context,
                     )
                 )
-                self._check_model_call_budget(
-                    db,
-                    owner_user_id,
-                    parser_estimated_input_tokens,
-                    TokenBudget.action_parser_max_output_tokens(),
-                    provider_model_enabled=True,
-                )
-
-            if idempotency_key is not None:
-                claim = db.claim_chat_request_idempotency(
-                    owner_user_id=owner_user_id,
-                    idempotency_key=idempotency_key,
-                    request_fingerprint=request_fingerprint,
-                    requested_campaign_id=request.campaign_id,
-                    requested_character_id=request.character_id,
-                )
-                if claim.row is None:
-                    raise HTTPException(
-                        status_code=503,
-                        detail="Idempotent request could not be claimed; retry.",
+                try:
+                    self._check_model_call_budget(
+                        db,
+                        owner_user_id,
+                        parser_estimated_input_tokens,
+                        TokenBudget.action_parser_max_output_tokens(),
+                        provider_model_enabled=True,
                     )
-                if claim.row["request_fingerprint"] != request_fingerprint:
-                    raise HTTPException(
-                        status_code=409,
-                        detail="Idempotency-Key was already used for a different request.",
-                    )
-                if claim.row["status"] == "completed":
-                    return ChatResponse(
-                        reply=claim.row["reply"],
-                        campaign_id=claim.row["resolved_campaign_id"],
-                        turn_id=claim.row["turn_id"],
-                    )
-                if not claim.acquired:
-                    # Another transaction owns this in-progress claim. Only the
-                    # transaction that actually inserted the row may execute;
-                    # everyone else must retry rather than proceed.
-                    raise HTTPException(
-                        status_code=503,
-                        detail="Idempotent request is already in progress; retry.",
-                    )
+                except HTTPException:
+                    if request.campaign_id is None:
+                        if idempotency_key is not None:
+                            db.release_chat_request_idempotency(
+                                owner_user_id=owner_user_id,
+                                idempotency_key=idempotency_key,
+                                request_fingerprint=request_fingerprint,
+                            )
+                        db.conn.commit()
+                    raise
 
             db.create_campaign(
                 campaign_id=campaign_id,
                 owner_user_id=owner_user_id,
                 name=f"Campaign {campaign_id}",
                 description="Auto-created campaign",
+                state=initial_state,
             )
             db.create_turn(
                 turn_id=player_turn_id,
@@ -593,6 +642,7 @@ class ChatOrchestrator:
 
             authoritative_state_changed = (
                 bool(tool_result.state_delta)
+                or initial_state is not None
                 or campaign_state == "No campaign state yet."
                 or story_state_changed
                 or reward_state_changed
@@ -987,6 +1037,45 @@ class ChatOrchestrator:
         ).encode("utf-8")
         return hashlib.sha256(canonical_request).hexdigest()
 
+    def _claim_chat_request(
+        self,
+        db,
+        *,
+        owner_user_id: str,
+        idempotency_key: str,
+        request_fingerprint: str,
+        request: ChatRequest,
+    ) -> ChatResponse | None:
+        claim = db.claim_chat_request_idempotency(
+            owner_user_id=owner_user_id,
+            idempotency_key=idempotency_key,
+            request_fingerprint=request_fingerprint,
+            requested_campaign_id=request.campaign_id,
+            requested_character_id=request.character_id,
+        )
+        if claim.row is None:
+            raise HTTPException(
+                status_code=503,
+                detail="Idempotent request could not be claimed; retry.",
+            )
+        if claim.row["request_fingerprint"] != request_fingerprint:
+            raise HTTPException(
+                status_code=409,
+                detail="Idempotency-Key was already used for a different request.",
+            )
+        if claim.row["status"] == "completed":
+            return ChatResponse(
+                reply=claim.row["reply"],
+                campaign_id=claim.row["resolved_campaign_id"],
+                turn_id=claim.row["turn_id"],
+            )
+        if not claim.acquired:
+            raise HTTPException(
+                status_code=503,
+                detail="Idempotent request is already in progress; retry.",
+            )
+        return None
+
     def _build_campaign_opening_request(self) -> str:
         return (
             "Using the authoritative current scene provided, write the opening scene for this "
@@ -1000,6 +1089,130 @@ class ChatOrchestrator:
             "Based on the campaign opening below, provide only a short haunted campaign title with no quotes "
             f"and no extra commentary.\n\n{opening_prompt}"
         )
+
+    async def _build_initial_campaign_state(
+        self,
+        *,
+        db,
+        owner_user_id: str,
+        campaign_id: str,
+        turn_id: str,
+        provider_model_enabled: bool,
+    ) -> dict[str, Any]:
+        generated_abilities = await self._generate_starter_abilities(
+            db=db,
+            owner_user_id=owner_user_id,
+            campaign_id=campaign_id,
+            turn_id=turn_id,
+            provider_model_enabled=provider_model_enabled,
+        )
+        initial_state = build_fresh_campaign_state()
+        ensure_character_progression_state(initial_state)
+        initial_state["player"]["generated_abilities"] = [
+            ability.model_dump(mode="json") for ability in generated_abilities.abilities
+        ]
+        for ability in generated_abilities.abilities:
+            unlock_result = unlock_ability(initial_state, ability.ability_id)
+            if not unlock_result.success:
+                raise ValueError("Starter ability ownership could not be initialized.")
+        return initial_state
+
+    async def _generate_starter_abilities(
+        self,
+        *,
+        db,
+        owner_user_id: str,
+        campaign_id: str,
+        turn_id: str,
+        provider_model_enabled: bool,
+    ) -> StarterAbilityGeneration:
+        if not provider_model_enabled:
+            generated = await self.starter_ability_generator.generate(
+                provider_model_enabled=False
+            )
+            starter_abilities = validate_starter_ability_definitions(
+                generated.abilities
+            )
+            return StarterAbilityGeneration(abilities=starter_abilities)
+
+        model = ModelPolicy.narrator_model()
+        estimated_input_tokens = (
+            self.starter_ability_generator.estimate_provider_input_tokens()
+        )
+        self._check_model_call_budget(
+            db,
+            owner_user_id,
+            estimated_input_tokens,
+            TokenBudget.starter_ability_max_output_tokens(),
+            provider_model_enabled=True,
+        )
+
+        start_time = time.perf_counter()
+        usage = None
+        try:
+            generated = await self.starter_ability_generator.generate(
+                provider_model_enabled=True,
+                return_usage=True,
+            )
+            if not isinstance(generated, ModelCallResult) or generated.output is None:
+                raise ValueError("Starter ability generator did not return valid structured output.")
+            usage = generated.usage
+            starter_abilities = validate_starter_ability_definitions(
+                generated.output.abilities
+            )
+            latency_ms = int((time.perf_counter() - start_time) * 1000)
+            db.log_model_request(
+                request_id=f"req_{uuid4().hex}",
+                owner_user_id=owner_user_id,
+                campaign_id=campaign_id,
+                turn_id=turn_id,
+                agent_name=self.starter_ability_generator.name,
+                model=model,
+                estimated_input_tokens=estimated_input_tokens,
+                estimated_output_tokens=TokenBudget.starter_ability_max_output_tokens(),
+                actual_input_tokens=usage.input_tokens if usage else None,
+                cached_input_tokens=usage.cached_input_tokens if usage else None,
+                cache_write_input_tokens=usage.cache_write_input_tokens if usage else None,
+                actual_output_tokens=usage.output_tokens if usage else None,
+                reasoning_output_tokens=usage.reasoning_output_tokens if usage else None,
+                actual_total_tokens=usage.total_tokens if usage else None,
+                latency_ms=latency_ms,
+                success=True,
+            )
+            return StarterAbilityGeneration(abilities=starter_abilities)
+        except Exception as exc:
+            latency_ms = int((time.perf_counter() - start_time) * 1000)
+            logger.error(
+                "starter_ability_provider_failed owner_user_id=%s campaign_id=%s turn_id=%s model=%s latency_ms=%s error_type=%s error_message=%s",
+                owner_user_id,
+                campaign_id,
+                turn_id,
+                model,
+                latency_ms,
+                type(exc).__name__,
+                str(exc),
+                exc_info=True,
+            )
+            db.log_model_request(
+                request_id=f"req_{uuid4().hex}",
+                owner_user_id=owner_user_id,
+                campaign_id=campaign_id,
+                turn_id=turn_id,
+                agent_name=self.starter_ability_generator.name,
+                model=model,
+                estimated_input_tokens=estimated_input_tokens,
+                estimated_output_tokens=TokenBudget.starter_ability_max_output_tokens(),
+                actual_input_tokens=usage.input_tokens if usage else None,
+                cached_input_tokens=usage.cached_input_tokens if usage else None,
+                cache_write_input_tokens=usage.cache_write_input_tokens if usage else None,
+                actual_output_tokens=usage.output_tokens if usage else None,
+                reasoning_output_tokens=usage.reasoning_output_tokens if usage else None,
+                actual_total_tokens=usage.total_tokens if usage else None,
+                latency_ms=latency_ms,
+                success=False,
+                failure_reason=str(exc),
+            )
+            raise HTTPException(status_code=502, detail="Starter ability service failed.") from exc
 
     async def _maybe_update_memory_layers(
         self,

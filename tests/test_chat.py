@@ -2,6 +2,7 @@ import asyncio
 from concurrent.futures import ThreadPoolExecutor
 import json
 import threading
+from collections.abc import Iterator
 from uuid import uuid4
 
 import pytest
@@ -12,23 +13,39 @@ from sqlalchemy import text
 from app.agents import action_parser as action_parser_module
 from app.agents import narrator as narrator_module
 from app.agents.director import DirectorAgentResult
+from app.ai.model_client import ModelCallResult, ModelUsage
 from app.api.dependencies import INTERNAL_USER_ID_HEADER_NAME
 from app.core.config import settings
 from app.db.session import session
+from app.game.campaign_state import build_fresh_campaign_state
+from app.game.character_progression import ensure_character_progression_state, unlock_ability
 from app.guardrails.model_policy import ModelPolicy
 from app.guardrails.token_budget import estimate_tokens
 from app.main import app
 from app.orchestration import orchestrator as orchestrator_module
+from app.schemas.campaign import CampaignCreateRequest
 from app.schemas.chat import (
     ActionParserOutput,
     ActionParserParameters,
     ActionType,
     ChatRequest,
+    ChatResponse,
     ParsedAction,
     ToolExecutionResult,
 )
 from app.schemas.director import NoActionProposal
 from app.schemas.internal_auth import CANONICAL_GOOGLE_ISSUER
+
+
+@pytest.fixture(autouse=True)
+def restore_settings_after_chat_test() -> Iterator[None]:
+    original_settings = settings.model_dump()
+    original_model_client = action_parser_module.model_client._client
+    action_parser_module.model_client._client = None
+    yield
+    action_parser_module.model_client._client = original_model_client
+    for name, value in original_settings.items():
+        setattr(settings, name, value)
 
 
 async def _fake_no_action_director_propose(*, director_input, model=None):  # noqa: ANN001, ARG001, ANN202
@@ -1249,6 +1266,527 @@ def test_orchestrator_persists_genesis_state_for_non_mutating_first_action(
         campaign_state = json.loads(campaign.state)
         assert "items" in campaign_state
         assert campaign_state["player"]["inventory"]
+
+
+def test_auto_created_campaign_receives_starter_abilities() -> None:
+    settings.AI_ENABLED = False
+    settings.OPENAI_API_KEY = None
+
+    response = asyncio.run(
+        orchestrator_module.orchestrator.handle_chat(
+            ChatRequest(message="What do I see?"),
+            owner_user_id=_resolved_internal_user_id(
+                TestClient(app), "auto-created-starter-abilities"
+            ),
+        )
+    )
+
+    with session() as db:
+        campaign = db.get_campaign(response.campaign_id)
+        assert campaign is not None
+        assert campaign.state is not None
+        campaign_state = json.loads(campaign.state)
+
+    generated_abilities = campaign_state["player"]["generated_abilities"]
+    unlocked = campaign_state["player"]["progression"]["unlocked_abilities"]
+    assert len(generated_abilities) == 2
+    assert {ability["kind"] for ability in generated_abilities} == {"sensory", "utility"}
+    assert {ability["ability_id"] for ability in generated_abilities} <= set(unlocked)
+
+
+def test_existing_campaign_chat_does_not_regenerate_starter_abilities() -> None:
+    settings.AI_ENABLED = False
+    settings.OPENAI_API_KEY = None
+    user_id = _resolved_internal_user_id(TestClient(app), "existing-starter-abilities")
+    state = build_fresh_campaign_state()
+    generated = orchestrator_module.orchestrator.starter_ability_generator._stub_generation()
+    sentinel_ability = generated.abilities[0].model_copy(update={"display_name": "Sentinel Echo"})
+    state["player"]["generated_abilities"] = [
+        sentinel_ability.model_dump(mode="json"),
+        generated.abilities[1].model_dump(mode="json"),
+    ]
+    ensure_character_progression_state(state)
+    for ability in (sentinel_ability, generated.abilities[1]):
+        assert unlock_ability(state, ability.ability_id).success
+
+    with session() as db:
+        db.create_campaign(
+            campaign_id="campaign_existing_starters",
+            owner_user_id=user_id,
+            name="Existing Starters",
+            state=state,
+        )
+
+    asyncio.run(
+        orchestrator_module.orchestrator.handle_chat(
+            ChatRequest(message="What do I see?", campaign_id="campaign_existing_starters"),
+            owner_user_id=user_id,
+        )
+    )
+
+    with session() as db:
+        campaign = db.get_campaign("campaign_existing_starters")
+        assert campaign is not None
+        assert campaign.state is not None
+        campaign_state = json.loads(campaign.state)
+
+    assert campaign_state["player"]["generated_abilities"] == state["player"]["generated_abilities"]
+
+
+def test_provider_backed_starter_generation_is_logged_without_live_model(monkeypatch) -> None:
+    monkeypatch.setattr(settings, "AI_ENABLED", True)
+    monkeypatch.setattr(settings, "OPENAI_API_KEY", "test-key")
+    generated = orchestrator_module.orchestrator.starter_ability_generator._stub_generation()
+
+    async def fake_starter_generate(*, provider_model_enabled, return_usage=False):  # noqa: ANN202
+        assert provider_model_enabled is True
+        assert return_usage is True
+        return ModelCallResult(
+            output=generated,
+            usage=ModelUsage(input_tokens=11, output_tokens=22, total_tokens=33),
+        )
+
+    async def fake_narrator_response(self, **kwargs):  # noqa: ANN001, ANN202
+        message = kwargs["message"]
+        return "Metered Starter Campaign" if "campaign title" in message else "Opening scene."
+
+    monkeypatch.setattr(
+        orchestrator_module.orchestrator.starter_ability_generator,
+        "generate",
+        fake_starter_generate,
+    )
+    monkeypatch.setattr(
+        orchestrator_module.ChatOrchestrator,
+        "_generate_narrator_response",
+        fake_narrator_response,
+    )
+    monkeypatch.setattr(
+        orchestrator_module.orchestrator.director_agent,
+        "propose",
+        _fake_no_action_director_propose,
+    )
+
+    response = asyncio.run(
+        orchestrator_module.orchestrator.create_campaign(
+            CampaignCreateRequest(),
+            owner_user_id=_resolved_internal_user_id(
+                TestClient(app), "provider-starter-metered"
+            ),
+        )
+    )
+
+    with session() as db:
+        row = db.conn.execute(
+            text(
+                "SELECT agent_name, success, actual_input_tokens, actual_output_tokens, "
+                "actual_total_tokens FROM model_requests WHERE campaign_id = :campaign_id "
+                "AND agent_name = :agent_name"
+            ),
+            {
+                "campaign_id": response.campaign_id,
+                "agent_name": "StarterAbilityGenerator",
+            },
+        ).mappings().one()
+
+    assert bool(row["success"]) is True
+    assert row["actual_input_tokens"] == 11
+    assert row["actual_output_tokens"] == 22
+    assert row["actual_total_tokens"] == 33
+
+
+def test_provider_backed_starter_generation_respects_project_request_limit(monkeypatch) -> None:
+    monkeypatch.setattr(settings, "AI_ENABLED", True)
+    monkeypatch.setattr(settings, "OPENAI_API_KEY", "test-key")
+    monkeypatch.setattr(settings, "MAX_DAILY_PROJECT_REQUESTS", 0)
+
+    async def fail_if_called(*args, **kwargs):  # noqa: ANN002, ANN003, ANN202
+        raise AssertionError("starter provider must not be called after project limit rejection")
+
+    monkeypatch.setattr(
+        orchestrator_module.orchestrator.starter_ability_generator,
+        "generate",
+        fail_if_called,
+    )
+
+    with pytest.raises(HTTPException, match="Daily project request limit reached"):
+        asyncio.run(
+            orchestrator_module.orchestrator.create_campaign(
+                CampaignCreateRequest(),
+                owner_user_id=_resolved_internal_user_id(
+                    TestClient(app), "provider-starter-project-limit"
+                ),
+            )
+        )
+
+
+def test_provider_backed_starter_generation_semantic_failure_is_logged_and_rolls_back(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(settings, "AI_ENABLED", True)
+    monkeypatch.setattr(settings, "OPENAI_API_KEY", "test-key")
+    generated = orchestrator_module.orchestrator.starter_ability_generator._stub_generation()
+    invalid_generation = generated.model_copy(
+        update={
+            "abilities": (
+                generated.abilities[0].model_copy(update={"ability_id": "duplicate_echo"}),
+                generated.abilities[1].model_copy(update={"ability_id": "duplicate_echo"}),
+            )
+        }
+    )
+    owner_user_id = _resolved_internal_user_id(
+        TestClient(app), "provider-starter-semantic-failure"
+    )
+
+    async def fake_starter_generate(*, provider_model_enabled, return_usage=False):  # noqa: ANN202
+        assert provider_model_enabled is True
+        assert return_usage is True
+        return ModelCallResult(
+            output=invalid_generation,
+            usage=ModelUsage(input_tokens=11, output_tokens=22, total_tokens=33),
+        )
+
+    async def fail_if_narrator_called(self, **kwargs):  # noqa: ANN001, ANN202, ARG001
+        raise AssertionError("narrator must not run after invalid starter generation")
+
+    monkeypatch.setattr(
+        orchestrator_module.orchestrator.starter_ability_generator,
+        "generate",
+        fake_starter_generate,
+    )
+    monkeypatch.setattr(
+        orchestrator_module.ChatOrchestrator,
+        "_generate_narrator_response",
+        fail_if_narrator_called,
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(
+            orchestrator_module.orchestrator.create_campaign(
+                CampaignCreateRequest(),
+                owner_user_id=owner_user_id,
+            )
+        )
+
+    assert exc_info.value.status_code == 502
+    assert exc_info.value.detail == "Starter ability service failed."
+    with session() as db:
+        campaign_count = db.conn.execute(
+            text("SELECT COUNT(*) FROM campaigns WHERE owner_user_id = :owner_user_id"),
+            {"owner_user_id": owner_user_id},
+        ).scalar_one()
+        row = db.conn.execute(
+            text(
+                "SELECT success, actual_input_tokens, cached_input_tokens, "
+                "cache_write_input_tokens, actual_output_tokens, "
+                "reasoning_output_tokens, actual_total_tokens, failure_reason "
+                "FROM model_requests "
+                "WHERE owner_user_id = :owner_user_id "
+                "AND agent_name = :agent_name"
+            ),
+            {
+                "owner_user_id": owner_user_id,
+                "agent_name": "StarterAbilityGenerator",
+            },
+        ).mappings().one()
+
+    assert campaign_count == 0
+    assert bool(row["success"]) is False
+    assert row["actual_input_tokens"] == 11
+    assert row["cached_input_tokens"] is None
+    assert row["cache_write_input_tokens"] is None
+    assert row["actual_output_tokens"] == 22
+    assert row["reasoning_output_tokens"] is None
+    assert row["actual_total_tokens"] == 33
+    assert "ids must be distinct" in row["failure_reason"]
+
+
+def test_auto_created_chat_starter_failure_keeps_audit_without_chat_side_effects(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(settings, "AI_ENABLED", True)
+    monkeypatch.setattr(settings, "OPENAI_API_KEY", "test-key")
+    generated = orchestrator_module.orchestrator.starter_ability_generator._stub_generation()
+    invalid_generation = generated.model_copy(
+        update={
+            "abilities": (
+                generated.abilities[0].model_copy(update={"minimum_points": 1}),
+                generated.abilities[1],
+            )
+        }
+    )
+    owner_user_id = _resolved_internal_user_id(
+        TestClient(app), "auto-created-starter-failure"
+    )
+    idempotency_key = str(uuid4())
+    starter_attempts = 0
+
+    async def fake_starter_generate(*, provider_model_enabled, return_usage=False):  # noqa: ANN202
+        nonlocal starter_attempts
+        assert provider_model_enabled is True
+        assert return_usage is True
+        starter_attempts += 1
+        return ModelCallResult(
+            output=invalid_generation if starter_attempts == 1 else generated,
+            usage=ModelUsage(input_tokens=11, output_tokens=22, total_tokens=33),
+        )
+
+    async def fake_parse(**kwargs):  # noqa: ANN003, ANN202
+        return ParsedAction(
+            raw_text=kwargs["message"],
+            action=ActionType.OBSERVE,
+            parameters={},
+            confidence=1,
+            parse_status="ok",
+        )
+
+    async def fake_narrator_generate(**kwargs):  # noqa: ANN003, ANN202
+        return narrator_module.NarratorAgentOutput(reply_text="The corridor waits.")
+
+    monkeypatch.setattr(
+        orchestrator_module.orchestrator.starter_ability_generator,
+        "generate",
+        fake_starter_generate,
+    )
+    monkeypatch.setattr(
+        orchestrator_module.orchestrator.action_parser_agent,
+        "parse",
+        fake_parse,
+    )
+    monkeypatch.setattr(
+        orchestrator_module.orchestrator.narrator_agent,
+        "generate",
+        fake_narrator_generate,
+    )
+    monkeypatch.setattr(
+        orchestrator_module.orchestrator.director_agent,
+        "propose",
+        _fake_no_action_director_propose,
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(
+            orchestrator_module.orchestrator.handle_chat(
+                ChatRequest(message="look around"),
+                owner_user_id=owner_user_id,
+                idempotency_key=idempotency_key,
+            )
+        )
+
+    assert exc_info.value.status_code == 502
+    with session() as db:
+        assert db.conn.execute(
+            text("SELECT COUNT(*) FROM campaigns WHERE owner_user_id = :owner_user_id"),
+            {"owner_user_id": owner_user_id},
+        ).scalar_one() == 0
+        assert db.conn.execute(
+            text(
+                "SELECT COUNT(*) FROM turns WHERE campaign_id IN "
+                "(SELECT campaign_id FROM campaigns WHERE owner_user_id = :owner_user_id)"
+            ),
+            {"owner_user_id": owner_user_id},
+        ).scalar_one() == 0
+        assert db.conn.execute(
+            text(
+                "SELECT COUNT(*) FROM game_events WHERE campaign_id IN "
+                "(SELECT campaign_id FROM campaigns WHERE owner_user_id = :owner_user_id)"
+            ),
+            {"owner_user_id": owner_user_id},
+        ).scalar_one() == 0
+        row = db.conn.execute(
+            text(
+                "SELECT success, actual_input_tokens, cached_input_tokens, "
+                "cache_write_input_tokens, actual_output_tokens, "
+                "reasoning_output_tokens, actual_total_tokens, failure_reason "
+                "FROM model_requests "
+                "WHERE owner_user_id = :owner_user_id "
+                "AND agent_name = 'StarterAbilityGenerator'"
+            ),
+            {"owner_user_id": owner_user_id},
+        ).mappings().one()
+        assert db.get_chat_request_idempotency(owner_user_id, idempotency_key) is None
+    assert bool(row["success"]) is False
+    assert row["actual_input_tokens"] == 11
+    assert row["cached_input_tokens"] is None
+    assert row["cache_write_input_tokens"] is None
+    assert row["actual_output_tokens"] == 22
+    assert row["reasoning_output_tokens"] is None
+    assert row["actual_total_tokens"] == 33
+    assert "baseline" in row["failure_reason"]
+
+    retry = asyncio.run(
+        orchestrator_module.orchestrator.handle_chat(
+            ChatRequest(message="look around"),
+            owner_user_id=owner_user_id,
+            idempotency_key=idempotency_key,
+        )
+    )
+    assert retry.campaign_id
+    assert starter_attempts == 2
+
+
+def test_auto_created_chat_idempotency_claim_prevents_duplicate_starter_generation(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(settings, "AI_ENABLED", True)
+    monkeypatch.setattr(settings, "OPENAI_API_KEY", "test-key")
+    generated = orchestrator_module.orchestrator.starter_ability_generator._stub_generation()
+    owner_user_id = _resolved_internal_user_id(
+        TestClient(app), "auto-created-idempotency-starter-claim"
+    )
+    idempotency_key = str(uuid4())
+    starter_calls = 0
+    parser_calls = 0
+
+    async def fake_starter_generate(*, provider_model_enabled, return_usage=False):  # noqa: ANN202
+        nonlocal starter_calls
+        assert provider_model_enabled is True
+        assert return_usage is True
+        starter_calls += 1
+        await asyncio.sleep(0)
+        return ModelCallResult(output=generated, usage=None)
+
+    async def fake_parse(**kwargs):  # noqa: ANN003, ANN202
+        nonlocal parser_calls
+        parser_calls += 1
+        return ParsedAction(
+            raw_text=kwargs["message"],
+            action=ActionType.OBSERVE,
+            parameters={},
+            confidence=1,
+            parse_status="ok",
+        )
+
+    async def fake_narrator_generate(**kwargs):  # noqa: ANN003, ANN202
+        return narrator_module.NarratorAgentOutput(reply_text="The corridor waits.")
+
+    monkeypatch.setattr(
+        orchestrator_module.orchestrator.starter_ability_generator,
+        "generate",
+        fake_starter_generate,
+    )
+    monkeypatch.setattr(
+        orchestrator_module.orchestrator.action_parser_agent,
+        "parse",
+        fake_parse,
+    )
+    monkeypatch.setattr(
+        orchestrator_module.orchestrator.narrator_agent,
+        "generate",
+        fake_narrator_generate,
+    )
+    monkeypatch.setattr(
+        orchestrator_module.orchestrator.director_agent,
+        "propose",
+        _fake_no_action_director_propose,
+    )
+
+    async def run_concurrent_requests() -> tuple[object, object]:
+        return await asyncio.gather(
+            orchestrator_module.orchestrator.handle_chat(
+                ChatRequest(message="look around"),
+                owner_user_id=owner_user_id,
+                idempotency_key=idempotency_key,
+            ),
+            orchestrator_module.orchestrator.handle_chat(
+                ChatRequest(message="look around"),
+                owner_user_id=owner_user_id,
+                idempotency_key=idempotency_key,
+            ),
+            return_exceptions=True,
+        )
+
+    results = asyncio.run(run_concurrent_requests())
+
+    assert starter_calls == 1
+    completed = [result for result in results if isinstance(result, ChatResponse)]
+    rejected = [
+        result
+        for result in results
+        if isinstance(result, HTTPException) and result.status_code == 503
+    ]
+    assert len(completed) == 1
+    assert len(rejected) == 1
+    assert parser_calls == 1
+
+    replay = asyncio.run(
+        orchestrator_module.orchestrator.handle_chat(
+            ChatRequest(message="look around"),
+            owner_user_id=owner_user_id,
+            idempotency_key=idempotency_key,
+        )
+    )
+    assert replay == completed[0]
+    assert starter_calls == 1
+    assert parser_calls == 1
+
+
+def test_auto_created_chat_rechecks_parser_budget_after_starter_generation(monkeypatch) -> None:
+    monkeypatch.setattr(settings, "AI_ENABLED", True)
+    monkeypatch.setattr(settings, "OPENAI_API_KEY", "test-key")
+    monkeypatch.setattr(settings, "MAX_DAILY_PROJECT_REQUESTS", 1)
+    generated = orchestrator_module.orchestrator.starter_ability_generator._stub_generation()
+    owner_user_id = _resolved_internal_user_id(
+        TestClient(app), "auto-created-parser-refreshed-budget"
+    )
+    idempotency_key = str(uuid4())
+
+    async def fake_starter_generate(*, provider_model_enabled, return_usage=False):  # noqa: ANN202
+        assert provider_model_enabled is True
+        assert return_usage is True
+        return ModelCallResult(
+            output=generated,
+            usage=ModelUsage(input_tokens=11, output_tokens=22, total_tokens=33),
+        )
+
+    async def fail_if_parser_executes(**kwargs):  # noqa: ANN003, ANN202
+        raise AssertionError("parser provider must not execute after the refreshed budget check")
+
+    monkeypatch.setattr(
+        orchestrator_module.orchestrator.starter_ability_generator,
+        "generate",
+        fake_starter_generate,
+    )
+    monkeypatch.setattr(
+        orchestrator_module.orchestrator.action_parser_agent,
+        "parse",
+        fail_if_parser_executes,
+    )
+
+    with pytest.raises(HTTPException, match="Daily project request limit reached"):
+        asyncio.run(
+            orchestrator_module.orchestrator.handle_chat(
+                ChatRequest(message="look around"),
+                owner_user_id=owner_user_id,
+                idempotency_key=idempotency_key,
+            )
+        )
+
+    with session() as db:
+        assert db.conn.execute(
+            text("SELECT COUNT(*) FROM campaigns WHERE owner_user_id = :owner_user_id"),
+            {"owner_user_id": owner_user_id},
+        ).scalar_one() == 0
+        assert db.conn.execute(
+            text("SELECT COUNT(*) FROM turns"),
+        ).scalar_one() == 0
+        assert db.conn.execute(
+            text("SELECT COUNT(*) FROM game_events"),
+        ).scalar_one() == 0
+        row = db.conn.execute(
+            text(
+                "SELECT success, actual_input_tokens, actual_output_tokens, "
+                "actual_total_tokens FROM model_requests "
+                "WHERE owner_user_id = :owner_user_id "
+                "AND agent_name = 'StarterAbilityGenerator'"
+            ),
+            {"owner_user_id": owner_user_id},
+        ).mappings().one()
+        assert db.get_chat_request_idempotency(owner_user_id, idempotency_key) is None
+
+    assert bool(row["success"]) is True
+    assert row["actual_input_tokens"] == 11
+    assert row["actual_output_tokens"] == 22
+    assert row["actual_total_tokens"] == 33
 
 
 def test_ai_disabled_still_runs_parser_and_tools() -> None:

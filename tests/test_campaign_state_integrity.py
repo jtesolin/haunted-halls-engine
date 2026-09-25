@@ -10,9 +10,10 @@ from fastapi.testclient import TestClient
 from sqlalchemy import text
 
 from app.api.dependencies import INTERNAL_USER_ID_HEADER_NAME
+from app.agents.starter_abilities import StarterAbilityGenerator
 from app.core.config import settings
 from app.db.session import session
-from app.game.campaign_state import InvalidCampaignStateError
+from app.game.campaign_state import InvalidCampaignStateError, build_fresh_campaign_state
 from app.main import app
 from app.schemas.chat import ActionType, ParsedAction
 from app.schemas.internal_auth import CANONICAL_GOOGLE_ISSUER
@@ -293,6 +294,40 @@ def test_chat_fails_with_500_on_corrupted_state_even_when_parse_status_ambiguous
     assert turns_after == turns_before
     assert events_after == events_before
     assert state_after == "{not valid json at all"
+
+
+def test_chat_fails_with_500_on_invalid_persisted_generated_abilities() -> None:
+    settings.INTERNAL_ENGINE_SERVICE_TOKEN = "test-token"
+    settings.AI_ENABLED = False
+    settings.OPENAI_API_KEY = None
+    client = TestClient(app)
+    headers = _user_scoped_headers(client, "corrupt-generated-abilities-user")
+    state = build_fresh_campaign_state()
+    generated = StarterAbilityGenerator()._stub_generation()
+    state["player"]["generated_abilities"] = [
+        ability.model_dump(mode="json") for ability in generated.abilities
+    ]
+    state["player"]["generated_abilities"][0]["mechanics"]["bypasses"] = ["darkness"]
+
+    with session() as db:
+        db.create_campaign(
+            campaign_id="campaign_corrupt_generated_abilities",
+            owner_user_id=headers[INTERNAL_USER_ID_HEADER_NAME],
+            name="Corrupt generated abilities",
+            state=state,
+        )
+
+    response = client.post(
+        "/api/chat",
+        json={
+            "message": "use echo sense",
+            "campaign_id": "campaign_corrupt_generated_abilities",
+        },
+        headers=headers,
+    )
+
+    assert response.status_code == 500
+    assert response.json()["detail"] == "Campaign state could not be processed."
 
 
 def test_chat_ownership_unaffected_by_corruption_handling() -> None:

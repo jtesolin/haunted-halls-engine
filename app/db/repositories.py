@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from datetime import datetime
 from datetime import timezone
@@ -91,6 +92,24 @@ class Repository:
         treat a visible ``in_progress`` row as license to execute unless
         ``acquired`` is True.
         """
+        if self.conn.dialect.name == "postgresql":
+            lock_key = f"{owner_user_id}:{idempotency_key}".encode("utf-8")
+            lock_id = int.from_bytes(
+                hashlib.blake2b(lock_key, digest_size=8).digest(),
+                byteorder="big",
+                signed=True,
+            )
+            lock_acquired = self.conn.execute(
+                select(func.pg_try_advisory_xact_lock(lock_id))
+            ).scalar_one()
+            if not lock_acquired:
+                return ChatRequestIdempotencyClaim(
+                    acquired=False,
+                    row=self.get_chat_request_idempotency(
+                        owner_user_id, idempotency_key
+                    ),
+                )
+
         acquired = False
         try:
             with self.conn.begin_nested():
@@ -156,6 +175,25 @@ class Repository:
             raise ChatRequestIdempotencyOwnershipError(
                 "chat request idempotency claim was not owned in_progress at completion time"
             )
+
+    def release_chat_request_idempotency(
+        self,
+        *,
+        owner_user_id: str,
+        idempotency_key: str,
+        request_fingerprint: str,
+    ) -> None:
+        """Release an owned claim when execution fails before completion."""
+        self.conn.execute(
+            delete(chat_request_idempotency).where(
+                and_(
+                    chat_request_idempotency.c.owner_user_id == owner_user_id,
+                    chat_request_idempotency.c.idempotency_key == idempotency_key,
+                    chat_request_idempotency.c.request_fingerprint == request_fingerprint,
+                    chat_request_idempotency.c.status == "in_progress",
+                )
+            )
+        )
 
     def _row_to_internal_user(self, row) -> InternalUserDBModel:
         return InternalUserDBModel(
