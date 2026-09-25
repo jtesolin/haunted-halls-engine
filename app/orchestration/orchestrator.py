@@ -1133,7 +1133,7 @@ class ChatOrchestrator:
             starter_abilities = validate_starter_ability_definitions(
                 generated.abilities
             )
-            return StarterAbilityGeneration(abilities=starter_abilities)
+            return StarterAbilityGeneration(abilities=list(starter_abilities))
 
         model = ModelPolicy.narrator_model()
         estimated_input_tokens = (
@@ -1179,7 +1179,7 @@ class ChatOrchestrator:
                 latency_ms=latency_ms,
                 success=True,
             )
-            return StarterAbilityGeneration(abilities=starter_abilities)
+            return StarterAbilityGeneration(abilities=list(starter_abilities))
         except Exception as exc:
             latency_ms = int((time.perf_counter() - start_time) * 1000)
             logger.error(
