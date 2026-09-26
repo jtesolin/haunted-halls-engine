@@ -68,7 +68,7 @@ class GeneratedAbilityDefinition(BaseModel):
 class StarterAbilityGeneration(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    abilities: tuple[GeneratedAbilityDefinition, GeneratedAbilityDefinition]
+    abilities: list[GeneratedAbilityDefinition] = Field(min_length=2, max_length=2)
 
 
 class AbilityGameplayStatus(StrEnum):

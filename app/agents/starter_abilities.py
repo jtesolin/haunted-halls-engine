@@ -85,7 +85,7 @@ class StarterAbilityGenerator(BaseAgent):
 
     def _stub_generation(self) -> StarterAbilityGeneration:
         return StarterAbilityGeneration(
-            abilities=(
+            abilities=[
                 GeneratedAbilityDefinition(
                     ability_id="echo_sense",
                     display_name="Echo Sense",
@@ -118,5 +118,5 @@ class StarterAbilityGenerator(BaseAgent):
                     track=ProgressionTrackId.OCCULT,
                     minimum_points=0,
                 ),
-            )
+            ]
         )

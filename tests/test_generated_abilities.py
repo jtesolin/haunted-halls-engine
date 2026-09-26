@@ -18,7 +18,11 @@ from app.game.character_progression import ensure_character_progression_state, u
 from app.schemas.abilities import AbilityCheckOutcome, AbilityCheckResult
 from app.schemas.character_progression import ProgressionTrackId
 from app.schemas.chat import ActionType, ParsedAction
-from app.schemas.generated_abilities import AbilityGameplayResult, AbilityGameplayStatus
+from app.schemas.generated_abilities import (
+    AbilityGameplayResult,
+    AbilityGameplayStatus,
+    StarterAbilityGeneration,
+)
 from app.services import tool_executor as tool_executor_module
 from app.services.tool_executor import ToolExecutor
 
@@ -33,6 +37,16 @@ def _state_with_starters() -> dict:
     for ability in generated.abilities:
         assert unlock_ability(state, ability.ability_id).success
     return state
+
+
+def test_starter_ability_provider_schema_uses_bounded_homogeneous_array() -> None:
+    abilities_schema = StarterAbilityGeneration.model_json_schema()["properties"]["abilities"]
+
+    assert abilities_schema["type"] == "array"
+    assert "items" in abilities_schema
+    assert abilities_schema["minItems"] == 2
+    assert abilities_schema["maxItems"] == 2
+    assert "prefixItems" not in abilities_schema
 
 
 def test_provider_disabled_starters_are_valid_distinct_and_available() -> None:
