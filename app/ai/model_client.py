@@ -30,6 +30,8 @@ class ModelUsage:
 class ModelCallResult(Generic[ModelOutputT]):
     output: ModelOutputT | None
     usage: ModelUsage | None = None
+    status: str | None = None
+    incomplete_details_reason: str | None = None
 
 
 class ModelClient:
@@ -174,14 +176,33 @@ class ModelClient:
         )
 
         parsed = getattr(response, "output_parsed", None)
+        status = getattr(response, "status", None)
+        incomplete_details = getattr(response, "incomplete_details", None)
+        incomplete_details_reason = getattr(incomplete_details, "reason", None)
+        response_status = status if isinstance(status, str) else None
+        response_incomplete_reason = (
+            incomplete_details_reason
+            if isinstance(incomplete_details_reason, str)
+            else None
+        )
         if parsed is None:
-            result = ModelCallResult(output=None, usage=self._extract_usage(response))
+            result = ModelCallResult(
+                output=None,
+                usage=self._extract_usage(response),
+                status=response_status,
+                incomplete_details_reason=response_incomplete_reason,
+            )
             return result if return_usage else None
         if isinstance(parsed, response_model):
             payload = parsed
         else:
             payload = response_model.model_validate(parsed)
-        result = ModelCallResult(output=payload, usage=self._extract_usage(response))
+        result = ModelCallResult(
+            output=payload,
+            usage=self._extract_usage(response),
+            status=response_status,
+            incomplete_details_reason=response_incomplete_reason,
+        )
         return result if return_usage else payload
 
     def _is_incomplete_max_tokens(self, response: Any) -> bool:

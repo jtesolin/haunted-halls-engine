@@ -79,6 +79,23 @@ class _ParsedResponse:
         self.output_parsed = output_parsed
 
 
+class _StructuredIncompleteResponse:
+    def __init__(self) -> None:
+        self.output_parsed = None
+        self.status = "incomplete"
+        self.incomplete_details = _IncompleteDetails("max_output_tokens")
+        self.usage = SimpleNamespace(
+            input_tokens=140,
+            input_tokens_details=SimpleNamespace(
+                cached_tokens=17,
+                cache_write_tokens=9,
+            ),
+            output_tokens=70,
+            output_tokens_details=SimpleNamespace(reasoning_tokens=48),
+            total_tokens=210,
+        )
+
+
 def test_generate_text_uses_responses_create_and_maps_options(monkeypatch) -> None:
     model_client = ModelClient()
     fake_client = _FakeClient(_ResponseWithText("Model reply"))
@@ -256,3 +273,36 @@ def test_generate_structured_returns_none_when_output_not_parsed(monkeypatch) ->
     )
 
     assert result is None
+    assert fake_client.responses.call_count == 1
+
+
+def test_generate_structured_preserves_incomplete_response_metadata_and_usage(
+    monkeypatch,
+) -> None:
+    model_client = ModelClient()
+    fake_client = _FakeClient(_StructuredIncompleteResponse())
+    monkeypatch.setattr(model_client, "_get_client", lambda: fake_client)
+
+    result = asyncio.run(
+        model_client.generate_structured(
+            messages=[{"role": "user", "content": "hello"}],
+            response_model=_ActionPayload,
+            reasoning_effort="minimal",
+            model="gpt-test",
+            max_output_tokens=800,
+            timeout=7,
+            return_usage=True,
+        )
+    )
+
+    assert result.output is None
+    assert result.status == "incomplete"
+    assert result.incomplete_details_reason == "max_output_tokens"
+    assert result.usage == ModelUsage(
+        input_tokens=140,
+        cached_input_tokens=17,
+        cache_write_input_tokens=9,
+        output_tokens=70,
+        reasoning_output_tokens=48,
+        total_tokens=210,
+    )

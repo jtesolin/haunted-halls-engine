@@ -11,6 +11,7 @@ class ModelPolicy:
     DIRECTOR: Literal["gpt-5.4-nano"] = "gpt-5.4-nano"
 
     NARRATOR_REASONING_EFFORT: ReasoningEffort = "medium"
+    STARTER_ABILITY_REASONING_EFFORT: ReasoningEffort = "minimal"
     ACTION_PARSER_REASONING_EFFORT: ReasoningEffort = "minimal"
     SUMMARIZER_REASONING_EFFORT: ReasoningEffort = "minimal"
     MEMORY_REFLECTION_REASONING_EFFORT: ReasoningEffort = "none"
@@ -39,6 +40,10 @@ class ModelPolicy:
     @classmethod
     def narrator_reasoning_effort(cls) -> ReasoningEffort:
         return cls.NARRATOR_REASONING_EFFORT
+
+    @classmethod
+    def starter_ability_reasoning_effort(cls) -> ReasoningEffort:
+        return cls.STARTER_ABILITY_REASONING_EFFORT
 
     @classmethod
     def action_parser_reasoning_effort(cls) -> ReasoningEffort:
