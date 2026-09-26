@@ -1149,14 +1149,31 @@ class ChatOrchestrator:
 
         start_time = time.perf_counter()
         usage = None
+        response_status = None
+        incomplete_details_reason = None
         try:
             generated = await self.starter_ability_generator.generate(
                 provider_model_enabled=True,
                 return_usage=True,
             )
-            if not isinstance(generated, ModelCallResult) or generated.output is None:
+            if not isinstance(generated, ModelCallResult):
                 raise ValueError("Starter ability generator did not return valid structured output.")
             usage = generated.usage
+            response_status = generated.status
+            incomplete_details_reason = generated.incomplete_details_reason
+            if generated.output is None:
+                response_details = []
+                if response_status is not None:
+                    response_details.append(f"status={response_status}")
+                if incomplete_details_reason is not None:
+                    response_details.append(
+                        f"incomplete_details.reason={incomplete_details_reason}"
+                    )
+                details = f" ({', '.join(response_details)})" if response_details else ""
+                raise ValueError(
+                    "Starter ability provider returned no structured output"
+                    f"{details}."
+                )
             starter_abilities = validate_starter_ability_definitions(
                 generated.output.abilities
             )

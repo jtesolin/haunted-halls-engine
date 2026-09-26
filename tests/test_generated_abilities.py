@@ -6,8 +6,10 @@ import json
 
 import pytest
 
+from app.agents import starter_abilities as starter_abilities_module
 from app.agents.action_parser import ActionParserAgent
 from app.agents.starter_abilities import StarterAbilityGenerator
+from app.ai.model_client import ModelCallResult
 from app.game.abilities import (
     evaluate_ability_availability,
     resolve_gameplay_ability_check,
@@ -15,6 +17,8 @@ from app.game.abilities import (
 )
 from app.game.campaign_state import InvalidCampaignStateError, build_fresh_campaign_state
 from app.game.character_progression import ensure_character_progression_state, unlock_ability
+from app.guardrails.model_policy import ModelPolicy
+from app.guardrails.token_budget import TokenBudget
 from app.schemas.abilities import AbilityCheckOutcome, AbilityCheckResult
 from app.schemas.character_progression import ProgressionTrackId
 from app.schemas.chat import ActionType, ParsedAction
@@ -25,6 +29,8 @@ from app.schemas.generated_abilities import (
 )
 from app.services import tool_executor as tool_executor_module
 from app.services.tool_executor import ToolExecutor
+
+_STARTER_GENERATE = StarterAbilityGenerator.generate
 
 
 def _state_with_starters() -> dict:
@@ -61,6 +67,86 @@ def test_provider_disabled_starters_are_valid_distinct_and_available() -> None:
     assert len({ability.ability_id for ability in abilities}) == 2
     assert all(evaluate_ability_availability(state, ability.ability_id).available for ability in abilities)
     assert "keen_eye" not in state["player"]["progression"]["unlocked_abilities"]
+
+
+def test_starter_generation_uses_dedicated_bounded_reasoning_policy(monkeypatch) -> None:
+    monkeypatch.setattr(StarterAbilityGenerator, "generate", _STARTER_GENERATE)
+    generation = StarterAbilityGenerator()._stub_generation()
+    captured: dict[str, object] = {}
+
+    async def fake_generate_structured(**kwargs):  # noqa: ANN003, ANN202
+        captured.update(kwargs)
+        return ModelCallResult(output=generation)
+
+    monkeypatch.setattr(
+        starter_abilities_module.model_client,
+        "generate_structured",
+        fake_generate_structured,
+    )
+
+    result = asyncio.run(
+        StarterAbilityGenerator().generate(
+            provider_model_enabled=True,
+            return_usage=True,
+        )
+    )
+
+    assert result.output == generation
+    assert captured["model"] == ModelPolicy.narrator_model()
+    assert captured["reasoning_effort"] == "minimal"
+    assert captured["reasoning_effort"] == ModelPolicy.starter_ability_reasoning_effort()
+    assert captured["reasoning_effort"] != ModelPolicy.narrator_reasoning_effort()
+    assert captured["max_output_tokens"] == 800
+    assert captured["max_output_tokens"] == TokenBudget.starter_ability_max_output_tokens()
+
+
+def test_starter_generator_preserves_missing_output_when_usage_is_requested(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(StarterAbilityGenerator, "generate", _STARTER_GENERATE)
+    missing_output = ModelCallResult(
+        output=None,
+        status="incomplete",
+        incomplete_details_reason="max_output_tokens",
+    )
+
+    async def fake_generate_structured(**kwargs):  # noqa: ANN003, ANN202
+        return missing_output
+
+    monkeypatch.setattr(
+        starter_abilities_module.model_client,
+        "generate_structured",
+        fake_generate_structured,
+    )
+
+    result = asyncio.run(
+        StarterAbilityGenerator().generate(
+            provider_model_enabled=True,
+            return_usage=True,
+        )
+    )
+
+    assert result is missing_output
+
+
+def test_starter_generator_fails_explicitly_without_usage_when_output_is_missing(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(StarterAbilityGenerator, "generate", _STARTER_GENERATE)
+
+    async def fake_generate_structured(**kwargs):  # noqa: ANN003, ANN202
+        return None
+
+    monkeypatch.setattr(
+        starter_abilities_module.model_client,
+        "generate_structured",
+        fake_generate_structured,
+    )
+
+    with pytest.raises(ValueError, match="did not return valid structured output"):
+        asyncio.run(
+            StarterAbilityGenerator().generate(provider_model_enabled=True)
+        )
 
 
 def test_invalid_generated_content_and_built_in_collision_are_rejected() -> None:

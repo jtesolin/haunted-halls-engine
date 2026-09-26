@@ -69,13 +69,15 @@ class StarterAbilityGenerator(BaseAgent):
             response_model=StarterAbilityGeneration,
             model=ModelPolicy.narrator_model(),
             max_output_tokens=TokenBudget.starter_ability_max_output_tokens(),
-            reasoning_effort=ModelPolicy.narrator_reasoning_effort(),
+            reasoning_effort=ModelPolicy.starter_ability_reasoning_effort(),
             timeout=20,
             return_usage=return_usage,
         )
         if return_usage:
             if not isinstance(result, ModelCallResult):
                 raise ValueError("Starter ability generator did not return model usage.")
+            if result.output is None:
+                return result
             output = result.output
         else:
             output = result.output if isinstance(result, ModelCallResult) else result

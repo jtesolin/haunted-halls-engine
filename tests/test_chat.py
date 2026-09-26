@@ -1500,6 +1500,110 @@ def test_provider_backed_starter_generation_semantic_failure_is_logged_and_rolls
     assert "ids must be distinct" in row["failure_reason"]
 
 
+def test_incomplete_starter_response_fails_campaign_without_partial_state(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(settings, "AI_ENABLED", True)
+    monkeypatch.setattr(settings, "OPENAI_API_KEY", "test-key")
+    owner_user_id = _resolved_internal_user_id(
+        TestClient(app), "provider-starter-incomplete"
+    )
+    usage = ModelUsage(
+        input_tokens=140,
+        cached_input_tokens=17,
+        cache_write_input_tokens=9,
+        output_tokens=70,
+        reasoning_output_tokens=48,
+        total_tokens=210,
+    )
+    logged_errors: list[tuple[tuple[object, ...], dict[str, object]]] = []
+
+    def capture_error(*args, **kwargs) -> None:  # noqa: ANN002, ANN003
+        logged_errors.append((args, kwargs))
+
+    async def fake_starter_generate(*, provider_model_enabled, return_usage=False):  # noqa: ANN202
+        assert provider_model_enabled is True
+        assert return_usage is True
+        return ModelCallResult(
+            output=None,
+            usage=usage,
+            status="incomplete",
+            incomplete_details_reason="max_output_tokens",
+        )
+
+    async def fail_if_narrator_called(self, **kwargs):  # noqa: ANN001, ANN202, ARG001
+        raise AssertionError("narrator must not run after incomplete starter generation")
+
+    monkeypatch.setattr(
+        orchestrator_module.orchestrator.starter_ability_generator,
+        "generate",
+        fake_starter_generate,
+    )
+    monkeypatch.setattr(orchestrator_module.logger, "error", capture_error)
+    monkeypatch.setattr(
+        orchestrator_module.ChatOrchestrator,
+        "_generate_narrator_response",
+        fail_if_narrator_called,
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(
+            orchestrator_module.orchestrator.create_campaign(
+                CampaignCreateRequest(),
+                owner_user_id=owner_user_id,
+            )
+        )
+
+    assert exc_info.value.status_code == 502
+    assert exc_info.value.detail == "Starter ability service failed."
+    assert len(logged_errors) == 1
+    assert "starter_ability_provider_failed" in str(logged_errors[0][0][0])
+    assert "incomplete_details.reason=max_output_tokens" in str(
+        logged_errors[0][0][-1]
+    )
+    with session() as db:
+        assert db.conn.execute(
+            text("SELECT COUNT(*) FROM campaigns WHERE owner_user_id = :owner_user_id"),
+            {"owner_user_id": owner_user_id},
+        ).scalar_one() == 0
+        assert db.conn.execute(
+            text(
+                "SELECT COUNT(*) FROM turns WHERE campaign_id IN "
+                "(SELECT campaign_id FROM campaigns WHERE owner_user_id = :owner_user_id)"
+            ),
+            {"owner_user_id": owner_user_id},
+        ).scalar_one() == 0
+        assert db.conn.execute(
+            text(
+                "SELECT COUNT(*) FROM game_events WHERE campaign_id IN "
+                "(SELECT campaign_id FROM campaigns WHERE owner_user_id = :owner_user_id)"
+            ),
+            {"owner_user_id": owner_user_id},
+        ).scalar_one() == 0
+        rows = db.conn.execute(
+            text(
+                "SELECT success, actual_input_tokens, cached_input_tokens, "
+                "cache_write_input_tokens, actual_output_tokens, "
+                "reasoning_output_tokens, actual_total_tokens, failure_reason "
+                "FROM model_requests WHERE owner_user_id = :owner_user_id "
+                "AND agent_name = 'StarterAbilityGenerator'"
+            ),
+            {"owner_user_id": owner_user_id},
+        ).mappings().all()
+
+    assert len(rows) == 1
+    row = rows[0]
+    assert bool(row["success"]) is False
+    assert row["actual_input_tokens"] == 140
+    assert row["cached_input_tokens"] == 17
+    assert row["cache_write_input_tokens"] == 9
+    assert row["actual_output_tokens"] == 70
+    assert row["reasoning_output_tokens"] == 48
+    assert row["actual_total_tokens"] == 210
+    assert "status=incomplete" in row["failure_reason"]
+    assert "incomplete_details.reason=max_output_tokens" in row["failure_reason"]
+
+
 def test_auto_created_chat_starter_failure_keeps_audit_without_chat_side_effects(
     monkeypatch,
 ) -> None:
