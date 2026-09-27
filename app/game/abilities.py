@@ -42,6 +42,17 @@ class AbilityDefinition:
     minimum_points: int
 
 
+@dataclass(frozen=True)
+class OwnedAbilityProjection:
+    """Player-visible ability details derived from authoritative ownership state."""
+
+    ability_id: str
+    display_name: str
+    description: str
+    available: bool
+    availability_reason: str | None
+
+
 def generated_ability_definitions(state: dict[str, Any]) -> tuple[GeneratedAbilityDefinition, ...]:
     """Read persisted generated definitions without repairing legacy state.
 
@@ -297,6 +308,37 @@ def evaluate_ability_availability(
     )
 
 
+def project_owned_abilities(state: dict[str, Any]) -> tuple[OwnedAbilityProjection, ...]:
+    """Project canonical, owned abilities and their evaluated availability.
+
+    Built-in and persisted generated definitions share the same ownership and
+    availability authority. Invalid persisted generated definitions are
+    intentionally allowed to raise through the campaign-state integrity
+    boundary.
+    """
+    definitions = (*VALIDATED_ABILITY_DEFINITIONS, *generated_ability_definitions(state))
+    projections: list[OwnedAbilityProjection] = []
+    for definition in definitions:
+        availability = evaluate_ability_availability(state, definition.ability_id)
+        if not availability.owned:
+            continue
+        description = (
+            definition.short_description
+            if isinstance(definition, AbilityDefinition)
+            else definition.description
+        )
+        projections.append(
+            OwnedAbilityProjection(
+                ability_id=definition.ability_id,
+                display_name=definition.display_name,
+                description=description,
+                available=availability.available,
+                availability_reason=availability.reason,
+            )
+        )
+    return tuple(projections)
+
+
 def resolve_ability_check(
     state: dict[str, Any], ability_id: str, difficulty: int
 ) -> AbilityCheckResult:
@@ -486,6 +528,8 @@ __all__ = [
     "get_ability_definition",
     "validate_ability_definitions",
     "evaluate_ability_availability",
+    "OwnedAbilityProjection",
+    "project_owned_abilities",
     "resolve_ability_check",
     "generated_ability_definitions",
     "validate_generated_ability_definition",

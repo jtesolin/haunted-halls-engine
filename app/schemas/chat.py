@@ -112,6 +112,16 @@ class NarratorRoom(BaseModel):
     description: str | None = None
 
 
+class NarratorAbility(BaseModel):
+    """Player-visible definition and current availability of an owned ability."""
+
+    ability_id: str
+    display_name: str
+    description: str
+    available: bool
+    availability_reason: str | None = None
+
+
 class NarratorSceneContext(BaseModel):
     """Deterministic, narrator-facing projection of the player-observable current scene."""
 
@@ -120,6 +130,7 @@ class NarratorSceneContext(BaseModel):
     nearby_items: list[NarratorItem] = Field(default_factory=list)
     inventory_items: list[NarratorItem] = Field(default_factory=list)
     nearby_npcs: list[NearbyNPC] = Field(default_factory=list)
+    abilities: list[NarratorAbility] = Field(default_factory=list, max_length=6)
 
 
 class ToolExecutionResult(BaseModel):

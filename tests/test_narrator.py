@@ -14,6 +14,7 @@ from app.ai.prompts import narrator_prompt
 from app.schemas.chat import (
     ActionType,
     NarratorItem,
+    NarratorAbility,
     NarratorRoom,
     NarratorSceneContext,
     NearbyNPC,
@@ -88,6 +89,49 @@ def test_narrator_receives_authoritative_tool_result(monkeypatch) -> None:
     assert '"current_room_name": "Grand Corridor"' in tool_message["content"]
     assert '"id": "library_ghost"' in tool_message["content"]
     assert "NPC presence, location, status, and disposition are authoritative game state." in captured_messages[0]["content"]
+
+
+def test_narrator_request_includes_authoritative_owned_abilities(monkeypatch) -> None:
+    captured_messages = []
+
+    async def fake_generate_text(*, messages, **kwargs) -> str:  # noqa: ANN202, ARG001
+        captured_messages.extend(messages)
+        return "You have Keen Eye."
+
+    monkeypatch.setattr("app.agents.narrator.model_client.generate_text", fake_generate_text)
+    asyncio.run(
+        NarratorAgent().generate(
+            payload=NarratorAgentInput(
+                player_message="What are my abilities?",
+                scene_context=NarratorSceneContext(
+                    abilities=[
+                        NarratorAbility(
+                            ability_id="keen_eye",
+                            display_name="Keen Eye",
+                            description="notice subtle environmental evidence",
+                            available=True,
+                        )
+                    ]
+                ),
+            )
+        )
+    )
+
+    scene_message = next(
+        message for message in captured_messages if message["content"].startswith("Current scene")
+    )
+    assert '"ability_id": "keen_eye"' in scene_message["content"]
+    assert '"display_name": "Keen Eye"' in scene_message["content"]
+    assert '"available": true' in scene_message["content"]
+    assert "notice subtle environmental evidence" in scene_message["content"]
+
+
+def test_narrator_prompt_allows_direct_ability_answers_without_inventing_state() -> None:
+    assert "When the player directly asks about current character information" in narrator_prompt
+    assert "List only abilities included there" in narrator_prompt
+    assert "Do not mention payloads, schemas, or implementation details" in narrator_prompt
+    assert "never expose locked or unowned abilities" in narrator_prompt
+    assert "ability_result` is authoritative for the outcome of an attempted ability use" in narrator_prompt
 
 
 def test_narrator_receives_narrow_authoritative_reveal(monkeypatch) -> None:
