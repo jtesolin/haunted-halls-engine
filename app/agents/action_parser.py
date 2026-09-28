@@ -11,13 +11,8 @@ from pydantic import BaseModel, Field
 from app.agents.base import BaseAgent
 from app.ai.model_client import ModelCallResult, model_client
 from app.ai.prompts import action_parser_prompt
+from app.game.abilities import project_owned_abilities
 from app.game.items import ensure_items_state, inventory_item_ids, room_item_ids
-from app.game.abilities import (
-    AbilityDefinition,
-    evaluate_ability_availability,
-    generated_ability_definitions,
-    get_ability_definition,
-)
 from app.game.npcs import ensure_npcs_state, nearby_npc_ids_for_room, parser_npc_projection
 from app.game.world import DEFAULT_WORLD
 from app.guardrails.model_policy import ModelPolicy
@@ -401,29 +396,16 @@ class ActionParserAgent(BaseAgent):
         nearby_objects = room_item_ids(items, location) if isinstance(location, str) else []
 
         status_flags = self._dict_value(state, "status")
-        abilities: list[dict[str, str | bool]] = []
-        built_ins = (
-            get_ability_definition(ability_id)
-            for ability_id in ("keen_eye", "steady_nerves", "read_the_room", "occult_insight")
-        )
-        for definition in (*built_ins, *generated_ability_definitions(state)):
-            if definition is None:
-                continue
-            availability = evaluate_ability_availability(state, definition.ability_id)
-            if availability.available:
-                description = (
-                    definition.short_description
-                    if isinstance(definition, AbilityDefinition)
-                    else definition.description
-                )
-                abilities.append(
-                    {
-                        "ability_id": definition.ability_id,
-                        "name": definition.display_name,
-                        "description": description,
-                        "available": True,
-                    }
-                )
+        abilities = [
+            {
+                "ability_id": ability.ability_id,
+                "name": ability.display_name,
+                "description": ability.description,
+                "available": True,
+            }
+            for ability in project_owned_abilities(state)
+            if ability.available
+        ]
         return ParserContext(
             location=location,
             current_room_id=current_room_id,

@@ -14,9 +14,10 @@ from app.game.items import (
     inventory_narrator_items,
     nearby_narrator_items_for_room,
 )
+from app.game.abilities import project_owned_abilities
 from app.game.npcs import ensure_npcs_state, nearby_npcs_for_room
 from app.game.world import DEFAULT_WORLD, World
-from app.schemas.chat import NarratorRoom, NarratorSceneContext
+from app.schemas.chat import NarratorAbility, NarratorRoom, NarratorSceneContext
 
 
 def build_narrator_scene_context(
@@ -26,6 +27,16 @@ def build_narrator_scene_context(
 
     items = ensure_items_state(state)
     npcs = ensure_npcs_state(state)
+    abilities = [
+        NarratorAbility(
+            ability_id=ability.ability_id,
+            display_name=ability.display_name,
+            description=ability.description,
+            available=ability.available,
+            availability_reason=ability.availability_reason,
+        )
+        for ability in project_owned_abilities(state)
+    ]
 
     player = state.get("player")
     current_room_id = player.get("location") if isinstance(player, dict) else None
@@ -38,6 +49,7 @@ def build_narrator_scene_context(
             nearby_items=[],
             inventory_items=inventory_narrator_items(items),
             nearby_npcs=[],
+            abilities=abilities,
         )
 
     return NarratorSceneContext(
@@ -46,6 +58,7 @@ def build_narrator_scene_context(
         nearby_items=nearby_narrator_items_for_room(items, room.id),
         inventory_items=inventory_narrator_items(items),
         nearby_npcs=nearby_npcs_for_room(npcs, room.id),
+        abilities=abilities,
     )
 
 

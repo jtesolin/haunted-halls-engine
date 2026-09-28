@@ -2,7 +2,13 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
+from app.agents.starter_abilities import StarterAbilityGenerator
+from app.game.campaign_state import InvalidCampaignStateError
+from app.game.character_progression import grant_progress, unlock_ability
 from app.game.narrator_scene import build_narrator_scene_context
+from app.schemas.character_progression import ProgressionTrackId
 
 
 def _state(**overrides: object) -> str:
@@ -231,3 +237,73 @@ def test_valid_boolean_observable_state_values_still_project() -> None:
     )
 
     assert projected.observable_state == {"is_open": True, "lit": False}
+
+
+def test_generated_owned_abilities_project_persisted_definitions_and_availability() -> None:
+    state = json.loads(_state())
+    generated = StarterAbilityGenerator()._stub_generation().abilities
+    state["player"]["generated_abilities"] = [
+        ability.model_dump(mode="json") for ability in generated
+    ]
+    for ability in generated:
+        assert unlock_ability(state, ability.ability_id).success
+
+    scene = build_narrator_scene_context(json.dumps(state))
+
+    assert [
+        (
+            ability.ability_id,
+            ability.display_name,
+            ability.description,
+            ability.available,
+            ability.availability_reason,
+        )
+        for ability in scene.abilities
+    ] == [
+        (ability.ability_id, ability.display_name, ability.description, True, None)
+        for ability in generated
+    ]
+
+
+def test_unowned_builtin_abilities_are_not_projected() -> None:
+    scene = build_narrator_scene_context(_state())
+
+    assert scene.abilities == []
+
+
+def test_unlocked_keen_eye_is_projected_from_authoritative_progression() -> None:
+    state = json.loads(_state())
+    assert grant_progress(state, ProgressionTrackId.INVESTIGATION, 2).success
+    assert unlock_ability(state, "keen_eye").success
+
+    scene = build_narrator_scene_context(json.dumps(state))
+
+    assert len(scene.abilities) == 1
+    assert scene.abilities[0].model_dump() == {
+        "ability_id": "keen_eye",
+        "display_name": "Keen Eye",
+        "description": "notice subtle environmental evidence",
+        "available": True,
+        "availability_reason": None,
+    }
+
+
+def test_owned_but_unavailable_ability_is_projected_without_becoming_available() -> None:
+    state = json.loads(_state())
+    assert grant_progress(state, ProgressionTrackId.INVESTIGATION, 1).success
+    assert unlock_ability(state, "keen_eye").success
+
+    scene = build_narrator_scene_context(json.dumps(state))
+
+    assert len(scene.abilities) == 1
+    assert scene.abilities[0].ability_id == "keen_eye"
+    assert scene.abilities[0].available is False
+    assert scene.abilities[0].availability_reason is not None
+
+
+def test_malformed_persisted_generated_abilities_fail_integrity_boundary() -> None:
+    state = json.loads(_state())
+    state["player"]["generated_abilities"] = [{}]
+
+    with pytest.raises(InvalidCampaignStateError, match="Persisted generated ability definitions are invalid"):
+        build_narrator_scene_context(json.dumps(state))
