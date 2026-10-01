@@ -10,7 +10,13 @@ from app.ai.model_client import ModelCallResult, model_client
 from app.ai.prompts import narrator_prompt
 from app.guardrails.model_policy import ModelPolicy
 from app.guardrails.token_budget import TokenBudget
-from app.schemas.chat import NarratorSceneContext, ParsedAction, ToolExecutionResult
+from app.game.abilities import project_narrator_ability_gameplay_result
+from app.schemas.chat import (
+    NarratorSceneContext,
+    NarratorToolExecutionResult,
+    ParsedAction,
+    ToolExecutionResult,
+)
 from app.schemas.character_progression import NarratorProgressionReward
 
 
@@ -167,13 +173,45 @@ class NarratorAgent(BaseAgent):
             )
 
         if tool_result is not None:
+            if tool_result.ability_result is not None:
+                ability_result = project_narrator_ability_gameplay_result(
+                    tool_result.ability_result
+                )
+                if ability_result.check_result is not None:
+                    check_outcome = (
+                        "succeeded"
+                        if ability_result.check_result.success is True
+                        else "failed"
+                    )
+                    summary = f"{ability_result.display_name or 'Ability'} check {check_outcome}."
+                elif not ability_result.owned:
+                    summary = "You do not possess that ability."
+                elif not ability_result.available:
+                    summary = "This ability is not currently available."
+                else:
+                    summary = "The attempt produces no discernible effect."
+                narrator_tool_result = NarratorToolExecutionResult(
+                    success=tool_result.success,
+                    summary=summary,
+                    ability_result=ability_result,
+                )
+                tool_result_json = narrator_tool_result.model_dump_json(
+                    exclude_none=True,
+                    indent=2,
+                )
+                result_label = "Authoritative ability outcome"
+            else:
+                tool_result_json = tool_result.model_dump_json(
+                    exclude_none=True,
+                    indent=2,
+                )
+                result_label = "Tool execution result"
             messages.append(
                 {
                     "role": "user",
                     "content": (
-                        "Tool execution result:\n"
-                        "Authoritative structured payload follows.\n"
-                        f"{tool_result.model_dump_json(exclude_none=True, indent=2)}"
+                        f"{result_label}:\n"
+                        f"{tool_result_json}"
                     ),
                 }
             )

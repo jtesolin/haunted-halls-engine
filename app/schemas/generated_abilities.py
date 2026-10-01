@@ -87,6 +87,7 @@ class AbilityGameplayResult(BaseModel):
     ability_id: str
     display_name: str | None = None
     description: str | None = None
+    owned: bool = False
     available: bool = False
     status: AbilityGameplayStatus
     check_id: str | None = None

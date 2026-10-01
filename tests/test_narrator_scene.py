@@ -245,6 +245,12 @@ def test_generated_owned_abilities_project_persisted_definitions_and_availabilit
     state["player"]["generated_abilities"] = [
         ability.model_dump(mode="json") for ability in generated
     ]
+    state["player"]["generated_abilities"][0]["description"] = (
+        "Reveal hidden markings on a nearby object."
+    )
+    state["player"]["generated_abilities"][1]["description"] = (
+        "See every hidden thing from any distance."
+    )
     for ability in generated:
         assert unlock_ability(state, ability.ability_id).success
 
@@ -260,9 +266,27 @@ def test_generated_owned_abilities_project_persisted_definitions_and_availabilit
         )
         for ability in scene.abilities
     ] == [
-        (ability.ability_id, ability.display_name, ability.description, True, None)
-        for ability in generated
+        (
+            generated[0].ability_id,
+            generated[0].display_name,
+            "Sense faint or unusual changes in nearby surroundings.",
+            True,
+            None,
+        ),
+        (
+            generated[1].ability_id,
+            generated[1].display_name,
+            "Exert a small practical supernatural influence on a nearby ordinary object.",
+            True,
+            None,
+        ),
     ]
+    assert state["player"]["generated_abilities"][0]["description"] == (
+        "Reveal hidden markings on a nearby object."
+    )
+    assert state["player"]["generated_abilities"][1]["description"] == (
+        "See every hidden thing from any distance."
+    )
 
 
 def test_unowned_builtin_abilities_are_not_projected() -> None:

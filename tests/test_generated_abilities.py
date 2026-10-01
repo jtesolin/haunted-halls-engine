@@ -9,14 +9,18 @@ import pytest
 from app.agents import starter_abilities as starter_abilities_module
 from app.agents.action_parser import ActionParserAgent
 from app.agents.starter_abilities import StarterAbilityGenerator
+from app.agents.narrator import NarratorAgent, NarratorAgentInput
 from app.ai.model_client import ModelCallResult
 from app.game.abilities import (
     evaluate_ability_availability,
+    project_narrator_ability_gameplay_result,
+    project_owned_abilities,
     resolve_gameplay_ability_check,
     validate_starter_ability_definitions,
 )
 from app.game.campaign_state import InvalidCampaignStateError, build_fresh_campaign_state
 from app.game.character_progression import ensure_character_progression_state, unlock_ability
+from app.game.narrator_scene import build_narrator_scene_context
 from app.guardrails.model_policy import ModelPolicy
 from app.guardrails.token_budget import TokenBudget
 from app.schemas.abilities import AbilityCheckOutcome, AbilityCheckResult
@@ -98,6 +102,29 @@ def test_starter_generation_uses_dedicated_bounded_reasoning_policy(monkeypatch)
     assert captured["reasoning_effort"] != ModelPolicy.narrator_reasoning_effort()
     assert captured["max_output_tokens"] == 800
     assert captured["max_output_tokens"] == TokenBudget.starter_ability_max_output_tokens()
+
+
+def test_starter_generation_prompt_bounds_names_and_descriptions() -> None:
+    prompt = "\n".join(
+        str(message.get("content", ""))
+        for message in StarterAbilityGenerator().build_provider_request()
+    ).lower()
+
+    for requirement in (
+        "perfect knowledge",
+        "read minds",
+        "see remotely",
+        "invisibility",
+        "darkness",
+        "detect markings or secrets",
+        "act as perception",
+        "unlock arbitrary locks",
+        "move entities",
+        "damage or attack",
+        "change quest or world state",
+        "another category's power",
+    ):
+        assert requirement in prompt
 
 
 def test_starter_generator_preserves_missing_output_when_usage_is_requested(
@@ -260,6 +287,12 @@ def test_keen_eye_library_check_is_deterministic_and_non_mutating() -> None:
     assert tool_result.ability_result.check_result is not None
     assert tool_result.ability_result.check_result.difficulty == 2
     assert tool_result.ability_result.check_result.success is True
+    narrator_result = project_narrator_ability_gameplay_result(tool_result.ability_result)
+    assert narrator_result.effect_resolved is True
+    assert narrator_result.check_result is not None
+    assert narrator_result.check_result.difficulty == 2
+    assert narrator_result.check_result.success is True
+    assert narrator_result.check_id == "keen_eye_library_inspection"
 
 
 def test_resolved_failed_ability_check_keeps_outer_success_false(monkeypatch) -> None:
@@ -269,6 +302,7 @@ def test_resolved_failed_ability_check_keeps_outer_success_false(monkeypatch) ->
         return AbilityGameplayResult(
             ability_id="keen_eye",
             display_name="Keen Eye",
+            owned=True,
             available=True,
             status=AbilityGameplayStatus.RESOLVED,
             check_id="keen_eye_library_inspection",
@@ -308,6 +342,11 @@ def test_resolved_failed_ability_check_keeps_outer_success_false(monkeypatch) ->
     assert tool_result.ability_result.status == AbilityGameplayStatus.RESOLVED
     assert tool_result.ability_result.check_result is not None
     assert tool_result.ability_result.check_result.success is False
+    narrator_result = project_narrator_ability_gameplay_result(tool_result.ability_result)
+    assert narrator_result.effect_resolved is True
+    assert narrator_result.check_result is not None
+    assert narrator_result.check_result.resolved is True
+    assert narrator_result.check_result.success is False
 
 
 def test_generated_ability_matching_requires_bounded_explicit_reference() -> None:
@@ -358,12 +397,163 @@ def test_generated_ability_matching_requires_bounded_explicit_reference() -> Non
     assert ability_use.parameters == {"ability_id": "ghost_light"}
 
 
+def test_generated_descriptions_use_mechanics_not_persisted_prose() -> None:
+    state = _state_with_starters()
+    definitions = state["player"]["generated_abilities"]
+    definitions[0]["description"] = "See every hidden thing from any distance."
+    definitions[1]["description"] = "Reveal hidden markings on a nearby object."
+    persisted_descriptions = [definition["description"] for definition in definitions]
+
+    projections = {item.ability_id: item for item in project_owned_abilities(state)}
+    sensory = projections["echo_sense"].description
+    utility = projections["whispering_touch"].description
+    assert sensory == "Sense faint or unusual changes in nearby surroundings."
+    assert utility == (
+        "Exert a small practical supernatural influence on a nearby ordinary object."
+    )
+    assert "hidden" not in sensory.lower()
+    assert "reveal" not in utility.lower()
+    assert [
+        definition["description"] for definition in state["player"]["generated_abilities"]
+    ] == persisted_descriptions
+
+    resolved = resolve_gameplay_ability_check(state, "whispering_touch")
+    assert resolved.description == utility
+
+    parser_context = ActionParserAgent()._build_parser_context(json.dumps(state))
+    parser_ability = next(
+        ability for ability in parser_context.abilities
+        if ability["ability_id"] == "whispering_touch"
+    )
+    assert parser_ability["description"] == utility
+    assert parser_ability["name"] == "Whispering Touch"
+    assert parser_ability["available"] is True
+
+    state["player"]["progression"]["unlocked_abilities"].remove("whispering_touch")
+    parser_context = ActionParserAgent()._build_parser_context(json.dumps(state))
+    assert all(
+        ability["ability_id"] != "whispering_touch"
+        for ability in parser_context.abilities
+    )
+
+
 def test_generated_ability_is_known_but_not_yet_executable() -> None:
     state = _state_with_starters()
+    original_state = copy.deepcopy(state)
     result = resolve_gameplay_ability_check(state, "echo_sense")
 
     assert result.status == AbilityGameplayStatus.UNSUPPORTED
     assert result.error_code == "unsupported_generated_mechanic"
+    assert state == original_state
+
+
+def test_narrator_ability_projection_preserves_owned_but_unavailable_and_unknown() -> None:
+    state = build_fresh_campaign_state()
+    ensure_character_progression_state(state)
+    state["player"]["progression"]["tracks"]["investigation"] = 1
+    assert unlock_ability(state, "keen_eye").success
+
+    owned_unavailable = resolve_gameplay_ability_check(state, "keen_eye")
+    known_unowned = resolve_gameplay_ability_check(build_fresh_campaign_state(), "keen_eye")
+    unknown = resolve_gameplay_ability_check(state, "unknown_ability")
+
+    assert owned_unavailable.owned is True
+    assert owned_unavailable.available is False
+    assert known_unowned.owned is False
+    assert known_unowned.available is False
+    assert unknown.owned is False
+    assert unknown.available is False
+
+    owned_projection = project_narrator_ability_gameplay_result(owned_unavailable)
+    known_unowned_projection = project_narrator_ability_gameplay_result(known_unowned)
+    unknown_projection = project_narrator_ability_gameplay_result(unknown)
+
+    assert owned_projection.owned is True
+    assert owned_projection.available is False
+    assert known_unowned_projection.owned is False
+    assert known_unowned_projection.available is False
+    assert unknown_projection.owned is False
+    assert unknown_projection.available is False
+    assert unknown_projection.display_name is None
+    for projection in (owned_projection, known_unowned_projection, unknown_projection):
+        dumped = projection.model_dump_json()
+        assert "error_code" not in dumped
+        assert "reason" not in dumped
+
+
+def test_narrator_receives_player_safe_generated_ability_outcome(monkeypatch) -> None:
+    state = _state_with_starters()
+    state["player"]["generated_abilities"][0]["description"] = (
+        "Read minds and reveal hidden things anywhere."
+    )
+    original_state = copy.deepcopy(state)
+    updated_state, tool_result = ToolExecutor().execute(
+        parsed_action=ParsedAction(
+            raw_text="use echo sense",
+            action=ActionType.ABILITY_CHECK,
+            parameters={"ability_id": "echo_sense"},
+            confidence=1,
+            parse_status="ok",
+        ),
+        campaign_state=json.dumps(state),
+    )
+
+    assert updated_state == original_state
+    assert tool_result.ability_result is not None
+    assert tool_result.ability_result.status == AbilityGameplayStatus.UNSUPPORTED
+    assert tool_result.ability_result.error_code == "unsupported_generated_mechanic"
+
+    captured_messages = []
+
+    async def fake_generate_text(*, messages, **kwargs):  # noqa: ANN202, ARG001
+        captured_messages.extend(messages)
+        return "The faint echo fades without revealing anything."
+
+    monkeypatch.setattr("app.agents.narrator.model_client.generate_text", fake_generate_text)
+    asyncio.run(
+        NarratorAgent().generate(
+            payload=NarratorAgentInput(
+                player_message="use echo sense",
+                scene_context=build_narrator_scene_context(json.dumps(state)),
+                parsed_action=ParsedAction(
+                    raw_text="use echo sense",
+                    action=ActionType.ABILITY_CHECK,
+                    parameters={"ability_id": "echo_sense"},
+                    confidence=1,
+                    parse_status="ok",
+                ),
+                tool_result=tool_result,
+            )
+        )
+    )
+
+    request_context = "\n".join(
+        message["content"] for message in captured_messages
+        if isinstance(message.get("content"), str)
+    ).lower()
+    for implementation_term in (
+        "unsupported_generated_mechanic",
+        "unsupported mechanic",
+        "unsupported_mechanic",
+        "unimplemented",
+        "implementation",
+        "no deterministic gameplay rule",
+        "no gameplay effect resolved",
+        "gameplay",
+        "mechanic",
+        "engine",
+        "internal rule",
+        "schema",
+        "payload",
+    ):
+        assert implementation_term not in request_context
+    assert "echo sense" in request_context
+    assert "sense faint or unusual changes in nearby surroundings" in request_context
+    assert "the attempt produces no discernible effect" in request_context
+    assert '"owned": true' in request_context
+    assert '"available": true' in request_context
+    assert '"effect_resolved": false' in request_context
+    assert "read minds and reveal hidden things" not in request_context
 
 
 def test_invalid_persisted_generated_definition_raises_campaign_state_error_everywhere() -> None:

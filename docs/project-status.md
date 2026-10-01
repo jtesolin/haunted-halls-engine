@@ -68,10 +68,13 @@ Stable cross-repository authority and security invariants belong in
   authoritative effect is exposed to the Narrator.
 - **Phase 8F2:** New campaigns receive two validated AI-generated, persisted
   starter abilities, represented with a bounded engine-owned mechanical
-  vocabulary. The Narrator receives a deterministic projection of owned
-  generated and unlocked built-in abilities, including their current
-  availability. `keen_eye` is the first player-invokable deterministic
-  gameplay check, with an authored Library inspection at difficulty 2.
+  vocabulary. Generated ability meaning shown to players is derived
+  deterministically from that vocabulary, not from arbitrary generated
+  description prose. Narrator ability-use inputs preserve authoritative
+  ownership, availability, and resolved outcomes while presenting only
+  player-safe, in-world results. `keen_eye` is the first player-invokable
+  deterministic gameplay check, with an authored Library inspection at
+  difficulty 2.
 
 ## Current Phase 8 status
 
