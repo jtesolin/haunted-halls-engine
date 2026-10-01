@@ -184,10 +184,12 @@ class NarratorAgent(BaseAgent):
                         else "failed"
                     )
                     summary = f"{ability_result.display_name or 'Ability'} check {check_outcome}."
+                elif not ability_result.owned:
+                    summary = "You do not possess that ability."
                 elif not ability_result.available:
                     summary = "This ability is not currently available."
                 else:
-                    summary = "No gameplay effect resolved."
+                    summary = "The attempt produces no discernible effect."
                 narrator_tool_result = NarratorToolExecutionResult(
                     success=tool_result.success,
                     summary=summary,

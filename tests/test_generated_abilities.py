@@ -302,6 +302,7 @@ def test_resolved_failed_ability_check_keeps_outer_success_false(monkeypatch) ->
         return AbilityGameplayResult(
             ability_id="keen_eye",
             display_name="Keen Eye",
+            owned=True,
             available=True,
             status=AbilityGameplayStatus.RESOLVED,
             check_id="keen_eye_library_inspection",
@@ -446,6 +447,40 @@ def test_generated_ability_is_known_but_not_yet_executable() -> None:
     assert state == original_state
 
 
+def test_narrator_ability_projection_preserves_owned_but_unavailable_and_unknown() -> None:
+    state = build_fresh_campaign_state()
+    ensure_character_progression_state(state)
+    state["player"]["progression"]["tracks"]["investigation"] = 1
+    assert unlock_ability(state, "keen_eye").success
+
+    owned_unavailable = resolve_gameplay_ability_check(state, "keen_eye")
+    known_unowned = resolve_gameplay_ability_check(build_fresh_campaign_state(), "keen_eye")
+    unknown = resolve_gameplay_ability_check(state, "unknown_ability")
+
+    assert owned_unavailable.owned is True
+    assert owned_unavailable.available is False
+    assert known_unowned.owned is False
+    assert known_unowned.available is False
+    assert unknown.owned is False
+    assert unknown.available is False
+
+    owned_projection = project_narrator_ability_gameplay_result(owned_unavailable)
+    known_unowned_projection = project_narrator_ability_gameplay_result(known_unowned)
+    unknown_projection = project_narrator_ability_gameplay_result(unknown)
+
+    assert owned_projection.owned is True
+    assert owned_projection.available is False
+    assert known_unowned_projection.owned is False
+    assert known_unowned_projection.available is False
+    assert unknown_projection.owned is False
+    assert unknown_projection.available is False
+    assert unknown_projection.display_name is None
+    for projection in (owned_projection, known_unowned_projection, unknown_projection):
+        dumped = projection.model_dump_json()
+        assert "error_code" not in dumped
+        assert "reason" not in dumped
+
+
 def test_narrator_receives_player_safe_generated_ability_outcome(monkeypatch) -> None:
     state = _state_with_starters()
     state["player"]["generated_abilities"][0]["description"] = (
@@ -504,10 +539,22 @@ def test_narrator_receives_player_safe_generated_ability_outcome(monkeypatch) ->
         "not implemented",
     ):
         assert internal_term not in serialized
-    assert "no gameplay effect resolved" in serialized
+    assert "the attempt produces no discernible effect" in serialized
     assert "sense faint or unusual changes in nearby surroundings" in serialized
     assert "read minds and reveal hidden things" not in serialized
     assert '"effect_resolved": false' in serialized
+    for implementation_term in (
+        "gameplay",
+        "mechanic",
+        "unsupported",
+        "implemented",
+        "engine",
+        "rule",
+        "schema",
+        "provider",
+        "internal",
+    ):
+        assert implementation_term not in serialized
 
 
 def test_invalid_persisted_generated_definition_raises_campaign_state_error_everywhere() -> None:

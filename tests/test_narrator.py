@@ -116,6 +116,7 @@ def test_narrator_keeps_resolved_ability_check_outcome(monkeypatch) -> None:
                         ability_id="keen_eye",
                         display_name="Keen Eye",
                         description="notice subtle environmental evidence",
+                        owned=True,
                         available=True,
                         status=AbilityGameplayStatus.RESOLVED,
                         check_id="keen_eye_library_inspection",
@@ -145,6 +146,7 @@ def test_narrator_keeps_resolved_ability_check_outcome(monkeypatch) -> None:
     assert '"difficulty": 2' in serialized
     assert '"error_code"' not in serialized
     assert '"reason"' not in serialized
+    assert '"owned": true' in serialized
 
 
 def test_narrator_request_includes_authoritative_owned_abilities(monkeypatch) -> None:

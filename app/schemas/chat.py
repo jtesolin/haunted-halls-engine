@@ -144,6 +144,7 @@ class NarratorAbilityGameplayResult(BaseModel):
     ability_id: str
     display_name: str | None = None
     description: str | None = None
+    owned: bool
     available: bool
     effect_resolved: bool
     check_id: str | None = None
