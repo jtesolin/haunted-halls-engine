@@ -187,22 +187,28 @@ def test_narrator_request_includes_authoritative_owned_abilities(monkeypatch) ->
 def test_narrator_prompt_allows_direct_ability_answers_without_inventing_state() -> None:
     assert "When the player directly asks about current character information" in narrator_prompt
     assert "List only abilities included there" in narrator_prompt
-    assert "Do not mention payloads, schemas, or implementation details" in narrator_prompt
-    assert "never expose locked or unowned abilities" in narrator_prompt
-    assert "the supplied ability outcome is authoritative" in narrator_prompt
+    assert "never list an ability absent from the character's information or invent abilities" in narrator_prompt
+    assert "use only the supplied authoritative name, description, ownership, availability, and outcome" in narrator_prompt
 
 
 def test_narrator_prompt_keeps_ability_outcomes_in_world() -> None:
     prompt = narrator_prompt.lower()
 
-    assert "engine" in prompt
-    assert "implementation details to the player" in prompt
-    assert "unsupported mechanics" in prompt
-    assert "unimplemented behavior" in prompt
-    assert "if no gameplay effect resolved, say so in-world without explaining why" in prompt
-    assert "never invent a missing ability effect" in prompt
-    assert "do not volunteer execution-support status" in prompt
-    assert "use their supplied names and descriptions" in prompt
+    assert "if the supplied outcome says the attempt produced no discernible effect" in prompt
+    assert "describe only that result naturally within the scene" in prompt
+    assert "do not explain why nothing happened" in prompt
+    assert "do not invent abilities or effects" in prompt
+    assert "a supplied failed check remains a failure" in prompt
+    for fourth_wall_term in (
+        "unsupported",
+        "unimplemented",
+        "implementation",
+        "engine",
+        "gameplay mechanic",
+        "internal rule",
+        "mechanics not defined",
+    ):
+        assert fourth_wall_term not in prompt
 
 
 def test_narrator_receives_narrow_authoritative_reveal(monkeypatch) -> None:

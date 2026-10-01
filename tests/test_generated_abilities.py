@@ -527,34 +527,33 @@ def test_narrator_receives_player_safe_generated_ability_outcome(monkeypatch) ->
         )
     )
 
-    ability_message = next(
-        message for message in captured_messages
-        if message["content"].startswith("Authoritative ability outcome")
-    )
-    serialized = ability_message["content"].lower()
-    for internal_term in (
-        "unsupported_generated_mechanic",
-        "unsupported_mechanic",
-        "no deterministic gameplay rule",
-        "not implemented",
-    ):
-        assert internal_term not in serialized
-    assert "the attempt produces no discernible effect" in serialized
-    assert "sense faint or unusual changes in nearby surroundings" in serialized
-    assert "read minds and reveal hidden things" not in serialized
-    assert '"effect_resolved": false' in serialized
+    request_context = "\n".join(
+        message["content"] for message in captured_messages
+        if isinstance(message.get("content"), str)
+    ).lower()
     for implementation_term in (
+        "unsupported_generated_mechanic",
+        "unsupported mechanic",
+        "unsupported_mechanic",
+        "unimplemented",
+        "implementation",
+        "no deterministic gameplay rule",
+        "no gameplay effect resolved",
         "gameplay",
         "mechanic",
-        "unsupported",
-        "implemented",
         "engine",
-        "rule",
+        "internal rule",
         "schema",
-        "provider",
-        "internal",
+        "payload",
     ):
-        assert implementation_term not in serialized
+        assert implementation_term not in request_context
+    assert "echo sense" in request_context
+    assert "sense faint or unusual changes in nearby surroundings" in request_context
+    assert "the attempt produces no discernible effect" in request_context
+    assert '"owned": true' in request_context
+    assert '"available": true' in request_context
+    assert '"effect_resolved": false' in request_context
+    assert "read minds and reveal hidden things" not in request_context
 
 
 def test_invalid_persisted_generated_definition_raises_campaign_state_error_everywhere() -> None:
