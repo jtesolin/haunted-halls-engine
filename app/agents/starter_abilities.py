@@ -36,7 +36,16 @@ class StarterAbilityGenerator(BaseAgent):
                     "and one utility ability using minor_utility/object. Set minimum_points to 0 "
                     "so both abilities are available immediately. Use range 0 or 1, no "
                     "bypasses, and only nearby or line_of_sight requirements. Do not use keen_eye "
-                    "or any existing built-in ability id or display name."
+                    "or any existing built-in ability id or display name. Names and descriptions "
+                    "must match their selected category and remain modest. For sensory/sense/"
+                    "surroundings, describe only nearby perception or sensation: do not imply perfect "
+                    "knowledge, reveal hidden objects beyond faint or unusual nearby sensations, read "
+                    "minds, see remotely, or bypass invisibility or darkness. For utility/"
+                    "minor_utility/object, describe only a convenience-oriented, minor practical "
+                    "interaction with an ordinary nearby object: do not reveal hidden information, "
+                    "detect markings or secrets, act as perception, unlock arbitrary locks, teleport "
+                    "or move entities, damage or attack, or change quest or world state. Do not give "
+                    "a name that strongly implies another category's power."
                 ),
             }
         ]

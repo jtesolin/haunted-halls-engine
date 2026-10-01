@@ -21,12 +21,14 @@ from app.schemas.chat import (
     ParsedAction,
     ToolExecutionResult,
 )
+from app.schemas.abilities import AbilityCheckOutcome, AbilityCheckResult
 from app.schemas.character_progression import (
     NarratorProgressionGrant,
     NarratorProgressionReward,
     NarratorUnlockedAbility,
     ProgressionTrackId,
 )
+from app.schemas.generated_abilities import AbilityGameplayResult, AbilityGameplayStatus
 
 
 def test_narrator_agent_input_requires_scene_context() -> None:
@@ -91,6 +93,60 @@ def test_narrator_receives_authoritative_tool_result(monkeypatch) -> None:
     assert "NPC presence, location, status, and disposition are authoritative game state." in captured_messages[0]["content"]
 
 
+def test_narrator_keeps_resolved_ability_check_outcome(monkeypatch) -> None:
+    captured_messages = []
+
+    async def fake_generate_text(*, messages, **kwargs):  # noqa: ANN202, ARG001
+        captured_messages.extend(messages)
+        return "Your eye catches a faint trace in the dust."
+
+    monkeypatch.setattr("app.agents.narrator.model_client.generate_text", fake_generate_text)
+    asyncio.run(
+        NarratorAgent().generate(
+            payload=NarratorAgentInput(
+                player_message="use keen eye",
+                scene_context=NarratorSceneContext(
+                    current_room=NarratorRoom(id="library", name="Library"),
+                ),
+                tool_result=ToolExecutionResult(
+                    success=True,
+                    applied_tools=["resolve_ability_check"],
+                    summary="Keen Eye check succeeded.",
+                    ability_result=AbilityGameplayResult(
+                        ability_id="keen_eye",
+                        display_name="Keen Eye",
+                        description="notice subtle environmental evidence",
+                        available=True,
+                        status=AbilityGameplayStatus.RESOLVED,
+                        check_id="keen_eye_library_inspection",
+                        check_result=AbilityCheckResult(
+                            ability_id="keen_eye",
+                            outcome=AbilityCheckOutcome.SUCCESS,
+                            resolved=True,
+                            success=True,
+                            track_points=2,
+                            difficulty=2,
+                            margin=0,
+                        ),
+                    ),
+                ),
+            )
+        )
+    )
+
+    outcome_message = next(
+        message for message in captured_messages
+        if message["content"].startswith("Authoritative ability outcome")
+    )
+    serialized = outcome_message["content"]
+    assert '"check_id": "keen_eye_library_inspection"' in serialized
+    assert '"effect_resolved": true' in serialized
+    assert '"success": true' in serialized
+    assert '"difficulty": 2' in serialized
+    assert '"error_code"' not in serialized
+    assert '"reason"' not in serialized
+
+
 def test_narrator_request_includes_authoritative_owned_abilities(monkeypatch) -> None:
     captured_messages = []
 
@@ -131,7 +187,20 @@ def test_narrator_prompt_allows_direct_ability_answers_without_inventing_state()
     assert "List only abilities included there" in narrator_prompt
     assert "Do not mention payloads, schemas, or implementation details" in narrator_prompt
     assert "never expose locked or unowned abilities" in narrator_prompt
-    assert "ability_result` is authoritative for the outcome of an attempted ability use" in narrator_prompt
+    assert "the supplied ability outcome is authoritative" in narrator_prompt
+
+
+def test_narrator_prompt_keeps_ability_outcomes_in_world() -> None:
+    prompt = narrator_prompt.lower()
+
+    assert "engine" in prompt
+    assert "implementation details to the player" in prompt
+    assert "unsupported mechanics" in prompt
+    assert "unimplemented behavior" in prompt
+    assert "if no gameplay effect resolved, say so in-world without explaining why" in prompt
+    assert "never invent a missing ability effect" in prompt
+    assert "do not volunteer execution-support status" in prompt
+    assert "use their supplied names and descriptions" in prompt
 
 
 def test_narrator_receives_narrow_authoritative_reveal(monkeypatch) -> None:

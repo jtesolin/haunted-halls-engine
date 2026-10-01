@@ -26,6 +26,7 @@ from app.schemas.generated_abilities import (
     GeneratedAbilityDefinition,
     GeneratedAbilityKind,
 )
+from app.schemas.chat import NarratorAbilityCheckResult, NarratorAbilityGameplayResult
 
 MIN_CHECK_DIFFICULTY = MIN_TRACK_POINTS
 MAX_CHECK_DIFFICULTY = MAX_TRACK_POINTS
@@ -325,7 +326,7 @@ def project_owned_abilities(state: dict[str, Any]) -> tuple[OwnedAbilityProjecti
         description = (
             definition.short_description
             if isinstance(definition, AbilityDefinition)
-            else definition.description
+            else _generated_ability_player_facing_summary(definition)
         )
         projections.append(
             OwnedAbilityProjection(
@@ -337,6 +338,53 @@ def project_owned_abilities(state: dict[str, Any]) -> tuple[OwnedAbilityProjecti
             )
         )
     return tuple(projections)
+
+
+def _generated_ability_player_facing_summary(
+    definition: GeneratedAbilityDefinition,
+) -> str:
+    """Describe only the bounded meaning of a validated generated mechanic."""
+    if (
+        definition.kind == GeneratedAbilityKind.SENSORY
+        and definition.mechanics.effect == AbilityEffect.SENSE
+        and definition.mechanics.domain == AbilityDomain.SURROUNDINGS
+    ):
+        return "Sense faint or unusual changes in nearby surroundings."
+    if (
+        definition.kind == GeneratedAbilityKind.UTILITY
+        and definition.mechanics.effect == AbilityEffect.MINOR_UTILITY
+        and definition.mechanics.domain == AbilityDomain.OBJECT
+    ):
+        return "Exert a small practical supernatural influence on a nearby ordinary object."
+    raise ValueError("Generated ability mechanics do not have a player-facing summary.")
+
+
+def project_narrator_ability_gameplay_result(
+    result: AbilityGameplayResult,
+) -> NarratorAbilityGameplayResult:
+    """Keep internal execution diagnostics out of the Narrator's ability outcome."""
+    check_result = result.check_result
+    check_projection = None
+    if check_result is not None and check_result.resolved:
+        check_projection = NarratorAbilityCheckResult(
+            ability_id=check_result.ability_id,
+            outcome=check_result.outcome,
+            resolved=check_result.resolved,
+            success=check_result.success,
+            track_id=check_result.track_id,
+            track_points=check_result.track_points,
+            difficulty=check_result.difficulty,
+            margin=check_result.margin,
+        )
+    return NarratorAbilityGameplayResult(
+        ability_id=result.ability_id,
+        display_name=result.display_name,
+        description=result.description,
+        available=result.available,
+        effect_resolved=result.status == AbilityGameplayStatus.RESOLVED,
+        check_id=result.check_id,
+        check_result=check_projection,
+    )
 
 
 def resolve_ability_check(
@@ -472,7 +520,7 @@ def resolve_gameplay_ability_check(
     else:
         assert generated is not None
         display_name = generated.display_name
-        description = generated.description
+        description = _generated_ability_player_facing_summary(generated)
     availability = evaluate_ability_availability(state, ability_id)
     if not availability.available:
         return AbilityGameplayResult(

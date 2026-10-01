@@ -2,6 +2,9 @@ from enum import StrEnum
 from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
+
+from app.schemas.abilities import AbilityCheckOutcome
+from app.schemas.character_progression import ProgressionTrackId
 from app.schemas.generated_abilities import AbilityGameplayResult
 
 
@@ -120,6 +123,39 @@ class NarratorAbility(BaseModel):
     description: str
     available: bool
     availability_reason: str | None = None
+
+
+class NarratorAbilityCheckResult(BaseModel):
+    """Player-safe projection of a deterministically resolved ability check."""
+
+    ability_id: str
+    outcome: AbilityCheckOutcome
+    resolved: bool
+    success: bool | None = None
+    track_id: ProgressionTrackId | None = None
+    track_points: int | None = None
+    difficulty: int | None = None
+    margin: int | None = None
+
+
+class NarratorAbilityGameplayResult(BaseModel):
+    """Player-safe outcome of an attempted ability use."""
+
+    ability_id: str
+    display_name: str | None = None
+    description: str | None = None
+    available: bool
+    effect_resolved: bool
+    check_id: str | None = None
+    check_result: NarratorAbilityCheckResult | None = None
+
+
+class NarratorToolExecutionResult(BaseModel):
+    """Narrow ability-use result suitable for narration."""
+
+    success: bool
+    summary: str
+    ability_result: NarratorAbilityGameplayResult
 
 
 class NarratorSceneContext(BaseModel):
