@@ -89,6 +89,8 @@ Stable cross-repository authority and security invariants belong in
   definitions; presence outcomes retain the searched room scope for narration.
   Provider targets are compared canonically but replaced by player-supplied text;
   item collision checks share the resolver's ID/name/alias/tag vocabulary.
+  New starters reject canonical built-in invocation collisions; runtime explicit
+  references use the same bounded canonical semantics without rewriting legacy names.
 
 ## Current Phase 8 status
 

@@ -28,6 +28,12 @@ Rules:
 - For an explicit request to use an ability listed in parser context, use `ability_check` and set
   `parameters.ability_id`. For an ability marked `requires_target`, copy only the bounded explicit
   object target into `target`; do not infer a target. Never supply a difficulty or determine an outcome.
+- Ability invocation uses `use`, `using`, `activate`, or `invoke`, with optional
+  `my`/`the`/`a`/`an` and `ability`; explicit target clauses use `on`, `toward`, or `at`.
+  Compare whole ability references using case/whitespace, hyphen/underscore, leading-article,
+  and surrounding-punctuation equivalence only. Do not infer names from descriptions.
+  When a reference also identifies an accessible item, require the explicit `ability` qualifier.
+  Canonical references identifying multiple available abilities are ambiguous, not executable.
 - Normalize synonyms to canonical actions:
   - go/walk/run/enter -> move
   - pick up/grab/collect -> take

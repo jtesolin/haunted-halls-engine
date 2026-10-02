@@ -12,7 +12,7 @@ from app.agents.base import BaseAgent
 from app.ai.model_client import ModelCallResult, model_client
 from app.ai.prompts import action_parser_prompt
 from app.game.abilities import (
-    ability_invocation_references,
+    canonical_ability_invocation_references,
     generated_ability_definitions,
     project_owned_abilities,
 )
@@ -512,50 +512,41 @@ class ActionParserAgent(BaseAgent):
                 and isinstance(name, str)
                 and ability.get("available") is True
             ):
-                for reference in ability_invocation_references(ability_id, name):
-                    canonical = normalize_identifier(reference)
-                    if canonical:
-                        canonical_abilities.setdefault(canonical, set()).add(ability_id)
-        ambiguous_references: set[str] = set()
-        for ability in parser_context.abilities:
-            ability_id = ability.get("ability_id")
-            name = ability.get("name")
-            if (
-                not isinstance(ability_id, str)
-                or not isinstance(name, str)
-                or ability.get("available") is not True
-            ):
-                continue
-            for reference in ability_invocation_references(ability_id, name):
-                for match in re.finditer(self._explicit_ability_pattern(reference), lower):
-                    if (
-                        normalize_identifier(reference) in item_references
-                        and re.search(r"\bability\s+$", lower[:match.start("reference")]) is None
-                    ):
-                        continue
-                    suffix = lower[match.end():].rstrip().rstrip(".!?").rstrip()
-                    requires_target = ability.get("requires_target") is True
-                    if not suffix:
-                        invocation_starts.add(match.start())
-                        candidates.append((len(reference), ability_id, None, requires_target))
-                        if len(canonical_abilities.get(normalize_identifier(reference), set())) > 1:
-                            ambiguous_references.add(reference)
-                        continue
-                    if self._has_ambiguous_common_name_reference(lower, match, reference):
-                        continue
-                    target_match = re.fullmatch(
-                        r"\s+(?:on|toward|at)\s+(?:the\s+|a\s+|an\s+)?(.+)",
-                        suffix,
-                    )
-                    if target_match is None:
-                        continue
-                    target = target_match.group(1).strip()
-                    if len(target) > 80 or len(target.split()) > 8:
-                        continue
-                    invocation_starts.add(match.start())
-                    candidates.append((len(reference), ability_id, target, requires_target))
-                    if len(canonical_abilities.get(normalize_identifier(reference), set())) > 1:
-                        ambiguous_references.add(reference)
+                for canonical in canonical_ability_invocation_references(ability_id, name):
+                    canonical_abilities.setdefault(canonical, set()).add(ability_id)
+        requires_targets = {
+            ability["ability_id"]: ability.get("requires_target") is True
+            for ability in parser_context.abilities
+            if isinstance(ability.get("ability_id"), str)
+        }
+        for match in re.finditer(
+            r"\b(?:use|using|activate|invoke)\s+"
+            r"(?:my\s+|the\s+|an?\s+)?"
+            r"(?P<qualifier>ability\s+)?",
+            lower,
+        ):
+            segment = lower[match.end():].rstrip().rstrip(".!?").rstrip()
+            qualified = match.group("qualifier") is not None
+            possible_requests: list[tuple[str, str | None]] = [(segment, None)]
+            # Try every bounded target delimiter: a thematic name may itself contain one.
+            for target_match in re.finditer(r"\s+(?:on|toward|at)\s+", segment):
+                target = re.sub(r"^(?:the|a|an)\s+", "", segment[target_match.end():]).strip()
+                if target and len(target) <= 80 and len(target.split()) <= 8:
+                    possible_requests.append((segment[:target_match.start()], target))
+            for raw_reference, target in possible_requests:
+                reference = normalize_identifier(raw_reference)
+                ability_ids = canonical_abilities.get(reference)
+                if not ability_ids:
+                    continue
+                if reference in item_references and not qualified:
+                    continue
+                if target is not None and self._has_ambiguous_common_name_reference(reference, qualified):
+                    continue
+                invocation_starts.add(match.start())
+                candidates.extend(
+                    (len(reference), ability_id, target, requires_targets[ability_id])
+                    for ability_id in ability_ids
+                )
         if not invocation_starts:
             return None
         if len(invocation_starts) > 1:
@@ -563,8 +554,6 @@ class ActionParserAgent(BaseAgent):
         if not candidates:
             return ExplicitAbilityRequest(parse_status="invalid")
         longest_reference = max(length for length, _, _, _ in candidates)
-        if any(len(reference) == longest_reference for reference in ambiguous_references):
-            return ExplicitAbilityRequest(parse_status="ambiguous")
         requests = {
             (ability_id, target, requires_target)
             for length, ability_id, target, requires_target in candidates
@@ -577,21 +566,10 @@ class ActionParserAgent(BaseAgent):
             return ExplicitAbilityRequest(parse_status="invalid")
         return ExplicitAbilityRequest(ability_id=ability_id, target=target, parse_status="ok")
 
-    def _explicit_ability_pattern(self, reference: str) -> str:
-        reference_pattern = re.escape(reference).replace(r"\ ", r"\s+")
-        return (
-            r"\b(?:use|using|activate|invoke)\s+"
-            r"(?:my\s+|the\s+|an?\s+)?"
-            r"(?:ability\s+)?"
-            f"(?P<reference>{reference_pattern})"
-            r"\b"
-        )
-
     def _has_ambiguous_common_name_reference(
         self,
-        lower: str,
-        match: re.Match[str],
         reference: str,
+        qualified: bool,
     ) -> bool:
         common_item_words = {
             "close",
@@ -605,8 +583,7 @@ class ActionParserAgent(BaseAgent):
         }
         if len(reference.split()) != 1 or reference not in common_item_words:
             return False
-        invocation_prefix = lower[:match.start("reference")]
-        return re.search(r"\bability\s+$", invocation_prefix) is None
+        return not qualified
 
     def _dict_value(self, source: dict[str, Any], key: str | None) -> dict[str, Any]:
         if key is None:

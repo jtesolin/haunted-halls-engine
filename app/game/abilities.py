@@ -165,6 +165,13 @@ def validate_starter_ability_definitions(
     seen_ids: set[str] = set()
     seen_names: set[str] = set()
     seen_references: set[str] = set()
+    built_in_references = {
+        reference
+        for ability in VALIDATED_ABILITY_DEFINITIONS
+        for reference in canonical_ability_invocation_references(
+            ability.ability_id, ability.display_name
+        )
+    }
     kinds: set[GeneratedAbilityKind] = set()
     for definition in definitions:
         validate_generated_ability_definition(definition)
@@ -180,13 +187,11 @@ def validate_starter_ability_definitions(
         if normalized_name in seen_names:
             raise ValueError("Generated starter ability names must be distinct.")
         if not allow_legacy_generic:
-            references = {
-                normalize_identifier(reference)
-                for reference in ability_invocation_references(
-                    definition.ability_id, definition.display_name
-                )
-                if normalize_identifier(reference)
-            }
+            references = canonical_ability_invocation_references(
+                definition.ability_id, definition.display_name
+            )
+            if references & built_in_references:
+                raise ValueError("Generated starter invocation references collide with a built-in ability.")
             if references & seen_references:
                 raise ValueError("Generated starter invocation references must be distinct.")
             seen_references.update(references)
@@ -204,6 +209,15 @@ def ability_invocation_references(ability_id: str, display_name: str) -> frozens
         " ".join(reference.casefold().split())
         for reference in (ability_id, ability_id.replace("_", " "), display_name)
         if reference.strip()
+    )
+
+
+def canonical_ability_invocation_references(ability_id: str, display_name: str) -> frozenset[str]:
+    """Return bounded player identifiers for validation and explicit invocation."""
+    return frozenset(
+        canonical
+        for reference in ability_invocation_references(ability_id, display_name)
+        if (canonical := normalize_identifier(reference))
     )
 
 
