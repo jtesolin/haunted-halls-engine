@@ -30,6 +30,7 @@ from typing import Any, Iterable
 from pydantic import ValidationError
 
 from app.schemas.chat import ToolExecutionResult
+from app.schemas.generated_abilities import AbilityObjectEffectOperation
 from app.schemas.story import (
     FactRecordedSignal,
     ItemAcquiredSignal,
@@ -351,6 +352,15 @@ def derive_story_signal(tool_result: ToolExecutionResult) -> StorySignal | None:
         if tool_result.item_id:
             return ItemAcquiredSignal(item_id=tool_result.item_id)
         return None
+
+    ability_result = tool_result.ability_result
+    object_effect = ability_result.object_effect if ability_result is not None else None
+    if (
+        object_effect is not None
+        and object_effect.operation == AbilityObjectEffectOperation.RETRIEVE
+        and object_effect.item_id
+    ):
+        return ItemAcquiredSignal(item_id=object_effect.item_id)
 
     return None
 

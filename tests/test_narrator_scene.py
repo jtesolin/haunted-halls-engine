@@ -269,14 +269,14 @@ def test_generated_owned_abilities_project_persisted_definitions_and_availabilit
         (
             generated[0].ability_id,
             generated[0].display_name,
-            "Sense faint or unusual changes in nearby surroundings.",
+            "Sense nearby supernatural presence, including from directly adjacent spaces.",
             True,
             None,
         ),
         (
             generated[1].ability_id,
             generated[1].display_name,
-            "Exert a small practical supernatural influence on a nearby ordinary object.",
+            "Draw a small portable object from this room into your hand.",
             True,
             None,
         ),

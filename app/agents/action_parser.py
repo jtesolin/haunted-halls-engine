@@ -11,10 +11,19 @@ from pydantic import BaseModel, Field
 from app.agents.base import BaseAgent
 from app.ai.model_client import ModelCallResult, model_client
 from app.ai.prompts import action_parser_prompt
-from app.game.abilities import project_owned_abilities
-from app.game.items import ensure_items_state, inventory_item_ids, room_item_ids
+from app.game.abilities import (
+    canonical_ability_invocation_references,
+    generated_ability_definitions,
+    project_owned_abilities,
+)
+from app.game.items import (
+    ensure_items_state,
+    inventory_item_ids,
+    item_candidate_identifiers,
+    room_item_ids,
+)
 from app.game.npcs import ensure_npcs_state, nearby_npc_ids_for_room, parser_npc_projection
-from app.game.world import DEFAULT_WORLD
+from app.game.world import DEFAULT_WORLD, normalize_identifier
 from app.guardrails.model_policy import ModelPolicy
 from app.guardrails.token_budget import TokenBudget, estimate_tokens
 from app.schemas.chat import ActionParserOutput, ActionType, ParsedAction
@@ -42,9 +51,16 @@ class ParserContext(BaseModel):
     available_exits: list[dict[str, str]] = Field(default_factory=list)
     nearby_objects: list[str] = Field(default_factory=list)
     inventory: list[str] = Field(default_factory=list)
+    accessible_item_references: list[str] = Field(default_factory=list)
     nearby_npcs: list[dict[str, Any]] = Field(default_factory=list)
     status_flags: dict[str, Any] = Field(default_factory=dict)
     abilities: list[dict[str, str | bool]] = Field(default_factory=list)
+
+
+class ExplicitAbilityRequest(BaseModel):
+    ability_id: str | None = None
+    target: str | None = None
+    parse_status: ParseStatus
 
 
 class ActionParserAgent(BaseAgent):
@@ -105,11 +121,12 @@ class ActionParserAgent(BaseAgent):
             )
             return self._fallback_parse(message, campaign_state)
 
-        messages = self.build_provider_request(
+        parser_context = self._build_parser_context(campaign_state)
+        messages = self._build_messages(
             message=message,
-            campaign_state=campaign_state,
+            parser_context=parser_context,
             recent_turns=recent_turns,
-            memory_context=memory_context,
+            memory_context=memory_context or [],
         )
         try:
             parsed_result = await model_client.generate_structured(
@@ -140,7 +157,7 @@ class ActionParserAgent(BaseAgent):
             raise ActionParseProviderError("Action parser model call failed.") from exc
 
         if parsed_output is not None:
-            return ParsedAction(
+            parsed_action = ParsedAction(
                 raw_text=message,
                 action=parsed_output.action,
                 target=parsed_output.target,
@@ -156,6 +173,9 @@ class ActionParserAgent(BaseAgent):
                 reasoning_output_tokens=usage.reasoning_output_tokens if usage is not None else None,
                 total_tokens=usage.total_tokens if usage is not None else None,
             )
+            if parsed_action.action == ActionType.ABILITY_CHECK:
+                return self._validate_model_ability_request(parsed_action, parser_context)
+            return parsed_action
 
         return ParsedAction(
             raw_text=message,
@@ -231,12 +251,22 @@ class ActionParserAgent(BaseAgent):
         confidence = 0.45
         notes = "Deterministic heuristic parser was used."
 
-        ability_id = self._requested_ability_id(lower, campaign_state)
-        if ability_id is not None:
+        requested_ability = self._requested_ability_request(
+            lower, self._build_parser_context(campaign_state)
+        )
+        if requested_ability is not None:
+            if requested_ability.parse_status != "ok":
+                return ParsedAction(
+                    raw_text=message,
+                    action=ActionType.UNKNOWN,
+                    parse_status=requested_ability.parse_status,
+                    parser_notes="The explicit ability request is incomplete or ambiguous.",
+                )
             return ParsedAction(
                 raw_text=message,
                 action=ActionType.ABILITY_CHECK,
-                parameters={"ability_id": ability_id},
+                target=requested_ability.target,
+                parameters={"ability_id": requested_ability.ability_id},
                 confidence=0.82,
                 parse_status="ok",
                 parser_notes="Explicit ability request recognized deterministically.",
@@ -394,14 +424,25 @@ class ActionParserAgent(BaseAgent):
             current_room_description = None
 
         nearby_objects = room_item_ids(items, location) if isinstance(location, str) else []
+        item_references: set[str] = set()
+        for item_id in set(nearby_objects) | set(inventory):
+            item_references.update(item_candidate_identifiers(item_id, items[item_id]))
 
         status_flags = self._dict_value(state, "status")
+        generated_by_id = {
+            ability.ability_id: ability
+            for ability in generated_ability_definitions(state)
+        }
         abilities = [
             {
                 "ability_id": ability.ability_id,
                 "name": ability.display_name,
                 "description": ability.description,
                 "available": True,
+                "requires_target": (
+                    ability.ability_id in generated_by_id
+                    and generated_by_id[ability.ability_id].kind.value == "utility"
+                ),
             }
             for ability in project_owned_abilities(state)
             if ability.available
@@ -414,36 +455,135 @@ class ActionParserAgent(BaseAgent):
             available_exits=available_exits,
             nearby_objects=nearby_objects,
             inventory=inventory,
+            accessible_item_references=sorted(item_references),
             nearby_npcs=nearby_npcs,
             status_flags=status_flags,
             abilities=abilities,
         )
 
-    def _requested_ability_id(self, lower: str, campaign_state: str) -> str | None:
-        for ability in self._build_parser_context(campaign_state).abilities:
-            ability_id = ability["ability_id"]
-            name = ability["name"]
-            if not isinstance(ability_id, str) or not isinstance(name, str):
-                continue
-            references = {
-                ability_id.replace("_", " ").strip().casefold(),
-                name.strip().casefold(),
-            }
-            references.discard("")
-            if any(self._has_explicit_ability_reference(lower, reference) for reference in references):
-                return ability_id
-        return None
+    def _validate_model_ability_request(
+        self, parsed_action: ParsedAction, parser_context: ParserContext
+    ) -> ParsedAction:
+        request = self._requested_ability_request(
+            parsed_action.raw_text.casefold(), parser_context
+        )
+        if (
+            parsed_action.parse_status != "ok"
+            or request is None
+            or request.parse_status != "ok"
+            or parsed_action.parameters.get("ability_id") != request.ability_id
+            or (
+                request.target is not None
+                and parsed_action.target is not None
+                and normalize_identifier(parsed_action.target) != normalize_identifier(request.target)
+            )
+        ):
+            logger.warning("action_parser_ability_request_rejected reason=explicit_request_mismatch")
+            return parsed_action.model_copy(update={
+                "action": ActionType.UNKNOWN,
+                "target": None,
+                "parameters": {},
+                "confidence": 0.0,
+                "parse_status": (
+                    request.parse_status if request is not None and request.parse_status != "ok"
+                    else "invalid"
+                ),
+                "parser_notes": "The model ability request does not match one explicit available ability request.",
+            })
+        return parsed_action.model_copy(update={
+            "target": request.target,
+            "parameters": {"ability_id": request.ability_id},
+        })
 
-    def _has_explicit_ability_reference(self, lower: str, reference: str) -> bool:
-        reference_pattern = re.escape(reference).replace(r"\ ", r"\s+")
-        pattern = (
+    def _requested_ability_request(
+        self,
+        lower: str,
+        parser_context: ParserContext,
+    ) -> ExplicitAbilityRequest | None:
+        candidates: list[tuple[int, str, str | None, bool]] = []
+        invocation_starts: set[int] = set()
+        item_references = set(parser_context.accessible_item_references)
+        canonical_abilities: dict[str, set[str]] = {}
+        for ability in parser_context.abilities:
+            ability_id = ability.get("ability_id")
+            name = ability.get("name")
+            if (
+                isinstance(ability_id, str)
+                and isinstance(name, str)
+                and ability.get("available") is True
+            ):
+                for canonical in canonical_ability_invocation_references(ability_id, name):
+                    canonical_abilities.setdefault(canonical, set()).add(ability_id)
+        requires_targets = {
+            ability["ability_id"]: ability.get("requires_target") is True
+            for ability in parser_context.abilities
+            if isinstance(ability.get("ability_id"), str)
+        }
+        for match in re.finditer(
             r"\b(?:use|using|activate|invoke)\s+"
             r"(?:my\s+|the\s+|an?\s+)?"
-            r"(?:ability\s+)?"
-            f"{reference_pattern}"
-            r"\b(?!\s+(?:on|with)\b)"
-        )
-        return re.search(pattern, lower) is not None
+            r"(?P<qualifier>ability\s+)?",
+            lower,
+        ):
+            segment = lower[match.end():].rstrip().rstrip(".!?").rstrip()
+            qualified = match.group("qualifier") is not None
+            possible_requests: list[tuple[str, str | None]] = [(segment, None)]
+            # Try every bounded target delimiter: a thematic name may itself contain one.
+            for target_match in re.finditer(r"\s+(?:on|toward|at)\s+", segment):
+                target = re.sub(r"^(?:the|a|an)\s+", "", segment[target_match.end():]).strip()
+                if target and len(target) <= 80 and len(target.split()) <= 8:
+                    possible_requests.append((segment[:target_match.start()], target))
+            for raw_reference, target in possible_requests:
+                reference = normalize_identifier(raw_reference)
+                ability_ids = canonical_abilities.get(reference)
+                if not ability_ids:
+                    continue
+                if reference in item_references and not qualified:
+                    continue
+                if target is not None and self._has_ambiguous_common_name_reference(reference, qualified):
+                    continue
+                invocation_starts.add(match.start())
+                candidates.extend(
+                    (len(reference), ability_id, target, requires_targets[ability_id])
+                    for ability_id in ability_ids
+                )
+        if not invocation_starts:
+            return None
+        if len(invocation_starts) > 1:
+            return ExplicitAbilityRequest(parse_status="ambiguous")
+        if not candidates:
+            return ExplicitAbilityRequest(parse_status="invalid")
+        longest_reference = max(length for length, _, _, _ in candidates)
+        requests = {
+            (ability_id, target, requires_target)
+            for length, ability_id, target, requires_target in candidates
+            if length == longest_reference
+        }
+        if len(requests) != 1:
+            return ExplicitAbilityRequest(parse_status="ambiguous")
+        ability_id, target, requires_target = requests.pop()
+        if target is not None and not requires_target:
+            return ExplicitAbilityRequest(parse_status="invalid")
+        return ExplicitAbilityRequest(ability_id=ability_id, target=target, parse_status="ok")
+
+    def _has_ambiguous_common_name_reference(
+        self,
+        reference: str,
+        qualified: bool,
+    ) -> bool:
+        common_item_words = {
+            "close",
+            "drop",
+            "light",
+            "look",
+            "move",
+            "open",
+            "take",
+            "use",
+        }
+        if len(reference.split()) != 1 or reference not in common_item_words:
+            return False
+        return not qualified
 
     def _dict_value(self, source: dict[str, Any], key: str | None) -> dict[str, Any]:
         if key is None:

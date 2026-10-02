@@ -25,8 +25,15 @@ Rules:
 - For open/close/extinguish, use `interact` with the item as `target` and set `interaction_mode` to the matching verb.
 - For light, use `use` with the lightable item as `target`, the ignition item as `with_item`, and `interaction_mode` set to `light`.
 - For `use X on Y` and `use X with Y`, set `with_item` to X and `target` to Y. Do not decide whether the combination succeeds.
-- For an explicit request to use an ability listed in parser context, use `ability_check` and set only
-  `parameters.ability_id`. Never supply a difficulty or determine an outcome.
+- For an explicit request to use an ability listed in parser context, use `ability_check` and set
+  `parameters.ability_id`. For an ability marked `requires_target`, copy only the bounded explicit
+  object target into `target`; do not infer a target. Never supply a difficulty or determine an outcome.
+- Ability invocation uses `use`, `using`, `activate`, or `invoke`, with optional
+  `my`/`the`/`a`/`an` and `ability`; explicit target clauses use `on`, `toward`, or `at`.
+  Compare whole ability references using case/whitespace, hyphen/underscore, leading-article,
+  and surrounding-punctuation equivalence only. Do not infer names from descriptions.
+  When a reference also identifies an accessible item, require the explicit `ability` qualifier.
+  Canonical references identifying multiple available abilities are ambiguous, not executable.
 - Normalize synonyms to canonical actions:
   - go/walk/run/enter -> move
   - pick up/grab/collect -> take

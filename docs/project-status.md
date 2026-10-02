@@ -75,11 +75,29 @@ Stable cross-repository authority and security invariants belong in
   player-safe, in-world results. `keen_eye` is the first player-invokable
   deterministic gameplay check, with an authored Library inspection at
   difficulty 2.
+- **Phase 8F3:** New generated starters use thematic names and can use bounded
+  deterministic presence/supernatural-presence sensing, portable-item pull,
+  open/close toggles, or light/extinguish toggles. Mechanical meaning remains
+  engine-owned and deterministic. Existing generic Phase 8F2 definitions remain
+  valid and are neither rewritten nor assigned guessed mechanics. Both parser
+  paths enforce unique explicit available-ability references and player-supplied
+  object targets before execution; references shared with accessible items require
+  an explicit ability qualifier, using the same canonical identifier semantics
+  as item resolution. New starter references cannot collide, and
+  generated opening fails closed on any present lock state except literal `False`.
+  Runtime parsing rejects canonical legacy reference ambiguity without rewriting
+  definitions; presence outcomes retain the searched room scope for narration.
+  Provider targets are compared canonically but replaced by player-supplied text;
+  item collision checks share the resolver's ID/name/alias/tag vocabulary.
+  New starters reject canonical built-in invocation collisions; runtime explicit
+  references use the same bounded canonical semantics without rewriting legacy names.
+  Successful typed generated retrievals emit the existing item-acquisition story
+  signal, preserving same-turn quest completion and authored reward processing.
 
 ## Current Phase 8 status
 
-**8F2 is implemented. The next intended slice generalizes deterministic
-execution of validated generated-ability mechanics.**
+**8F3 is implemented.** `keen_eye` remains the authored deterministic Library
+check at difficulty 2.
 
 The future character-details frontend may expose owned built-in/generated
 abilities alongside inventory and player-facing mechanical summaries. It
@@ -99,9 +117,8 @@ remains out of scope for this engine slice.
   generic reward/achievement/rules DSLs, combat progression, levels/classes,
   model-selected rewards, frontend progression UI, and broad evaluation
   expansion remain deferred.
-- General deterministic execution of generated ability mechanics remains the
-  next Phase 8 slice; generated starter definitions are persisted now but
-  unsupported mechanics never receive model-adjudicated effects.
+- New generated ability effects execute from authoritative state without
+  Director, WorldAuthorityExecutor, or model adjudication.
 
 See [architecture.md](architecture.md) for durable architecture decisions and
 the repository instructions for implementation boundaries.
