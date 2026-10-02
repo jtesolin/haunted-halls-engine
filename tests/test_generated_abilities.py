@@ -26,7 +26,7 @@ from app.game.campaign_state import (
     load_authoritative_campaign_state,
 )
 from app.game.character_progression import ensure_character_progression_state, unlock_ability
-from app.game.items import room_location, sync_inventory_projection
+from app.game.items import resolve_item_ids, room_location, sync_inventory_projection
 from app.game.narrator_scene import build_narrator_scene_context
 from app.guardrails.model_policy import ModelPolicy
 from app.guardrails.token_budget import TokenBudget
@@ -1037,6 +1037,92 @@ def test_inaccessible_item_does_not_block_natural_ability_invocation() -> None:
     ))
     assert parsed.action == ActionType.ABILITY_CHECK
     assert parsed.parameters == {"ability_id": "whispering_touch"}
+
+
+@pytest.mark.parametrize("deterministic_only", [True, False])
+@pytest.mark.parametrize("item_location", ["room:entry_hall", "player:current"])
+@pytest.mark.parametrize(
+    ("item_field", "item_reference", "ability_name", "player_reference"),
+    [
+        ("aliases", "tarnished-brass-key", "Tarnished Brass Key", "tarnished brass key"),
+        ("aliases", "tarnished_brass_key", "Tarnished Brass Key", "tarnished brass key"),
+        ("aliases", "the brass key", "Brass Key", "brass key"),
+        ("name", "the brass key", "Brass Key", "brass key"),
+        ("name", "  (THE BRASS_KEY)!  ", "Brass Key", "brass key"),
+        ("aliases", "a brass key", "Brass Key", "brass key"),
+        ("aliases", "brass key", "Brass-Key", "brass-key"),
+        ("aliases", "brass key", "The Brass Key", "the brass key"),
+    ],
+)
+def test_item_ability_collisions_share_authoritative_identifier_semantics(
+    monkeypatch: pytest.MonkeyPatch,
+    deterministic_only: bool,
+    item_location: str,
+    item_field: str,
+    item_reference: str,
+    ability_name: str,
+    player_reference: str,
+) -> None:
+    state = _state_with_starters()
+    state["player"]["generated_abilities"][1]["display_name"] = ability_name
+    item = state["items"]["brass_key"]
+    item["location"] = item_location
+    item["name"] = item_reference if item_field == "name" else "Golden Token"
+    item["aliases"] = [item_reference] if item_field == "aliases" else []
+    state["items"]["candle"]["location"] = room_location("entry_hall")
+    sync_inventory_projection(state, state["items"])
+    original_state = copy.deepcopy(state)
+    assert resolve_item_ids({"brass_key": item}, player_reference) == ["brass_key"]
+
+    async def fake_generate_structured(**kwargs: object) -> ActionParserOutput:
+        return ActionParserOutput(
+            action=ActionType.ABILITY_CHECK,
+            target="candle",
+            parameters=ActionParserParameters(ability_id="whispering_touch"),
+            parse_status="ok",
+            confidence=1,
+        )
+
+    monkeypatch.setattr(
+        "app.agents.action_parser.model_client.generate_structured", fake_generate_structured
+    )
+    parser = ActionParserAgent()
+    ordinary = asyncio.run(parser.parse(
+        message=f"use {player_reference} on candle",
+        campaign_state=json.dumps(state),
+        recent_turns=[],
+        deterministic_only=deterministic_only,
+    ))
+    assert ordinary.action == (ActionType.USE if deterministic_only else ActionType.UNKNOWN)
+    assert "ability_id" not in ordinary.parameters
+    updated, result = ToolExecutor().execute(
+        parsed_action=ordinary, campaign_state=json.dumps(state)
+    )
+    assert updated == original_state
+    assert result.ability_result is None
+    assert result.state_delta == {}
+
+    explicit = asyncio.run(parser.parse(
+        message=f"use my ability {ability_name} on candle",
+        campaign_state=json.dumps(state),
+        recent_turns=[],
+        deterministic_only=deterministic_only,
+    ))
+    assert explicit.action == ActionType.ABILITY_CHECK
+    assert explicit.parameters == {"ability_id": "whispering_touch"}
+    assert explicit.target == "candle"
+    assert state == original_state
+
+
+@pytest.mark.parametrize("display_name", ["The Echo Sense", "Echo-Sense", "(Echo Sense)"])
+def test_new_starter_collision_comparisons_use_canonical_identifiers(display_name: str) -> None:
+    generation = StarterAbilityGenerator()._stub_generation()
+    candidate = generation.abilities[1].model_copy(update={"display_name": display_name})
+    with pytest.raises(ValueError, match="invocation references"):
+        validate_starter_ability_definitions((generation.abilities[0], candidate))
+    assert validate_starter_ability_definitions(
+        (generation.abilities[0], candidate), allow_legacy_generic=True
+    )[1] == candidate
 
 
 def test_generated_descriptions_use_mechanics_not_persisted_prose() -> None:

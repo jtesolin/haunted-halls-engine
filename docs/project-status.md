@@ -82,7 +82,8 @@ Stable cross-repository authority and security invariants belong in
   valid and are neither rewritten nor assigned guessed mechanics. Both parser
   paths enforce unique explicit available-ability references and player-supplied
   object targets before execution; references shared with accessible items require
-  an explicit ability qualifier. New starter references cannot collide, and
+  an explicit ability qualifier, using the same canonical identifier semantics
+  as item resolution. New starter references cannot collide, and
   generated opening fails closed on any present lock state except literal `False`.
 
 ## Current Phase 8 status

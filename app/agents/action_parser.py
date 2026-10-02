@@ -18,7 +18,7 @@ from app.game.abilities import (
 )
 from app.game.items import ensure_items_state, inventory_item_ids, room_item_ids
 from app.game.npcs import ensure_npcs_state, nearby_npc_ids_for_room, parser_npc_projection
-from app.game.world import DEFAULT_WORLD
+from app.game.world import DEFAULT_WORLD, normalize_identifier
 from app.guardrails.model_policy import ModelPolicy
 from app.guardrails.token_budget import TokenBudget, estimate_tokens
 from app.schemas.chat import ActionParserOutput, ActionType, ParsedAction
@@ -423,15 +423,19 @@ class ActionParserAgent(BaseAgent):
         for item_id in set(nearby_objects) | set(inventory):
             item = items[item_id]
             name = item.get("name")
-            item_references.update(ability_invocation_references(
-                item_id, name if isinstance(name, str) else item_id
-            ))
+            item_references.update(
+                normalize_identifier(reference)
+                for reference in ability_invocation_references(
+                    item_id, name if isinstance(name, str) else item_id
+                )
+                if normalize_identifier(reference)
+            )
             aliases = item.get("aliases")
             if isinstance(aliases, list):
                 item_references.update(
-                    " ".join(alias.casefold().split())
+                    normalize_identifier(alias)
                     for alias in aliases
-                    if isinstance(alias, str) and alias.strip()
+                    if isinstance(alias, str) and normalize_identifier(alias)
                 )
 
         status_flags = self._dict_value(state, "status")
@@ -521,7 +525,7 @@ class ActionParserAgent(BaseAgent):
             for reference in ability_invocation_references(ability_id, name):
                 for match in re.finditer(self._explicit_ability_pattern(reference), lower):
                     if (
-                        reference in item_references
+                        normalize_identifier(reference) in item_references
                         and re.search(r"\bability\s+$", lower[:match.start("reference")]) is None
                     ):
                         continue

@@ -18,7 +18,7 @@ from app.game.items import (
     room_location,
 )
 from app.game.npcs import SUPERNATURAL_NPC_TAGS
-from app.game.world import DEFAULT_WORLD, World
+from app.game.world import DEFAULT_WORLD, World, normalize_identifier
 from app.schemas.abilities import (
     AbilityAvailabilityResult,
     AbilityAvailabilityStatus,
@@ -179,9 +179,13 @@ def validate_starter_ability_definitions(
         if normalized_name in seen_names:
             raise ValueError("Generated starter ability names must be distinct.")
         if not allow_legacy_generic:
-            references = ability_invocation_references(
-                definition.ability_id, definition.display_name
-            )
+            references = {
+                normalize_identifier(reference)
+                for reference in ability_invocation_references(
+                    definition.ability_id, definition.display_name
+                )
+                if normalize_identifier(reference)
+            }
             if references & seen_references:
                 raise ValueError("Generated starter invocation references must be distinct.")
             seen_references.update(references)
@@ -194,7 +198,7 @@ def validate_starter_ability_definitions(
 
 
 def ability_invocation_references(ability_id: str, display_name: str) -> frozenset[str]:
-    """Normalize the exact player references shared by validation and parsing."""
+    """Return exact invocation spellings; canonical comparisons use normalize_identifier."""
     return frozenset(
         " ".join(reference.casefold().split())
         for reference in (ability_id, ability_id.replace("_", " "), display_name)
