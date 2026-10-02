@@ -91,6 +91,8 @@ Stable cross-repository authority and security invariants belong in
   item collision checks share the resolver's ID/name/alias/tag vocabulary.
   New starters reject canonical built-in invocation collisions; runtime explicit
   references use the same bounded canonical semantics without rewriting legacy names.
+  Successful typed generated retrievals emit the existing item-acquisition story
+  signal, preserving same-turn quest completion and authored reward processing.
 
 ## Current Phase 8 status
 

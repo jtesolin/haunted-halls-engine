@@ -8,19 +8,23 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from app.agents.director import DirectorProviderError
+from app.agents.action_parser import ActionParserAgent
 from app.agents.narrator import NarratorAgentInput
+from app.agents.starter_abilities import StarterAbilityGenerator
 from app.api.routes import chat as chat_routes
 from app.core.config import settings
 from app.db.session import session
 from app.game.campaign_state import build_fresh_campaign_state
+from app.game.character_progression import ensure_character_progression_state, unlock_ability
 from app.game.world import DEFAULT_WORLD
 from app.main import app
 from app.orchestration import orchestrator as orchestrator_module
 from app.orchestration.orchestrator import ChatOrchestrator
 from app.schemas.chat import ActionType, ChatRequest, ParsedAction, ToolExecutionResult
 from app.schemas.character_progression import ProgressionTrackId
-from app.schemas.director import NoActionProposal
-from app.schemas.story import NpcSpokenToSignal
+from app.schemas.director import DirectorInput, NoActionProposal
+from app.schemas.generated_abilities import AbilityObjectEffectOperation
+from app.schemas.story import ItemAcquiredSignal, NpcSpokenToSignal, StorySignal
 
 
 @pytest.fixture(autouse=True)
@@ -403,6 +407,112 @@ def test_take_after_objectives_1_and_2_completes_quest(monkeypatch) -> None:
         assert state["player"]["progression_rewards"]["claimed_reward_ids"] == [
             "librarys_whisper_completion"
         ]
+
+
+def test_generated_retrieve_completes_quest_and_rewards_once_through_real_executor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _enable_provider(monkeypatch)
+    state = _story_state(objective_1="completed", objective_2="completed", objective_3="active")
+    state["player"]["location"] = "library"
+    generation = StarterAbilityGenerator()._stub_generation()
+    state["player"]["generated_abilities"] = [
+        ability.model_dump(mode="json") for ability in generation.abilities
+    ]
+    ensure_character_progression_state(state)
+    for ability in generation.abilities:
+        assert unlock_ability(state, ability.ability_id).success
+    captured_tools: list[ToolExecutionResult] = []
+    captured_director_inputs: list[DirectorInput] = []
+    captured_narrator_payloads: list[NarratorAgentInput] = []
+    real_parser = ActionParserAgent()
+    original_derive = orchestrator_module.derive_story_signal
+
+    async def deterministic_parse(
+        *, message: str, campaign_state: str, recent_turns: list[dict[str, str]],
+        **kwargs: object,
+    ) -> ParsedAction:
+        return await real_parser.parse(
+            message=message, campaign_state=campaign_state,
+            recent_turns=recent_turns, deterministic_only=True,
+        )
+
+    def capture_signal(tool_result: ToolExecutionResult) -> StorySignal | None:
+        captured_tools.append(tool_result)
+        signal = original_derive(tool_result)
+        if tool_result.success:
+            assert tool_result.applied_tools == ["resolve_generated_ability"]
+            assert tool_result.ability_result is not None
+            assert tool_result.ability_result.object_effect is not None
+            assert tool_result.ability_result.object_effect.operation == AbilityObjectEffectOperation.RETRIEVE
+            assert signal == ItemAcquiredSignal(item_id="old_book")
+        else:
+            assert signal is None
+        return signal
+
+    async def capture_director(*, director_input: DirectorInput, model=None):
+        captured_director_inputs.append(director_input)
+        assert director_input.current_player_room_id == "library"
+        quest = director_input.story.quests[0]
+        assert quest.quest_id == "librarys_whisper"
+        assert quest.status == "completed"
+        assert quest.completed_objective_ids == [
+            "enter_library", "speak_to_library_ghost", "acquire_old_book",
+        ]
+        assert quest.active_objective is None
+        assert director_input.character.progression_tracks[0].points == 2
+        assert "keen_eye" in [
+            ability.ability_id for ability in director_input.character.available_abilities
+        ]
+        return await _stub_director_response(director_input=director_input, model=model)
+
+    async def capture_narrator(*, payload: NarratorAgentInput, model=None):
+        captured_narrator_payloads.append(payload)
+        return await _async_stub_narrator_reply("The book settles into your hands.")
+
+    monkeypatch.setattr(orchestrator_module.orchestrator.action_parser_agent, "parse", deterministic_parse)
+    monkeypatch.setattr(orchestrator_module, "derive_story_signal", capture_signal)
+    monkeypatch.setattr(orchestrator_module.orchestrator.director_agent, "propose", capture_director)
+    monkeypatch.setattr(orchestrator_module.orchestrator.narrator_agent, "generate", capture_narrator)
+    client = TestClient(app)
+    user_id = _resolve_user(client, "story-generated-retrieve")
+    campaign_id = _create_campaign(
+        user_id=user_id, campaign_id="campaign_story_generated_retrieve", state=state,
+    )
+    request = ChatRequest(message="use Whispering Grasp on old book", campaign_id=campaign_id)
+    first = asyncio.run(orchestrator_module.orchestrator.handle_chat(
+        request, owner_user_id=user_id, idempotency_key="generated-retrieve-completion",
+    ))
+    with session() as db:
+        first_state = _load_campaign_state(db.get_campaign(campaign_id))
+    assert first_state["items"]["old_book"]["location"] == "player:current"
+    assert "old_book" in first_state["player"]["inventory"]
+    assert first_state["story"]["quests"]["librarys_whisper"]["status"] == "completed"
+    assert first_state["story"]["quests"]["librarys_whisper"]["objectives"]["acquire_old_book"] == "completed"
+    assert first_state["player"]["progression"]["tracks"]["investigation"] == 2
+    assert first_state["player"]["progression"]["unlocked_abilities"].count("keen_eye") == 1
+    assert first_state["player"]["progression_rewards"]["claimed_reward_ids"] == ["librarys_whisper_completion"]
+    reward = captured_narrator_payloads[0].current_turn_reward
+    assert reward is not None
+    assert reward.reward_id == "librarys_whisper_completion"
+    assert reward.progression_grants[0].prior_points == 0
+    assert reward.progression_grants[0].new_points == 2
+    assert reward.unlocked_abilities[0].ability_id == "keen_eye"
+
+    replay = asyncio.run(orchestrator_module.orchestrator.handle_chat(
+        request, owner_user_id=user_id, idempotency_key="generated-retrieve-completion",
+    ))
+    assert replay == first
+    assert len(captured_tools) == len(captured_director_inputs) == len(captured_narrator_payloads) == 1
+    asyncio.run(orchestrator_module.orchestrator.handle_chat(
+        request, owner_user_id=user_id, idempotency_key="generated-retrieve-again",
+    ))
+    assert len(captured_tools) == 2
+    assert captured_tools[-1].success is False
+    assert captured_narrator_payloads[-1].current_turn_reward is None
+    with session() as db:
+        final_state = _load_campaign_state(db.get_campaign(campaign_id))
+    assert final_state == first_state
 
 
 def test_final_objective_completion_forwards_authoritative_reward_to_narrator(monkeypatch) -> None:
