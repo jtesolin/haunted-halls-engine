@@ -513,6 +513,20 @@ class ActionParserAgent(BaseAgent):
         candidates: list[tuple[int, str, str | None, bool]] = []
         invocation_starts: set[int] = set()
         item_references = set(parser_context.accessible_item_references)
+        canonical_abilities: dict[str, set[str]] = {}
+        for ability in parser_context.abilities:
+            ability_id = ability.get("ability_id")
+            name = ability.get("name")
+            if (
+                isinstance(ability_id, str)
+                and isinstance(name, str)
+                and ability.get("available") is True
+            ):
+                for reference in ability_invocation_references(ability_id, name):
+                    canonical = normalize_identifier(reference)
+                    if canonical:
+                        canonical_abilities.setdefault(canonical, set()).add(ability_id)
+        ambiguous_references: set[str] = set()
         for ability in parser_context.abilities:
             ability_id = ability.get("ability_id")
             name = ability.get("name")
@@ -534,10 +548,11 @@ class ActionParserAgent(BaseAgent):
                     if not suffix:
                         invocation_starts.add(match.start())
                         candidates.append((len(reference), ability_id, None, requires_target))
+                        if len(canonical_abilities.get(normalize_identifier(reference), set())) > 1:
+                            ambiguous_references.add(reference)
                         continue
                     if self._has_ambiguous_common_name_reference(lower, match, reference):
                         continue
-                    invocation_starts.add(match.start())
                     target_match = re.fullmatch(
                         r"\s+(?:on|toward|at)\s+(?:the\s+|a\s+|an\s+)?(.+)",
                         suffix,
@@ -547,7 +562,10 @@ class ActionParserAgent(BaseAgent):
                     target = target_match.group(1).strip()
                     if len(target) > 80 or len(target.split()) > 8:
                         continue
+                    invocation_starts.add(match.start())
                     candidates.append((len(reference), ability_id, target, requires_target))
+                    if len(canonical_abilities.get(normalize_identifier(reference), set())) > 1:
+                        ambiguous_references.add(reference)
         if not invocation_starts:
             return None
         if len(invocation_starts) > 1:
@@ -555,6 +573,8 @@ class ActionParserAgent(BaseAgent):
         if not candidates:
             return ExplicitAbilityRequest(parse_status="invalid")
         longest_reference = max(length for length, _, _, _ in candidates)
+        if any(len(reference) == longest_reference for reference in ambiguous_references):
+            return ExplicitAbilityRequest(parse_status="ambiguous")
         requests = {
             (ability_id, target, requires_target)
             for length, ability_id, target, requires_target in candidates

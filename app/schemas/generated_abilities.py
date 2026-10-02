@@ -54,10 +54,16 @@ class AbilityObjectEffectOperation(StrEnum):
     TOGGLE_LIT = "toggle_lit"
 
 
+class AbilitySensingScope(StrEnum):
+    CURRENT_ROOM = "current_room"
+    CURRENT_AND_ADJACENT = "current_and_adjacent"
+
+
 class AbilityPresenceEffect(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     sense_filter: AbilitySenseFilter
+    scope: AbilitySensingScope
     found: bool
     current_room_count: int = Field(ge=0)
     adjacent_room_count: int = Field(ge=0)

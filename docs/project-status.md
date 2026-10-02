@@ -85,6 +85,8 @@ Stable cross-repository authority and security invariants belong in
   an explicit ability qualifier, using the same canonical identifier semantics
   as item resolution. New starter references cannot collide, and
   generated opening fails closed on any present lock state except literal `False`.
+  Runtime parsing rejects canonical legacy reference ambiguity without rewriting
+  definitions; presence outcomes retain the searched room scope for narration.
 
 ## Current Phase 8 status
 

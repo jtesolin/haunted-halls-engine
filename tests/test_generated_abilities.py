@@ -43,6 +43,7 @@ from app.schemas.generated_abilities import (
     AbilityObjectMotion,
     AbilityObjectState,
     AbilitySenseFilter,
+    AbilitySensingScope,
     GeneratedAbilityMechanics,
     StarterAbilityGeneration,
 )
@@ -1125,6 +1126,126 @@ def test_new_starter_collision_comparisons_use_canonical_identifiers(display_nam
     )[1] == candidate
 
 
+@pytest.mark.parametrize("deterministic_only", [True, False])
+@pytest.mark.parametrize("item_location", ["room:entry_hall", "player:current"])
+def test_partial_ability_prefix_does_not_hijack_longer_item_reference(
+    monkeypatch: pytest.MonkeyPatch, deterministic_only: bool, item_location: str
+) -> None:
+    state = _state_with_starters()
+    state["player"]["generated_abilities"][1]["display_name"] = "Brass"
+    state["items"]["brass_key"]["location"] = item_location
+    sync_inventory_projection(state, state["items"])
+    original_state = copy.deepcopy(state)
+
+    async def fake_generate_structured(**kwargs: object) -> ActionParserOutput:
+        return ActionParserOutput(
+            action=ActionType.ABILITY_CHECK,
+            target="candle",
+            parameters=ActionParserParameters(ability_id="whispering_touch"),
+            parse_status="ok",
+            confidence=1,
+        )
+
+    monkeypatch.setattr(
+        "app.agents.action_parser.model_client.generate_structured", fake_generate_structured
+    )
+    parsed = asyncio.run(ActionParserAgent().parse(
+        message="use brass key on candle", campaign_state=json.dumps(state),
+        recent_turns=[], deterministic_only=deterministic_only,
+    ))
+    assert parsed.action == (ActionType.USE if deterministic_only else ActionType.UNKNOWN)
+    assert "ability_id" not in parsed.parameters
+    if deterministic_only:
+        assert parsed.parameters == {"with_item": "brass key"}
+        assert parsed.target == "candle"
+    updated, result = ToolExecutor().execute(parsed_action=parsed, campaign_state=json.dumps(state))
+    assert updated == original_state
+    assert result.ability_result is None
+    assert result.state_delta == {}
+
+
+@pytest.mark.parametrize("deterministic_only", [True, False])
+@pytest.mark.parametrize(
+    ("first_name", "second_id", "second_name", "message"),
+    [
+        ("Echo-Sense", "echo_sense", "Pale Ember", "use echo sense"),
+        ("Veil-Tremor", "spectral_draw", "Veil Tremor", "use Veil Tremor"),
+        ("Veil_Tremor", "spectral_draw", "Veil Tremor", "use Veil Tremor"),
+        ("The Veil Tremor", "spectral_draw", "Veil Tremor", "use Veil Tremor"),
+        ("Veil Tremor", "spectral_draw", "The Veil Tremor", "use the Veil Tremor"),
+        ("Echo-Sense", "echo_sense", "Pale Ember", "use echo_sense"),
+    ],
+)
+def test_canonical_legacy_ability_ambiguity_is_non_executable(
+    monkeypatch: pytest.MonkeyPatch, deterministic_only: bool,
+    first_name: str, second_id: str, second_name: str, message: str,
+) -> None:
+    state = _state_with_starters()
+    state["player"]["generated_abilities"][0].update(
+        {"ability_id": "hollow_listening", "display_name": first_name}
+    )
+    state["player"]["generated_abilities"][1].update(
+        {"ability_id": second_id, "display_name": second_name}
+    )
+    state["player"]["progression"]["unlocked_abilities"] = ["hollow_listening", second_id]
+    original_state = copy.deepcopy(state)
+    assert load_authoritative_campaign_state(json.dumps(state)) == original_state
+
+    async def fake_generate_structured(**kwargs: object) -> ActionParserOutput:
+        return ActionParserOutput(
+            action=ActionType.ABILITY_CHECK,
+            parameters=ActionParserParameters(ability_id=second_id),
+            parse_status="ok",
+            confidence=1,
+        )
+
+    monkeypatch.setattr(
+        "app.agents.action_parser.model_client.generate_structured", fake_generate_structured
+    )
+    parsed = asyncio.run(ActionParserAgent().parse(
+        message=message, campaign_state=json.dumps(state), recent_turns=[],
+        deterministic_only=deterministic_only,
+    ))
+    assert parsed.action == ActionType.UNKNOWN
+    assert parsed.parse_status == "ambiguous"
+    assert parsed.parameters == {}
+    updated, result = ToolExecutor().execute(parsed_action=parsed, campaign_state=json.dumps(state))
+    assert updated == original_state
+    assert result.state_delta == {}
+    assert result.ability_result is None
+    assert state == original_state
+
+
+@pytest.mark.parametrize("deterministic_only", [True, False])
+def test_longest_unique_reference_survives_canonical_shorter_ambiguity(
+    monkeypatch: pytest.MonkeyPatch, deterministic_only: bool
+) -> None:
+    state = _state_with_starters()
+    state["player"]["generated_abilities"][0]["display_name"] = "Grave"
+    state["player"]["generated_abilities"][1].update(
+        {"ability_id": "grave", "display_name": "Grave Echo"}
+    )
+    state["player"]["progression"]["unlocked_abilities"] = ["echo_sense", "grave"]
+
+    async def fake_generate_structured(**kwargs: object) -> ActionParserOutput:
+        return ActionParserOutput(
+            action=ActionType.ABILITY_CHECK,
+            parameters=ActionParserParameters(ability_id="grave"),
+            parse_status="ok",
+            confidence=1,
+        )
+
+    monkeypatch.setattr(
+        "app.agents.action_parser.model_client.generate_structured", fake_generate_structured
+    )
+    parsed = asyncio.run(ActionParserAgent().parse(
+        message="use Grave Echo", campaign_state=json.dumps(state), recent_turns=[],
+        deterministic_only=deterministic_only,
+    ))
+    assert parsed.action == ActionType.ABILITY_CHECK
+    assert parsed.parameters == {"ability_id": "grave"}
+
+
 def test_generated_descriptions_use_mechanics_not_persisted_prose() -> None:
     state = _state_with_starters()
     definitions = state["player"]["generated_abilities"]
@@ -1858,6 +1979,71 @@ def test_narrator_receives_player_safe_generated_ability_outcome(monkeypatch) ->
     assert '"effect_resolved": true' in request_context
     assert "secret_wraith" not in request_context
     assert "hidden wraith" not in request_context
+
+
+@pytest.mark.parametrize("sensing_range", [0, 1])
+@pytest.mark.parametrize("adjacent_status", ["active", "absent"])
+def test_presence_result_and_narrator_preserve_authoritative_searched_scope(
+    monkeypatch: pytest.MonkeyPatch, sensing_range: int, adjacent_status: str
+) -> None:
+    state = _state_with_starters()
+    state["npcs"] = {
+        "secret_wraith": {
+            "id": "secret_wraith", "name": "Hidden Wraith",
+            "description": "An unrevealed biography.", "location": "grand_corridor",
+            "status": adjacent_status, "tags": ["ghost"],
+        }
+    }
+    _set_mechanics(state, 0, _mechanics(
+        effect=AbilityEffect.SENSE, domain=AbilityDomain.SURROUNDINGS,
+        detail=AbilityDetail.LIMITED, range=sensing_range,
+        sense_filter=AbilitySenseFilter.SUPERNATURAL_PRESENCE,
+    ))
+    state = load_authoritative_campaign_state(json.dumps(state))
+    original_state = copy.deepcopy(state)
+    updated, result = _execute_generated(state, "echo_sense")
+    assert updated == original_state
+    assert result.ability_result is not None
+    effect = result.ability_result.presence_effect
+    assert effect is not None
+    expected_scope = (
+        AbilitySensingScope.CURRENT_AND_ADJACENT if sensing_range else AbilitySensingScope.CURRENT_ROOM
+    )
+    assert effect.scope == expected_scope
+    assert effect.found is (sensing_range == 1 and adjacent_status == "active")
+    assert effect.current_room_count == 0
+    assert effect.adjacent_room_count == int(effect.found)
+    assert result.state_delta == {}
+    projected = project_narrator_ability_gameplay_result(result.ability_result)
+    assert projected.presence_effect == effect
+
+    captured_messages: list[dict] = []
+
+    async def fake_generate_text(*, messages: list[dict], **kwargs: object) -> str:
+        captured_messages.extend(messages)
+        return "A faint chill fades."
+
+    monkeypatch.setattr("app.agents.narrator.model_client.generate_text", fake_generate_text)
+    asyncio.run(NarratorAgent().generate(payload=NarratorAgentInput(
+        player_message="use Grave Echo",
+        scene_context=build_narrator_scene_context(json.dumps(state)),
+        tool_result=result,
+    )))
+    request_context = "\n".join(
+        str(message.get("content", "")) for message in captured_messages
+    )
+    assert f'"scope": "{expected_scope.value}"' in request_context
+    if sensing_range == 0:
+        assert "You sense no supernatural presence in this room." in request_context
+        assert "directly adjacent" not in request_context
+    elif effect.found:
+        assert "You sense supernatural presence in directly adjacent spaces." in request_context
+    else:
+        assert "You sense no supernatural presence in this room or directly adjacent spaces." in request_context
+    assert "grand_corridor" not in effect.model_dump_json()
+    for secret in ("secret_wraith", "Hidden Wraith", "unrevealed biography"):
+        assert secret not in effect.model_dump_json()
+        assert secret not in request_context
     assert "read minds and reveal hidden things" not in request_context
 
 

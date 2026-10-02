@@ -32,6 +32,7 @@ from app.schemas.generated_abilities import (
     AbilityObjectState,
     AbilityPresenceEffect,
     AbilitySenseFilter,
+    AbilitySensingScope,
     AbilityGameplayResult,
     AbilityGameplayStatus,
     AbilityDetail,
@@ -796,6 +797,11 @@ def _resolve_generated_ability_effect(
                     adjacent_count += 1
         presence_effect = AbilityPresenceEffect(
             sense_filter=sense_filter,
+            scope=(
+                AbilitySensingScope.CURRENT_AND_ADJACENT
+                if mechanics.range == 1
+                else AbilitySensingScope.CURRENT_ROOM
+            ),
             found=current_count + adjacent_count > 0,
             current_room_count=current_count,
             adjacent_room_count=adjacent_count,

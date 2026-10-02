@@ -193,12 +193,17 @@ class NarratorAgent(BaseAgent):
                         else "active presence"
                     )
                     if not effect.found:
-                        summary = f"You sense no {kind} nearby."
+                        searched_area = (
+                            "this room or directly adjacent spaces"
+                            if effect.scope.value == "current_and_adjacent"
+                            else "this room"
+                        )
+                        summary = f"You sense no {kind} in {searched_area}."
                     else:
                         locations = []
                         if effect.current_room_count:
                             locations.append("this room")
-                        if effect.adjacent_room_count:
+                        if effect.scope.value == "current_and_adjacent" and effect.adjacent_room_count:
                             locations.append("directly adjacent spaces")
                         summary = f"You sense {kind} in {' and '.join(locations)}."
                 elif ability_result.object_effect is not None:
