@@ -344,7 +344,7 @@ def resolve_item_ids(
 
     matches: list[str] = []
     for item_id, item in items.items():
-        if requested in _candidate_identifiers(item_id, item):
+        if requested in item_candidate_identifiers(item_id, item):
             matches.append(item_id)
 
     return matches
@@ -400,7 +400,8 @@ def _merged_canonical_properties(
     return properties
 
 
-def _candidate_identifiers(item_id: str, item: dict[str, Any]) -> set[str]:
+def item_candidate_identifiers(item_id: str, item: dict[str, Any]) -> set[str]:
+    """Canonical bounded item references shared by resolution and disambiguation."""
     candidates = {normalize_identifier(item_id)}
 
     name = item.get("name")

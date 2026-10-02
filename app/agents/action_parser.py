@@ -16,7 +16,12 @@ from app.game.abilities import (
     generated_ability_definitions,
     project_owned_abilities,
 )
-from app.game.items import ensure_items_state, inventory_item_ids, room_item_ids
+from app.game.items import (
+    ensure_items_state,
+    inventory_item_ids,
+    item_candidate_identifiers,
+    room_item_ids,
+)
 from app.game.npcs import ensure_npcs_state, nearby_npc_ids_for_room, parser_npc_projection
 from app.game.world import DEFAULT_WORLD, normalize_identifier
 from app.guardrails.model_policy import ModelPolicy
@@ -421,22 +426,7 @@ class ActionParserAgent(BaseAgent):
         nearby_objects = room_item_ids(items, location) if isinstance(location, str) else []
         item_references: set[str] = set()
         for item_id in set(nearby_objects) | set(inventory):
-            item = items[item_id]
-            name = item.get("name")
-            item_references.update(
-                normalize_identifier(reference)
-                for reference in ability_invocation_references(
-                    item_id, name if isinstance(name, str) else item_id
-                )
-                if normalize_identifier(reference)
-            )
-            aliases = item.get("aliases")
-            if isinstance(aliases, list):
-                item_references.update(
-                    normalize_identifier(alias)
-                    for alias in aliases
-                    if isinstance(alias, str) and normalize_identifier(alias)
-                )
+            item_references.update(item_candidate_identifiers(item_id, items[item_id]))
 
         status_flags = self._dict_value(state, "status")
         generated_by_id = {
@@ -485,7 +475,7 @@ class ActionParserAgent(BaseAgent):
             or (
                 request.target is not None
                 and parsed_action.target is not None
-                and parsed_action.target.strip().casefold() != request.target
+                and normalize_identifier(parsed_action.target) != normalize_identifier(request.target)
             )
         ):
             logger.warning("action_parser_ability_request_rejected reason=explicit_request_mismatch")

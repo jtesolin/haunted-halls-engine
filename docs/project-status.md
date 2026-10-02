@@ -87,6 +87,8 @@ Stable cross-repository authority and security invariants belong in
   generated opening fails closed on any present lock state except literal `False`.
   Runtime parsing rejects canonical legacy reference ambiguity without rewriting
   definitions; presence outcomes retain the searched room scope for narration.
+  Provider targets are compared canonically but replaced by player-supplied text;
+  item collision checks share the resolver's ID/name/alias/tag vocabulary.
 
 ## Current Phase 8 status
 

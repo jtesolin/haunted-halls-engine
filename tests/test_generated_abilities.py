@@ -662,6 +662,7 @@ def test_generated_ability_matching_requires_bounded_explicit_reference() -> Non
         light_ability.model_dump(mode="json"),
     ]
     assert unlock_ability(state, "ghost_light").success
+    state["items"]["candle"]["location"] = room_location("entry_hall")
 
     item_use = asyncio.run(
         ActionParserAgent().parse(
@@ -698,6 +699,16 @@ def test_generated_ability_matching_requires_bounded_explicit_reference() -> Non
     assert explicitly_invoked_ability.action == ActionType.ABILITY_CHECK
     assert explicitly_invoked_ability.parameters == {"ability_id": "ghost_light"}
     assert explicitly_invoked_ability.target == "candle"
+
+    tag_collision = asyncio.run(ActionParserAgent().parse(
+        message="use light", campaign_state=json.dumps(state),
+        recent_turns=[], deterministic_only=True,
+    ))
+    assert tag_collision.action == ActionType.USE
+    for item in state["items"].values():
+        if "light" in item["tags"]:
+            item["location"] = room_location("library")
+    sync_inventory_projection(state, state["items"])
 
     ability_use = asyncio.run(
         ActionParserAgent().parse(
@@ -874,6 +885,117 @@ def test_provider_cannot_invoke_an_unowned_ability(monkeypatch: pytest.MonkeyPat
     assert parsed.parse_status == "invalid"
     assert parsed.parameters == {}
     assert parsed.target is None
+
+
+@pytest.mark.parametrize(
+    ("player_target", "model_target", "expected_target"),
+    [
+        ("brass-key", "brass key", "brass-key"),
+        ("brass_key", "brass key", "brass_key"),
+        ("brass key", "the brass key", "brass key"),
+        ("(brass key)", "brass key", "(brass key)"),
+        ("brass key", "(brass key)", "brass key"),
+        ("BRASS KEY", "Brass Key", "brass key"),
+        ("brass key", "candle", None),
+    ],
+)
+def test_provider_target_comparison_preserves_explicit_player_spelling(
+    monkeypatch: pytest.MonkeyPatch,
+    player_target: str, model_target: str, expected_target: str | None,
+) -> None:
+    state = _state_with_starters()
+    state["items"]["brass_key"]["location"] = room_location("entry_hall")
+    original_state = copy.deepcopy(state)
+    calls = 0
+
+    async def fake_generate_structured(**kwargs: object) -> ActionParserOutput:
+        nonlocal calls
+        calls += 1
+        return ActionParserOutput(
+            action=ActionType.ABILITY_CHECK, target=model_target,
+            parameters=ActionParserParameters(ability_id="whispering_touch"),
+            parse_status="ok", confidence=1,
+        )
+
+    monkeypatch.setattr(
+        "app.agents.action_parser.model_client.generate_structured", fake_generate_structured
+    )
+    parsed = asyncio.run(ActionParserAgent().parse(
+        message=f"use Whispering Grasp on the {player_target}",
+        campaign_state=json.dumps(state), recent_turns=[],
+    ))
+    assert calls == 1
+    assert parsed.target == expected_target
+    updated, result = ToolExecutor().execute(parsed_action=parsed, campaign_state=json.dumps(state))
+    if expected_target is None:
+        assert parsed.action == ActionType.UNKNOWN
+        assert parsed.parameters == {}
+        assert updated == original_state
+        assert result.state_delta == {}
+    else:
+        assert parsed.action == ActionType.ABILITY_CHECK
+        assert result.success is True
+        assert updated["items"]["brass_key"]["location"] == "player:current"
+
+
+@pytest.mark.parametrize("deterministic_only", [True, False])
+@pytest.mark.parametrize("item_location", ["room:entry_hall", "player:current", "room:library"])
+@pytest.mark.parametrize("tag", ["key", "THE_KEY", "(Key)"])
+def test_tag_only_item_collision_uses_shared_authoritative_candidates(
+    monkeypatch: pytest.MonkeyPatch,
+    deterministic_only: bool, item_location: str, tag: str,
+) -> None:
+    state = _state_with_starters()
+    state["player"]["generated_abilities"][1]["display_name"] = "Key"
+    state["items"]["tagged_token"] = {
+        **state["items"]["brass_key"],
+        "id": "tagged_token",
+        "name": "Brass Token",
+        "aliases": [],
+        "tags": [tag],
+        "location": item_location,
+    }
+    sync_inventory_projection(state, state["items"])
+    original_state = copy.deepcopy(state)
+    assert resolve_item_ids({"tagged_token": state["items"]["tagged_token"]}, "key") == ["tagged_token"]
+
+    async def fake_generate_structured(**kwargs: object) -> ActionParserOutput:
+        return ActionParserOutput(
+            action=ActionType.ABILITY_CHECK, target="candle",
+            parameters=ActionParserParameters(ability_id="whispering_touch"),
+            parse_status="ok", confidence=1,
+        )
+
+    monkeypatch.setattr(
+        "app.agents.action_parser.model_client.generate_structured", fake_generate_structured
+    )
+    parser = ActionParserAgent()
+    accessible = item_location != "room:library"
+    assert ("key" in parser._build_parser_context(json.dumps(state)).accessible_item_references) is accessible
+    ordinary = asyncio.run(parser.parse(
+        message="use key on candle", campaign_state=json.dumps(state),
+        recent_turns=[], deterministic_only=deterministic_only,
+    ))
+    if accessible:
+        assert ordinary.action == (ActionType.USE if deterministic_only else ActionType.UNKNOWN)
+        assert "ability_id" not in ordinary.parameters
+        updated, result = ToolExecutor().execute(
+            parsed_action=ordinary, campaign_state=json.dumps(state)
+        )
+        assert updated == original_state
+        assert result.ability_result is None
+        assert result.state_delta == {}
+    else:
+        assert ordinary.action == ActionType.ABILITY_CHECK
+        assert ordinary.parameters == {"ability_id": "whispering_touch"}
+    qualified = asyncio.run(parser.parse(
+        message="use my ability Key on candle", campaign_state=json.dumps(state),
+        recent_turns=[], deterministic_only=deterministic_only,
+    ))
+    assert qualified.action == ActionType.ABILITY_CHECK
+    assert qualified.parameters == {"ability_id": "whispering_touch"}
+    assert qualified.target == "candle"
+    assert state == original_state
 
 
 @pytest.mark.parametrize("parse_status", ["ok", "ambiguous", "invalid"])
