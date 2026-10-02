@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field
 from app.agents.base import BaseAgent
 from app.ai.model_client import ModelCallResult, model_client
 from app.ai.prompts import action_parser_prompt
-from app.game.abilities import project_owned_abilities
+from app.game.abilities import generated_ability_definitions, project_owned_abilities
 from app.game.items import ensure_items_state, inventory_item_ids, room_item_ids
 from app.game.npcs import ensure_npcs_state, nearby_npc_ids_for_room, parser_npc_projection
 from app.game.world import DEFAULT_WORLD
@@ -233,9 +233,20 @@ class ActionParserAgent(BaseAgent):
 
         ability_id = self._requested_ability_id(lower, campaign_state)
         if ability_id is not None:
+            requested_ability = self._requested_ability_request(
+                lower,
+                campaign_state,
+                ability_id=ability_id,
+            )
+            if requested_ability is None:
+                ability_id = None
+            else:
+                ability_id, ability_target = requested_ability
+        if ability_id is not None:
             return ParsedAction(
                 raw_text=message,
                 action=ActionType.ABILITY_CHECK,
+                target=ability_target,
                 parameters={"ability_id": ability_id},
                 confidence=0.82,
                 parse_status="ok",
@@ -396,12 +407,20 @@ class ActionParserAgent(BaseAgent):
         nearby_objects = room_item_ids(items, location) if isinstance(location, str) else []
 
         status_flags = self._dict_value(state, "status")
+        generated_by_id = {
+            ability.ability_id: ability
+            for ability in generated_ability_definitions(state)
+        }
         abilities = [
             {
                 "ability_id": ability.ability_id,
                 "name": ability.display_name,
                 "description": ability.description,
                 "available": True,
+                "requires_target": (
+                    ability.ability_id in generated_by_id
+                    and generated_by_id[ability.ability_id].kind.value == "utility"
+                ),
             }
             for ability in project_owned_abilities(state)
             if ability.available
@@ -430,20 +449,82 @@ class ActionParserAgent(BaseAgent):
                 name.strip().casefold(),
             }
             references.discard("")
-            if any(self._has_explicit_ability_reference(lower, reference) for reference in references):
+            if any(self._explicit_ability_match(lower, reference) is not None for reference in references):
                 return ability_id
         return None
 
-    def _has_explicit_ability_reference(self, lower: str, reference: str) -> bool:
+    def _requested_ability_request(
+        self,
+        lower: str,
+        campaign_state: str,
+        *,
+        ability_id: str,
+    ) -> tuple[str, str | None] | None:
+        for ability in self._build_parser_context(campaign_state).abilities:
+            if ability.get("ability_id") != ability_id:
+                continue
+            name = ability.get("name")
+            if not isinstance(name, str):
+                return None
+            references = {
+                ability_id.replace("_", " ").strip().casefold(),
+                name.strip().casefold(),
+            }
+            for reference in references:
+                match = self._explicit_ability_match(lower, reference)
+                if match is None:
+                    continue
+                suffix = lower[match.end():]
+                target_match = re.fullmatch(
+                    r"\s+(?:on|toward|at)\s+(?:the\s+|a\s+|an\s+)?(.+?)\s*[.!?]*",
+                    suffix,
+                )
+                requires_target = ability.get("requires_target") is True
+                if target_match is None:
+                    return ability_id, None
+                if not requires_target or self._has_ambiguous_common_name_reference(
+                    lower, match, reference
+                ):
+                    continue
+                target = target_match.group(1).strip()
+                if len(target) > 80 or len(target.split()) > 8:
+                    return None
+                return ability_id, target
+        return None
+
+    def _explicit_ability_match(self, lower: str, reference: str) -> re.Match[str] | None:
+        if not reference:
+            return None
         reference_pattern = re.escape(reference).replace(r"\ ", r"\s+")
         pattern = (
             r"\b(?:use|using|activate|invoke)\s+"
             r"(?:my\s+|the\s+|an?\s+)?"
             r"(?:ability\s+)?"
-            f"{reference_pattern}"
-            r"\b(?!\s+(?:on|with)\b)"
+            f"(?P<reference>{reference_pattern})"
+            r"\b"
         )
-        return re.search(pattern, lower) is not None
+        return re.search(pattern, lower)
+
+    def _has_ambiguous_common_name_reference(
+        self,
+        lower: str,
+        match: re.Match[str],
+        reference: str,
+    ) -> bool:
+        common_item_words = {
+            "close",
+            "drop",
+            "light",
+            "look",
+            "move",
+            "open",
+            "take",
+            "use",
+        }
+        if len(reference.split()) != 1 or reference not in common_item_words:
+            return False
+        invocation_prefix = lower[:match.start("reference")]
+        return re.search(r"\bability\s+$", invocation_prefix) is None
 
     def _dict_value(self, source: dict[str, Any], key: str | None) -> dict[str, Any]:
         if key is None:

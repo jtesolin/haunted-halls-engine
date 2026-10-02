@@ -233,6 +233,41 @@ def sync_inventory_projection(
     player["inventory"] = inventory_ids
 
 
+def move_room_item_to_inventory(
+    state: dict[str, Any],
+    items: dict[str, dict[str, Any]],
+    item_id: str,
+    room_id: str,
+) -> dict[str, Any]:
+    """Move an already validated room item into inventory and return its state delta."""
+    player = state.setdefault("player", {})
+    previous_inventory = (
+        list(player.get("inventory", []))
+        if isinstance(player, dict) and isinstance(player.get("inventory"), list)
+        else []
+    )
+    moved_from = room_location(room_id)
+    items[item_id]["location"] = PLAYER_INVENTORY_LOCATION
+    sync_inventory_projection(state, items)
+    next_inventory = list(player.get("inventory", [])) if isinstance(player, dict) else []
+    return {
+        "items": {
+            item_id: {
+                "location": {
+                    "from": moved_from,
+                    "to": PLAYER_INVENTORY_LOCATION,
+                }
+            }
+        },
+        "player": {
+            "inventory": {
+                "from": previous_inventory,
+                "to": next_inventory,
+            }
+        },
+    }
+
+
 def inventory_item_ids(items: dict[str, dict[str, Any]]) -> list[str]:
     return [
         item_id

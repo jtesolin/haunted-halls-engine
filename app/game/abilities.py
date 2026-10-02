@@ -10,6 +10,14 @@ from app.game.character_progression import (
     MIN_TRACK_POINTS,
     read_character_progression_state,
 )
+from app.game.items import (
+    ensure_items_state,
+    move_room_item_to_inventory,
+    resolve_item_ids,
+    room_location,
+)
+from app.game.npcs import SUPERNATURAL_NPC_TAGS
+from app.game.world import DEFAULT_WORLD, World
 from app.schemas.abilities import (
     AbilityAvailabilityResult,
     AbilityAvailabilityStatus,
@@ -18,6 +26,11 @@ from app.schemas.abilities import (
 )
 from app.schemas.character_progression import ProgressionTrackId
 from app.schemas.generated_abilities import (
+    AbilityObjectEffect,
+    AbilityObjectEffectOperation,
+    AbilityObjectState,
+    AbilityPresenceEffect,
+    AbilitySenseFilter,
     AbilityGameplayResult,
     AbilityGameplayStatus,
     AbilityDetail,
@@ -26,7 +39,12 @@ from app.schemas.generated_abilities import (
     GeneratedAbilityDefinition,
     GeneratedAbilityKind,
 )
-from app.schemas.chat import NarratorAbilityCheckResult, NarratorAbilityGameplayResult
+from app.schemas.chat import (
+    NarratorAbilityCheckResult,
+    NarratorAbilityGameplayResult,
+    NarratorAbilityObjectEffect,
+    NarratorAbilityObjectOutcome,
+)
 
 MIN_CHECK_DIFFICULTY = MIN_TRACK_POINTS
 MAX_CHECK_DIFFICULTY = MAX_TRACK_POINTS
@@ -73,7 +91,7 @@ def generated_ability_definitions(state: dict[str, Any]) -> tuple[GeneratedAbili
             definition = GeneratedAbilityDefinition.model_validate(raw_definition)
             validate_generated_ability_definition(definition)
             definitions.append(definition)
-        return validate_starter_ability_definitions(definitions)
+        return validate_starter_ability_definitions(definitions, allow_legacy_generic=True)
     except (TypeError, ValueError) as exc:
         raise InvalidCampaignStateError(
             "Persisted generated ability definitions are invalid."
@@ -100,8 +118,12 @@ def validate_generated_ability_definition(definition: GeneratedAbilityDefinition
         if definition.mechanics.effect != AbilityEffect.SENSE or definition.mechanics.domain != AbilityDomain.SURROUNDINGS:
             raise ValueError("Sensory abilities must use the surroundings sense mechanic.")
     elif definition.kind == GeneratedAbilityKind.UTILITY:
-        if definition.mechanics.effect != AbilityEffect.MINOR_UTILITY or definition.mechanics.domain != AbilityDomain.OBJECT:
-            raise ValueError("Utility abilities must use the object minor-utility mechanic.")
+        if (
+            definition.mechanics.effect
+            not in {AbilityEffect.MINOR_UTILITY, AbilityEffect.MOVE, AbilityEffect.TOGGLE}
+            or definition.mechanics.domain != AbilityDomain.OBJECT
+        ):
+            raise ValueError("Utility abilities must use a supported object mechanic.")
     if definition.mechanics.detail not in {AbilityDetail.LIMITED, AbilityDetail.PRACTICAL}:
         raise ValueError("Generated ability detail is not supported.")
     if len(definition.mechanics.requires) > 2:
@@ -116,10 +138,24 @@ def validate_generated_ability_definition(definition: GeneratedAbilityDefinition
         raise ValueError("Generated ability bypasses must not contain duplicates.")
     if definition.mechanics.bypasses:
         raise ValueError("Generated starter abilities may not bypass core gameplay constraints.")
+    is_legacy_generic = definition.mechanics.effect in {
+        AbilityEffect.SENSE,
+        AbilityEffect.MINOR_UTILITY,
+    } and (
+        definition.mechanics.sense_filter is None
+        and definition.mechanics.object_motion is None
+        and definition.mechanics.object_state is None
+    )
+    if not is_legacy_generic and (
+        definition.mechanics.requires != ("nearby",)
+    ):
+        raise ValueError("Specific generated abilities must require nearby targets.")
 
 
 def validate_starter_ability_definitions(
     definitions: Sequence[GeneratedAbilityDefinition],
+    *,
+    allow_legacy_generic: bool = False,
 ) -> tuple[GeneratedAbilityDefinition, GeneratedAbilityDefinition]:
     """Validate the exactly-two modest starter set before it reaches state."""
     if len(definitions) != 2:
@@ -129,6 +165,10 @@ def validate_starter_ability_definitions(
     kinds: set[GeneratedAbilityKind] = set()
     for definition in definitions:
         validate_generated_ability_definition(definition)
+        if not allow_legacy_generic and _is_legacy_generic_mechanic(definition):
+            raise ValueError("New generated starters must use a specific supported mechanic.")
+        if not allow_legacy_generic:
+            _validate_thematic_display_name(definition.display_name)
         if definition.minimum_points != 0:
             raise ValueError("Generated starter abilities must be available at baseline.")
         if definition.ability_id in seen_ids:
@@ -142,6 +182,40 @@ def validate_starter_ability_definitions(
     if kinds != {GeneratedAbilityKind.SENSORY, GeneratedAbilityKind.UTILITY}:
         raise ValueError("Starter abilities require one sensory and one utility definition.")
     return (definitions[0], definitions[1])
+
+
+def _is_legacy_generic_mechanic(definition: GeneratedAbilityDefinition) -> bool:
+    return (
+        definition.mechanics.effect == AbilityEffect.SENSE
+        and definition.mechanics.sense_filter is None
+    ) or (
+        definition.mechanics.effect == AbilityEffect.MINOR_UTILITY
+        and definition.mechanics.object_motion is None
+        and definition.mechanics.object_state is None
+    )
+
+
+def _validate_thematic_display_name(display_name: str) -> None:
+    words = display_name.split()
+    taxonomy_terms = {
+        "ability",
+        "convenience",
+        "detection",
+        "influence",
+        "minor",
+        "nearby",
+        "object",
+        "perception",
+        "presence",
+        "sensory",
+        "supernatural",
+        "utility",
+    }
+    normalized_words = {word.casefold().strip(".,:;!?-'\"") for word in words}
+    if not 1 <= len(words) <= 3 or (
+        normalized_words and normalized_words <= taxonomy_terms
+    ):
+        raise ValueError("Generated starter display names must be short and thematic.")
 
 
 CANONICAL_ABILITY_DEFINITIONS: tuple[AbilityDefinition, ...] = (
@@ -349,13 +423,29 @@ def _generated_ability_player_facing_summary(
         and definition.mechanics.effect == AbilityEffect.SENSE
         and definition.mechanics.domain == AbilityDomain.SURROUNDINGS
     ):
+        if definition.mechanics.sense_filter == AbilitySenseFilter.PRESENCE:
+            range_text = (
+                "this room and directly adjacent rooms"
+                if definition.mechanics.range == 1
+                else "this room"
+            )
+            return f"Sense active presence in {range_text}."
+        if definition.mechanics.sense_filter == AbilitySenseFilter.SUPERNATURAL_PRESENCE:
+            range_text = (
+                ", including from directly adjacent spaces"
+                if definition.mechanics.range == 1
+                else " in this room"
+            )
+            return f"Sense nearby supernatural presence{range_text}."
         return "Sense faint or unusual changes in nearby surroundings."
-    if (
-        definition.kind == GeneratedAbilityKind.UTILITY
-        and definition.mechanics.effect == AbilityEffect.MINOR_UTILITY
-        and definition.mechanics.domain == AbilityDomain.OBJECT
-    ):
+    if definition.mechanics.effect == AbilityEffect.MINOR_UTILITY:
         return "Exert a small practical supernatural influence on a nearby ordinary object."
+    if definition.mechanics.effect == AbilityEffect.MOVE:
+        return "Draw a small portable object from this room into your hand."
+    if definition.mechanics.object_state == AbilityObjectState.OPEN:
+        return "Open or close a nearby ordinary object that can already be opened."
+    if definition.mechanics.object_state == AbilityObjectState.LIT:
+        return "Light or extinguish a nearby object that can normally hold a flame."
     raise ValueError("Generated ability mechanics do not have a player-facing summary.")
 
 
@@ -385,6 +475,33 @@ def project_narrator_ability_gameplay_result(
         effect_resolved=result.status == AbilityGameplayStatus.RESOLVED,
         check_id=result.check_id,
         check_result=check_projection,
+        presence_effect=result.presence_effect,
+        object_effect=(
+            NarratorAbilityObjectEffect(
+                outcome=_narrator_object_outcome(result.object_effect),
+                item_name=result.object_effect.item_name,
+            )
+            if result.object_effect is not None
+            else None
+        ),
+    )
+
+
+def _narrator_object_outcome(
+    effect: AbilityObjectEffect,
+) -> NarratorAbilityObjectOutcome:
+    if effect.operation == AbilityObjectEffectOperation.RETRIEVE:
+        return NarratorAbilityObjectOutcome.DRAWN_INTO_HAND
+    if effect.operation == AbilityObjectEffectOperation.TOGGLE_OPEN:
+        return (
+            NarratorAbilityObjectOutcome.OPENED
+            if effect.new_value
+            else NarratorAbilityObjectOutcome.CLOSED
+        )
+    return (
+        NarratorAbilityObjectOutcome.LIT
+        if effect.new_value
+        else NarratorAbilityObjectOutcome.EXTINGUISHED
     )
 
 
@@ -502,7 +619,10 @@ def resolve_ability_check(
 
 
 def resolve_gameplay_ability_check(
-    state: dict[str, Any], ability_id: str
+    state: dict[str, Any],
+    ability_id: str,
+    target: str | None = None,
+    world: World = DEFAULT_WORLD,
 ) -> AbilityGameplayResult:
     """Resolve the small authored player-check vocabulary for the current state."""
     built_in = get_ability_definition(ability_id)
@@ -535,15 +655,14 @@ def resolve_gameplay_ability_check(
             reason=availability.reason,
         )
     if generated is not None:
-        return AbilityGameplayResult(
-            ability_id=ability_id,
+        return _resolve_generated_ability_effect(
+            state=state,
+            definition=generated,
+            target=target,
+            world=world,
+            owned=availability.owned,
             display_name=display_name,
             description=description,
-            owned=availability.owned,
-            available=True,
-            status=AbilityGameplayStatus.UNSUPPORTED,
-            error_code="unsupported_generated_mechanic",
-            reason="This generated ability has no deterministic gameplay rule yet.",
         )
     player = state.get("player")
     location = player.get("location") if isinstance(player, dict) else None
@@ -568,6 +687,217 @@ def resolve_gameplay_ability_check(
         status=AbilityGameplayStatus.RESOLVED,
         check_id="keen_eye_library_inspection",
         check_result=check_result,
+    )
+
+
+def _resolve_generated_ability_effect(
+    *,
+    state: dict[str, Any],
+    definition: GeneratedAbilityDefinition,
+    target: str | None,
+    world: World,
+    owned: bool,
+    display_name: str,
+    description: str,
+) -> AbilityGameplayResult:
+    mechanics = definition.mechanics
+    common = {
+        "ability_id": definition.ability_id,
+        "display_name": display_name,
+        "description": description,
+        "owned": owned,
+        "available": True,
+    }
+    if _is_legacy_generic_mechanic(definition):
+        return AbilityGameplayResult(
+            **common,
+            status=AbilityGameplayStatus.UNSUPPORTED,
+            error_code="unsupported_generated_mechanic",
+            reason="This legacy generated ability has no safely mapped operation.",
+        )
+
+    player = state.get("player")
+    current_room = player.get("location") if isinstance(player, dict) else None
+    room = world.get_room(current_room) if isinstance(current_room, str) else None
+    if room is None:
+        return AbilityGameplayResult(
+            **common,
+            status=AbilityGameplayStatus.INELIGIBLE_CONTEXT,
+            error_code="invalid_current_location",
+            reason="The player is not in a valid room.",
+        )
+
+    if mechanics.effect == AbilityEffect.SENSE:
+        if target is not None:
+            return AbilityGameplayResult(
+                **common,
+                status=AbilityGameplayStatus.INELIGIBLE_CONTEXT,
+                error_code="unexpected_target",
+                reason="This ability does not take an object target.",
+            )
+        sense_filter = mechanics.sense_filter
+        if sense_filter is None:
+            return AbilityGameplayResult(
+                **common,
+                status=AbilityGameplayStatus.UNSUPPORTED,
+                error_code="unsupported_generated_mechanic",
+                reason="This legacy generated ability has no safely mapped operation.",
+            )
+        adjacent_room_ids = (
+            {
+                adjacent
+                for adjacent in room.exits.values()
+                if world.get_room(adjacent) is not None
+            }
+            if mechanics.range == 1
+            else set()
+        )
+        npc_state = state.get("npcs")
+        current_count = 0
+        adjacent_count = 0
+        if isinstance(npc_state, dict):
+            for npc in npc_state.values():
+                if not isinstance(npc, dict) or npc.get("status") != "active":
+                    continue
+                if sense_filter == AbilitySenseFilter.SUPERNATURAL_PRESENCE:
+                    tags = npc.get("tags")
+                    if not isinstance(tags, list) or not any(
+                        isinstance(tag, str) and tag.casefold() in SUPERNATURAL_NPC_TAGS
+                        for tag in tags
+                    ):
+                        continue
+                location = npc.get("location")
+                if location == room.id:
+                    current_count += 1
+                elif location in adjacent_room_ids:
+                    adjacent_count += 1
+        presence_effect = AbilityPresenceEffect(
+            sense_filter=sense_filter,
+            found=current_count + adjacent_count > 0,
+            current_room_count=current_count,
+            adjacent_room_count=adjacent_count,
+        )
+        return AbilityGameplayResult(
+            **common,
+            status=AbilityGameplayStatus.RESOLVED,
+            presence_effect=presence_effect,
+        )
+
+    if not isinstance(target, str) or not target.strip():
+        return AbilityGameplayResult(
+            **common,
+            status=AbilityGameplayStatus.INELIGIBLE_CONTEXT,
+            error_code="target_missing",
+            reason="An object target is required.",
+        )
+
+    items = ensure_items_state(state)
+    room_items = {
+        item_id: item
+        for item_id, item in items.items()
+        if item.get("location") == room_location(room.id)
+    }
+    target_matches = resolve_item_ids(room_items, target)
+    if len(target_matches) > 1:
+        return AbilityGameplayResult(
+            **common,
+            status=AbilityGameplayStatus.INELIGIBLE_CONTEXT,
+            error_code="target_ambiguous",
+            reason="The requested object matches more than one nearby item.",
+        )
+    if not target_matches:
+        global_matches = resolve_item_ids(items, target)
+        error_code = "target_not_nearby" if global_matches else "target_missing"
+        reason = (
+            "The requested object is not in this room."
+            if global_matches
+            else "No item matches the requested target."
+        )
+        return AbilityGameplayResult(
+            **common,
+            status=AbilityGameplayStatus.INELIGIBLE_CONTEXT,
+            error_code=error_code,
+            reason=reason,
+        )
+
+    item_id = target_matches[0]
+    item = items[item_id]
+    raw_item_name = item.get("name")
+    item_name: str = raw_item_name if isinstance(raw_item_name, str) else str(item_id)
+    if mechanics.effect == AbilityEffect.MOVE:
+        if item.get("portable") is not True:
+            return AbilityGameplayResult(
+                **common,
+                status=AbilityGameplayStatus.INELIGIBLE_CONTEXT,
+                error_code="target_not_portable",
+                reason="The requested object cannot be carried.",
+            )
+        move_room_item_to_inventory(state, items, item_id, room.id)
+        object_effect = AbilityObjectEffect(
+            operation=AbilityObjectEffectOperation.RETRIEVE,
+            item_id=item_id,
+            item_name=item_name,
+        )
+    else:
+        properties = item.get("properties")
+        object_state = mechanics.object_state
+        property_name = (
+            "is_open"
+            if object_state == AbilityObjectState.OPEN
+            else "lit"
+            if object_state == AbilityObjectState.LIT
+            else None
+        )
+        capability_name = (
+            "openable" if object_state == AbilityObjectState.OPEN else "lightable"
+        )
+        if (
+            property_name is None
+            or not isinstance(properties, dict)
+            or properties.get(capability_name) is not True
+            or not isinstance(properties.get(property_name), bool)
+        ):
+            error_code = (
+                "target_not_openable"
+                if object_state == AbilityObjectState.OPEN
+                else "target_not_lightable"
+            )
+            reason = (
+                "The requested object cannot be opened or closed."
+                if object_state == AbilityObjectState.OPEN
+                else "The requested object cannot be lit or extinguished."
+            )
+            return AbilityGameplayResult(
+                **common,
+                status=AbilityGameplayStatus.INELIGIBLE_CONTEXT,
+                error_code=error_code,
+                reason=reason,
+            )
+        if object_state == AbilityObjectState.OPEN and properties.get("locked") is True:
+            return AbilityGameplayResult(
+                **common,
+                status=AbilityGameplayStatus.INELIGIBLE_CONTEXT,
+                error_code="target_locked",
+                reason="The requested object is locked.",
+            )
+        previous_value = properties[property_name]
+        new_value = not previous_value
+        properties[property_name] = new_value
+        object_effect = AbilityObjectEffect(
+            operation=(
+                AbilityObjectEffectOperation.TOGGLE_OPEN
+                if property_name == "is_open"
+                else AbilityObjectEffectOperation.TOGGLE_LIT
+            ),
+            item_id=item_id,
+            item_name=item_name,
+            previous_value=previous_value,
+            new_value=new_value,
+        )
+    return AbilityGameplayResult(
+        **common,
+        status=AbilityGameplayStatus.RESOLVED,
+        object_effect=object_effect,
     )
 
 

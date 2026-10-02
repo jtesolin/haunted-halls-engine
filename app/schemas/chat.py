@@ -5,7 +5,10 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.schemas.abilities import AbilityCheckOutcome
 from app.schemas.character_progression import ProgressionTrackId
-from app.schemas.generated_abilities import AbilityGameplayResult
+from app.schemas.generated_abilities import (
+    AbilityGameplayResult,
+    AbilityPresenceEffect,
+)
 
 
 class ChatRequest(BaseModel):
@@ -138,6 +141,21 @@ class NarratorAbilityCheckResult(BaseModel):
     margin: int | None = None
 
 
+class NarratorAbilityObjectOutcome(StrEnum):
+    DRAWN_INTO_HAND = "drawn_into_hand"
+    OPENED = "opened"
+    CLOSED = "closed"
+    LIT = "lit"
+    EXTINGUISHED = "extinguished"
+
+
+class NarratorAbilityObjectEffect(BaseModel):
+    """Player-safe description of an authoritative generated object effect."""
+
+    outcome: NarratorAbilityObjectOutcome
+    item_name: str
+
+
 class NarratorAbilityGameplayResult(BaseModel):
     """Player-safe outcome of an attempted ability use."""
 
@@ -149,6 +167,8 @@ class NarratorAbilityGameplayResult(BaseModel):
     effect_resolved: bool
     check_id: str | None = None
     check_result: NarratorAbilityCheckResult | None = None
+    presence_effect: AbilityPresenceEffect | None = None
+    object_effect: NarratorAbilityObjectEffect | None = None
 
 
 class NarratorToolExecutionResult(BaseModel):

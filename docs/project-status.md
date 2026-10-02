@@ -75,11 +75,16 @@ Stable cross-repository authority and security invariants belong in
   player-safe, in-world results. `keen_eye` is the first player-invokable
   deterministic gameplay check, with an authored Library inspection at
   difficulty 2.
+- **Phase 8F3:** New generated starters use thematic names and can use bounded
+  deterministic presence/supernatural-presence sensing, portable-item pull,
+  open/close toggles, or light/extinguish toggles. Mechanical meaning remains
+  engine-owned and deterministic. Existing generic Phase 8F2 definitions remain
+  valid and are neither rewritten nor assigned guessed mechanics.
 
 ## Current Phase 8 status
 
-**8F2 is implemented. The next intended slice generalizes deterministic
-execution of validated generated-ability mechanics.**
+**8F3 is implemented.** `keen_eye` remains the authored deterministic Library
+check at difficulty 2.
 
 The future character-details frontend may expose owned built-in/generated
 abilities alongside inventory and player-facing mechanical summaries. It
@@ -99,9 +104,8 @@ remains out of scope for this engine slice.
   generic reward/achievement/rules DSLs, combat progression, levels/classes,
   model-selected rewards, frontend progression UI, and broad evaluation
   expansion remain deferred.
-- General deterministic execution of generated ability mechanics remains the
-  next Phase 8 slice; generated starter definitions are persisted now but
-  unsupported mechanics never receive model-adjudicated effects.
+- New generated ability effects execute from authoritative state without
+  Director, WorldAuthorityExecutor, or model adjudication.
 
 See [architecture.md](architecture.md) for durable architecture decisions and
 the repository instructions for implementation boundaries.

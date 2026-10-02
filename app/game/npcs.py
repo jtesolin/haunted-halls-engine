@@ -6,6 +6,8 @@ from typing import Any
 from app.game.world import normalize_identifier
 from app.schemas.chat import NearbyNPC
 
+SUPERNATURAL_NPC_TAGS = frozenset({"ghost", "undead"})
+
 
 @dataclass(frozen=True)
 class NPC:

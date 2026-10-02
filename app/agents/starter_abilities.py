@@ -14,6 +14,8 @@ from app.schemas.generated_abilities import (
     AbilityDetail,
     AbilityDomain,
     AbilityEffect,
+    AbilityObjectMotion,
+    AbilitySenseFilter,
     GeneratedAbilityDefinition,
     GeneratedAbilityKind,
     GeneratedAbilityMechanics,
@@ -33,19 +35,22 @@ class StarterAbilityGenerator(BaseAgent):
                 "content": (
                     "Generate exactly two modest non-combat Haunted Halls starter abilities. "
                     "Return only the schema. Include one sensory ability using sense/surroundings "
-                    "and one utility ability using minor_utility/object. Set minimum_points to 0 "
-                    "so both abilities are available immediately. Use range 0 or 1, no "
-                    "bypasses, and only nearby or line_of_sight requirements. Do not use keen_eye "
-                    "or any existing built-in ability id or display name. Names and descriptions "
-                    "must match their selected category and remain modest. For sensory/sense/"
-                    "surroundings, describe only nearby perception or sensation: do not imply perfect "
-                    "knowledge, reveal hidden objects beyond faint or unusual nearby sensations, read "
-                    "minds, see remotely, or bypass invisibility or darkness. For utility/"
-                    "minor_utility/object, describe only a convenience-oriented, minor practical "
-                    "interaction with an ordinary nearby object: do not reveal hidden information, "
-                    "detect markings or secrets, act as perception, unlock arbitrary locks, teleport "
-                    "or move entities, damage or attack, or change quest or world state. Do not give "
-                    "a name that strongly implies another category's power."
+                    "with sense_filter presence or supernatural_presence, and one utility ability "
+                    "using exactly one supported operation: move/object/toward_player, "
+                    "toggle/object/open, or toggle/object/lit. Set minimum_points to 0 so both "
+                    "abilities are available immediately. Sensory range may be 0 (current room) or "
+                    "1 (current and directly adjacent rooms); utility range must be 0 (current room). "
+                    "Use only the nearby requirement and no bypasses. Do not use keen_eye or any "
+                    "existing built-in ability id or display name. Give each ability a thematic, "
+                    "evocative name of one to three short words that hints at its supported effect; "
+                    "never use raw taxonomy or debugging labels. The name and flavor description "
+                    "must remain modest, but only the validated mechanics define what it does. For "
+                    "presence sensing, reveal only active presence (and whether it is supernatural), "
+                    "not identity or biography. Pull only a small portable ordinary item from the "
+                    "current room. Toggle only the existing state of a canonically openable or "
+                    "lightable nearby item. Do not imply perfect knowledge, read minds, see remotely, "
+                    "bypass darkness or invisibility, unlock objects, move entities, damage or attack, "
+                    "or change quest or world state."
                 ),
             }
         ]
@@ -99,8 +104,8 @@ class StarterAbilityGenerator(BaseAgent):
             abilities=[
                 GeneratedAbilityDefinition(
                     ability_id="echo_sense",
-                    display_name="Echo Sense",
-                    description="Feel nearby spaces through faint supernatural echoes.",
+                    display_name="Grave Echo",
+                    description="Feel supernatural presence through a faint chill in the air.",
                     kind=GeneratedAbilityKind.SENSORY,
                     mechanics=GeneratedAbilityMechanics(
                         effect=AbilityEffect.SENSE,
@@ -109,22 +114,24 @@ class StarterAbilityGenerator(BaseAgent):
                         detail=AbilityDetail.LIMITED,
                         range=1,
                         requires=("nearby",),
+                        sense_filter=AbilitySenseFilter.SUPERNATURAL_PRESENCE,
                     ),
                     track=ProgressionTrackId.INVESTIGATION,
                     minimum_points=0,
                 ),
                 GeneratedAbilityDefinition(
                     ability_id="whispering_touch",
-                    display_name="Whispering Touch",
-                    description="Coax a nearby ordinary object to offer a small practical response.",
+                    display_name="Whispering Grasp",
+                    description="Draw a small object near with a quiet, unseen pull.",
                     kind=GeneratedAbilityKind.UTILITY,
                     mechanics=GeneratedAbilityMechanics(
-                        effect=AbilityEffect.MINOR_UTILITY,
+                        effect=AbilityEffect.MOVE,
                         domain=AbilityDomain.OBJECT,
                         channel=AbilityChannel.SUPERNATURAL,
                         detail=AbilityDetail.PRACTICAL,
-                        range=1,
+                        range=0,
                         requires=("nearby",),
+                        object_motion=AbilityObjectMotion.TOWARD_PLAYER,
                     ),
                     track=ProgressionTrackId.OCCULT,
                     minimum_points=0,

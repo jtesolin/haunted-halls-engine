@@ -14,6 +14,7 @@ from app.game.abilities import project_narrator_ability_gameplay_result
 from app.schemas.chat import (
     NarratorSceneContext,
     NarratorToolExecutionResult,
+    NarratorAbilityObjectOutcome,
     ParsedAction,
     ToolExecutionResult,
 )
@@ -184,6 +185,34 @@ class NarratorAgent(BaseAgent):
                         else "failed"
                     )
                     summary = f"{ability_result.display_name or 'Ability'} check {check_outcome}."
+                elif ability_result.presence_effect is not None:
+                    effect = ability_result.presence_effect
+                    kind = (
+                        "supernatural presence"
+                        if effect.sense_filter.value == "supernatural_presence"
+                        else "active presence"
+                    )
+                    if not effect.found:
+                        summary = f"You sense no {kind} nearby."
+                    else:
+                        locations = []
+                        if effect.current_room_count:
+                            locations.append("this room")
+                        if effect.adjacent_room_count:
+                            locations.append("directly adjacent spaces")
+                        summary = f"You sense {kind} in {' and '.join(locations)}."
+                elif ability_result.object_effect is not None:
+                    effect = ability_result.object_effect
+                    if effect.outcome == NarratorAbilityObjectOutcome.DRAWN_INTO_HAND:
+                        summary = f"The {effect.item_name} is drawn into your hand."
+                    elif effect.outcome == NarratorAbilityObjectOutcome.OPENED:
+                        summary = f"The {effect.item_name} opens."
+                    elif effect.outcome == NarratorAbilityObjectOutcome.CLOSED:
+                        summary = f"The {effect.item_name} closes."
+                    elif effect.outcome == NarratorAbilityObjectOutcome.LIT:
+                        summary = f"The {effect.item_name} is lit."
+                    else:
+                        summary = f"The {effect.item_name} is extinguished."
                 elif not ability_result.owned:
                     summary = "You do not possess that ability."
                 elif not ability_result.available:

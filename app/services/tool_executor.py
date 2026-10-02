@@ -10,6 +10,7 @@ from app.game.items import (
     available_items_for_room,
     ensure_items_state,
     inventory_item_ids,
+    move_room_item_to_inventory,
     resolve_item_ids,
     room_location,
     sync_inventory_projection,
@@ -22,7 +23,11 @@ from app.game.npcs import (
 from app.core.config import settings
 from app.game.world import DEFAULT_WORLD, World
 from app.schemas.chat import ActionType, ParsedAction, ToolExecutionResult
-from app.schemas.generated_abilities import AbilityGameplayStatus
+from app.schemas.generated_abilities import (
+    AbilityGameplayStatus,
+    AbilityObjectEffect,
+    AbilityObjectEffectOperation,
+)
 from app.tools.mcp_client import build_mcp_client
 from app.tools.registry import RegistryTransportError, ToolRegistry
 
@@ -106,26 +111,51 @@ class ToolExecutor:
                     error_code="invalid_ability_request",
                 )
             else:
-                ability_result = resolve_gameplay_ability_check(state, ability_id)
-                resolved = ability_result.status == AbilityGameplayStatus.RESOLVED
-                succeeded = (
-                    resolved
-                    and ability_result.check_result is not None
-                    and ability_result.check_result.success is True
+                ability_result = resolve_gameplay_ability_check(
+                    state,
+                    ability_id,
+                    target=target,
+                    world=self.world,
                 )
+                resolved = ability_result.status == AbilityGameplayStatus.RESOLVED
+                succeeded = resolved and (
+                    ability_result.check_result is None
+                    or ability_result.check_result.success is True
+                )
+                if ability_result.check_result is not None:
+                    summary = (
+                        f"{ability_result.display_name} check succeeded."
+                        if succeeded
+                        else f"{ability_result.display_name} check failed."
+                    )
+                elif ability_result.presence_effect is not None:
+                    summary = (
+                        "A nearby presence is sensed."
+                        if ability_result.presence_effect.found
+                        else "No qualifying presence is sensed."
+                    )
+                elif ability_result.object_effect is not None:
+                    summary = "The targeted object is affected."
+                else:
+                    summary = ability_result.reason or "The ability cannot be used here."
                 result = ToolExecutionResult(
                     success=succeeded,
-                    applied_tools=["resolve_ability_check"]
-                    if resolved
-                    else [],
-                    summary=(
-                        (
-                            f"{ability_result.display_name} check succeeded."
-                            if succeeded
-                            else f"{ability_result.display_name} check failed."
-                        )
+                    applied_tools=(
+                        ["resolve_generated_ability"]
                         if resolved
-                        else ability_result.reason or "Ability check could not be resolved."
+                        and (
+                            ability_result.presence_effect is not None
+                            or ability_result.object_effect is not None
+                        )
+                        else ["resolve_ability_check"]
+                        if resolved
+                        else []
+                    ),
+                    summary=summary,
+                    state_delta=self._ability_state_delta(
+                        previous_state,
+                        state,
+                        ability_result.object_effect,
                     ),
                     error_code=ability_result.error_code,
                     ability_result=ability_result,
@@ -565,32 +595,15 @@ class ToolExecutor:
                 available_items=available_items_for_room(items, current_room),
             )
 
-        previous_inventory = list(player.get("inventory", [])) if isinstance(player.get("inventory"), list) else []
         moved_from = expected_room_location
-        item["location"] = PLAYER_INVENTORY_LOCATION
-        sync_inventory_projection(state, items)
+        state_delta = move_room_item_to_inventory(state, items, item_id, current_room)
         next_inventory = list(player.get("inventory", [])) if isinstance(player.get("inventory"), list) else []
 
         return ToolExecutionResult(
             success=True,
             applied_tools=["take_item"],
             summary=f"You take {item.get('name', item_id)}.",
-            state_delta={
-                "items": {
-                    item_id: {
-                        "location": {
-                            "from": moved_from,
-                            "to": PLAYER_INVENTORY_LOCATION,
-                        }
-                    }
-                },
-                "player": {
-                    "inventory": {
-                        "from": previous_inventory,
-                        "to": next_inventory,
-                    }
-                },
-            },
+            state_delta=state_delta,
             requested_target=requested_target,
             item_id=item_id,
             item_name=item.get("name") if isinstance(item.get("name"), str) else item_id,
@@ -725,6 +738,54 @@ class ToolExecutor:
             if before.get(key) != after.get(key):
                 delta[key] = after.get(key)
         return delta
+
+    def _ability_state_delta(
+        self,
+        before: dict[str, Any],
+        after: dict[str, Any],
+        object_effect: AbilityObjectEffect | None,
+    ) -> dict[str, Any]:
+        if object_effect is None:
+            return {}
+        item_id = object_effect.item_id
+        if object_effect.operation == AbilityObjectEffectOperation.RETRIEVE:
+            previous_item = before.get("items", {}).get(item_id, {})
+            current_item = after.get("items", {}).get(item_id, {})
+            previous_player = before.get("player", {})
+            current_player = after.get("player", {})
+            return {
+                "items": {
+                    item_id: {
+                        "location": {
+                            "from": previous_item.get("location"),
+                            "to": current_item.get("location"),
+                        }
+                    }
+                },
+                "player": {
+                    "inventory": {
+                        "from": previous_player.get("inventory", []),
+                        "to": current_player.get("inventory", []),
+                    }
+                },
+            }
+        property_name = (
+            "is_open"
+            if object_effect.operation == AbilityObjectEffectOperation.TOGGLE_OPEN
+            else "lit"
+        )
+        return {
+            "items": {
+                item_id: {
+                    "properties": {
+                        property_name: {
+                            "from": object_effect.previous_value,
+                            "to": object_effect.new_value,
+                        }
+                    }
+                }
+            }
+        }
 
     def _dispatch_tool(self, tool_name: str, *args: Any, **kwargs: Any) -> ToolExecutionResult | None:
         try:
