@@ -26,7 +26,7 @@ from app.game.campaign_state import (
     load_authoritative_campaign_state,
 )
 from app.game.character_progression import ensure_character_progression_state, unlock_ability
-from app.game.items import room_location
+from app.game.items import room_location, sync_inventory_projection
 from app.game.narrator_scene import build_narrator_scene_context
 from app.guardrails.model_policy import ModelPolicy
 from app.guardrails.token_budget import TokenBudget
@@ -937,6 +937,108 @@ def test_provider_cannot_invoke_an_unavailable_keen_eye(monkeypatch: pytest.Monk
     assert parsed.parameters == {}
 
 
+@pytest.mark.parametrize("item_location", ["room:entry_hall", "player:current"])
+@pytest.mark.parametrize("reference_kind", ["name", "id", "alias"])
+@pytest.mark.parametrize("deterministic_only", [True, False])
+def test_accessible_item_references_require_an_explicit_ability_qualifier(
+    monkeypatch: pytest.MonkeyPatch,
+    item_location: str,
+    reference_kind: str,
+    deterministic_only: bool,
+) -> None:
+    state = _state_with_starters()
+    reference = {
+        "name": "Brass Token",
+        "id": "brass key",
+        "alias": "Tarnished Brass Key",
+    }[reference_kind]
+    state["player"]["generated_abilities"][1]["display_name"] = reference
+    state["items"]["brass_key"]["location"] = item_location
+    if reference_kind == "id":
+        state["items"]["brass_key"]["name"] = "Golden Token"
+        state["items"]["brass_key"]["aliases"] = []
+    elif reference_kind == "name":
+        item = state["items"]["brass_key"]
+        item["name"] = reference
+        item["aliases"] = []
+    state["items"]["candle"]["location"] = room_location("entry_hall")
+    sync_inventory_projection(state, state["items"])
+    original_state = copy.deepcopy(state)
+    calls = 0
+
+    async def fake_generate_structured(**kwargs: object) -> ActionParserOutput:
+        nonlocal calls
+        calls += 1
+        return ActionParserOutput(
+            action=ActionType.ABILITY_CHECK,
+            target="candle",
+            parameters=ActionParserParameters(ability_id="whispering_touch"),
+            parse_status="ok",
+            confidence=1,
+        )
+
+    monkeypatch.setattr(
+        "app.agents.action_parser.model_client.generate_structured", fake_generate_structured
+    )
+    parser = ActionParserAgent()
+    context = parser._build_parser_context(json.dumps(state))
+    assert reference.casefold() in context.accessible_item_references
+    item_request = asyncio.run(parser.parse(
+        message=f"use {reference.lower()} on candle",
+        campaign_state=json.dumps(state),
+        recent_turns=[],
+        deterministic_only=deterministic_only,
+    ))
+    if deterministic_only:
+        assert item_request.action == ActionType.USE
+        assert item_request.target == "candle"
+        assert item_request.parameters == {"with_item": reference.casefold()}
+    else:
+        assert item_request.action == ActionType.UNKNOWN
+        assert item_request.target is None
+        assert item_request.parameters == {}
+    updated, result = ToolExecutor().execute(
+        parsed_action=item_request, campaign_state=json.dumps(state)
+    )
+    assert updated == original_state
+    assert result.ability_result is None
+    assert result.state_delta == {}
+
+    ability_request = asyncio.run(parser.parse(
+        message=f"use my ability {reference} on candle",
+        campaign_state=json.dumps(state),
+        recent_turns=[],
+        deterministic_only=deterministic_only,
+    ))
+    assert ability_request.action == ActionType.ABILITY_CHECK
+    assert ability_request.parameters == {"ability_id": "whispering_touch"}
+    assert ability_request.target == "candle"
+    updated, result = ToolExecutor().execute(
+        parsed_action=ability_request, campaign_state=json.dumps(state)
+    )
+    assert result.success is True
+    assert updated["items"]["candle"]["location"] == "player:current"
+    assert calls == (0 if deterministic_only else 2)
+    assert state == original_state
+
+
+def test_inaccessible_item_does_not_block_natural_ability_invocation() -> None:
+    state = _state_with_starters()
+    state["player"]["generated_abilities"][1]["display_name"] = "Brass Key"
+    state["items"]["brass_key"]["location"] = room_location("library")
+    assert "brass key" not in ActionParserAgent()._build_parser_context(
+        json.dumps(state)
+    ).accessible_item_references
+    parsed = asyncio.run(ActionParserAgent().parse(
+        message="use Brass Key on candle",
+        campaign_state=json.dumps(state),
+        recent_turns=[],
+        deterministic_only=True,
+    ))
+    assert parsed.action == ActionType.ABILITY_CHECK
+    assert parsed.parameters == {"ability_id": "whispering_touch"}
+
+
 def test_generated_descriptions_use_mechanics_not_persisted_prose() -> None:
     state = _state_with_starters()
     definitions = state["player"]["generated_abilities"]
@@ -1331,6 +1433,60 @@ def test_generated_open_toggle_changes_only_existing_open_state() -> None:
         for key, value in updated["items"]["old_book"]["properties"].items()
         if key != "is_open"
     } == {key: value for key, value in previous.items() if key != "is_open"}
+
+
+@pytest.mark.parametrize("lock_value", [True, 1, 0, "true", {}, ["yes"], None])
+def test_generated_open_toggle_fails_closed_on_present_unknown_lock_values(
+    lock_value: object,
+) -> None:
+    state = _state_with_starters()
+    state["player"]["location"] = "library"
+    _set_mechanics(
+        state, 1, _mechanics(
+            effect=AbilityEffect.TOGGLE,
+            domain=AbilityDomain.OBJECT,
+            detail=AbilityDetail.PRACTICAL,
+            range=0,
+            object_state=AbilityObjectState.OPEN,
+        ),
+    )
+    state["items"]["old_book"]["properties"].update(
+        {"locked": lock_value, "unrelated": "preserve"}
+    )
+    original_state = copy.deepcopy(state)
+    updated, result = _execute_generated(state, "whispering_touch", "old book")
+    assert result.success is False
+    assert result.ability_result is not None
+    assert result.ability_result.error_code == "target_locked"
+    assert result.state_delta == {}
+    assert updated == original_state
+    assert state == original_state
+    projected = project_narrator_ability_gameplay_result(result.ability_result).model_dump_json()
+    for diagnostic in ("locked", "malformed", "schema", "error_code", "reason"):
+        assert diagnostic not in projected
+
+
+def test_generated_open_toggle_accepts_literal_false_lock_state() -> None:
+    state = _state_with_starters()
+    state["player"]["location"] = "library"
+    _set_mechanics(
+        state, 1, _mechanics(
+            effect=AbilityEffect.TOGGLE,
+            domain=AbilityDomain.OBJECT,
+            detail=AbilityDetail.PRACTICAL,
+            range=0,
+            object_state=AbilityObjectState.OPEN,
+        ),
+    )
+    properties = state["items"]["old_book"]["properties"]
+    properties.update({"locked": False, "unrelated": "preserve"})
+    expected_properties = {**properties, "is_open": True}
+    updated, result = _execute_generated(state, "whispering_touch", "old book")
+    assert result.success is True
+    assert updated["items"]["old_book"]["properties"] == expected_properties
+    assert result.state_delta == {
+        "items": {"old_book": {"properties": {"is_open": {"from": False, "to": True}}}}
+    }
 
 
 def test_generated_ability_execution_does_not_dispatch_tools_or_adjudicate() -> None:

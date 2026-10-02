@@ -892,7 +892,11 @@ def _resolve_generated_ability_effect(
                 error_code=error_code,
                 reason=reason,
             )
-        if object_state == AbilityObjectState.OPEN and properties.get("locked") is True:
+        if (
+            object_state == AbilityObjectState.OPEN
+            and "locked" in properties
+            and properties["locked"] is not False
+        ):
             return AbilityGameplayResult(
                 **common,
                 status=AbilityGameplayStatus.INELIGIBLE_CONTEXT,

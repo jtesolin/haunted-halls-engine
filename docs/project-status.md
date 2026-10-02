@@ -81,7 +81,9 @@ Stable cross-repository authority and security invariants belong in
   engine-owned and deterministic. Existing generic Phase 8F2 definitions remain
   valid and are neither rewritten nor assigned guessed mechanics. Both parser
   paths enforce unique explicit available-ability references and player-supplied
-  object targets before execution; new starter references cannot collide.
+  object targets before execution; references shared with accessible items require
+  an explicit ability qualifier. New starter references cannot collide, and
+  generated opening fails closed on any present lock state except literal `False`.
 
 ## Current Phase 8 status
 

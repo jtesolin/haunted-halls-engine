@@ -46,6 +46,7 @@ class ParserContext(BaseModel):
     available_exits: list[dict[str, str]] = Field(default_factory=list)
     nearby_objects: list[str] = Field(default_factory=list)
     inventory: list[str] = Field(default_factory=list)
+    accessible_item_references: list[str] = Field(default_factory=list)
     nearby_npcs: list[dict[str, Any]] = Field(default_factory=list)
     status_flags: dict[str, Any] = Field(default_factory=dict)
     abilities: list[dict[str, str | bool]] = Field(default_factory=list)
@@ -418,6 +419,20 @@ class ActionParserAgent(BaseAgent):
             current_room_description = None
 
         nearby_objects = room_item_ids(items, location) if isinstance(location, str) else []
+        item_references: set[str] = set()
+        for item_id in set(nearby_objects) | set(inventory):
+            item = items[item_id]
+            name = item.get("name")
+            item_references.update(ability_invocation_references(
+                item_id, name if isinstance(name, str) else item_id
+            ))
+            aliases = item.get("aliases")
+            if isinstance(aliases, list):
+                item_references.update(
+                    " ".join(alias.casefold().split())
+                    for alias in aliases
+                    if isinstance(alias, str) and alias.strip()
+                )
 
         status_flags = self._dict_value(state, "status")
         generated_by_id = {
@@ -446,6 +461,7 @@ class ActionParserAgent(BaseAgent):
             available_exits=available_exits,
             nearby_objects=nearby_objects,
             inventory=inventory,
+            accessible_item_references=sorted(item_references),
             nearby_npcs=nearby_npcs,
             status_flags=status_flags,
             abilities=abilities,
@@ -492,6 +508,7 @@ class ActionParserAgent(BaseAgent):
     ) -> ExplicitAbilityRequest | None:
         candidates: list[tuple[int, str, str | None, bool]] = []
         invocation_starts: set[int] = set()
+        item_references = set(parser_context.accessible_item_references)
         for ability in parser_context.abilities:
             ability_id = ability.get("ability_id")
             name = ability.get("name")
@@ -503,6 +520,11 @@ class ActionParserAgent(BaseAgent):
                 continue
             for reference in ability_invocation_references(ability_id, name):
                 for match in re.finditer(self._explicit_ability_pattern(reference), lower):
+                    if (
+                        reference in item_references
+                        and re.search(r"\bability\s+$", lower[:match.start("reference")]) is None
+                    ):
+                        continue
                     suffix = lower[match.end():].rstrip().rstrip(".!?").rstrip()
                     requires_target = ability.get("requires_target") is True
                     if not suffix:
