@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 from types import MappingProxyType
 from typing import Any, Mapping, Sequence
 
@@ -162,6 +163,7 @@ def validate_starter_ability_definitions(
         raise ValueError("Exactly two generated starter abilities are required.")
     seen_ids: set[str] = set()
     seen_names: set[str] = set()
+    seen_references: set[str] = set()
     kinds: set[GeneratedAbilityKind] = set()
     for definition in definitions:
         validate_generated_ability_definition(definition)
@@ -176,12 +178,28 @@ def validate_starter_ability_definitions(
         normalized_name = definition.display_name.strip().casefold()
         if normalized_name in seen_names:
             raise ValueError("Generated starter ability names must be distinct.")
+        if not allow_legacy_generic:
+            references = ability_invocation_references(
+                definition.ability_id, definition.display_name
+            )
+            if references & seen_references:
+                raise ValueError("Generated starter invocation references must be distinct.")
+            seen_references.update(references)
         seen_ids.add(definition.ability_id)
         seen_names.add(normalized_name)
         kinds.add(definition.kind)
     if kinds != {GeneratedAbilityKind.SENSORY, GeneratedAbilityKind.UTILITY}:
         raise ValueError("Starter abilities require one sensory and one utility definition.")
     return (definitions[0], definitions[1])
+
+
+def ability_invocation_references(ability_id: str, display_name: str) -> frozenset[str]:
+    """Normalize the exact player references shared by validation and parsing."""
+    return frozenset(
+        " ".join(reference.casefold().split())
+        for reference in (ability_id, ability_id.replace("_", " "), display_name)
+        if reference.strip()
+    )
 
 
 def _is_legacy_generic_mechanic(definition: GeneratedAbilityDefinition) -> bool:
@@ -196,7 +214,8 @@ def _is_legacy_generic_mechanic(definition: GeneratedAbilityDefinition) -> bool:
 
 
 def _validate_thematic_display_name(display_name: str) -> None:
-    words = display_name.split()
+    normalized_name = display_name.casefold()
+    words = re.findall(r"[a-z0-9]+(?:'[a-z0-9]+)?", normalized_name)
     taxonomy_terms = {
         "ability",
         "convenience",
@@ -211,7 +230,7 @@ def _validate_thematic_display_name(display_name: str) -> None:
         "supernatural",
         "utility",
     }
-    normalized_words = {word.casefold().strip(".,:;!?-'\"") for word in words}
+    normalized_words = set(re.findall(r"[a-z0-9]+", re.sub(r"'s\b", "", normalized_name)))
     if not 1 <= len(words) <= 3 or (
         normalized_words and normalized_words <= taxonomy_terms
     ):

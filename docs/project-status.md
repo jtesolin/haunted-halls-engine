@@ -79,7 +79,9 @@ Stable cross-repository authority and security invariants belong in
   deterministic presence/supernatural-presence sensing, portable-item pull,
   open/close toggles, or light/extinguish toggles. Mechanical meaning remains
   engine-owned and deterministic. Existing generic Phase 8F2 definitions remain
-  valid and are neither rewritten nor assigned guessed mechanics.
+  valid and are neither rewritten nor assigned guessed mechanics. Both parser
+  paths enforce unique explicit available-ability references and player-supplied
+  object targets before execution; new starter references cannot collide.
 
 ## Current Phase 8 status
 

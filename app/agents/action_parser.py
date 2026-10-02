@@ -11,7 +11,11 @@ from pydantic import BaseModel, Field
 from app.agents.base import BaseAgent
 from app.ai.model_client import ModelCallResult, model_client
 from app.ai.prompts import action_parser_prompt
-from app.game.abilities import generated_ability_definitions, project_owned_abilities
+from app.game.abilities import (
+    ability_invocation_references,
+    generated_ability_definitions,
+    project_owned_abilities,
+)
 from app.game.items import ensure_items_state, inventory_item_ids, room_item_ids
 from app.game.npcs import ensure_npcs_state, nearby_npc_ids_for_room, parser_npc_projection
 from app.game.world import DEFAULT_WORLD
@@ -45,6 +49,12 @@ class ParserContext(BaseModel):
     nearby_npcs: list[dict[str, Any]] = Field(default_factory=list)
     status_flags: dict[str, Any] = Field(default_factory=dict)
     abilities: list[dict[str, str | bool]] = Field(default_factory=list)
+
+
+class ExplicitAbilityRequest(BaseModel):
+    ability_id: str | None = None
+    target: str | None = None
+    parse_status: ParseStatus
 
 
 class ActionParserAgent(BaseAgent):
@@ -105,11 +115,12 @@ class ActionParserAgent(BaseAgent):
             )
             return self._fallback_parse(message, campaign_state)
 
-        messages = self.build_provider_request(
+        parser_context = self._build_parser_context(campaign_state)
+        messages = self._build_messages(
             message=message,
-            campaign_state=campaign_state,
+            parser_context=parser_context,
             recent_turns=recent_turns,
-            memory_context=memory_context,
+            memory_context=memory_context or [],
         )
         try:
             parsed_result = await model_client.generate_structured(
@@ -140,7 +151,7 @@ class ActionParserAgent(BaseAgent):
             raise ActionParseProviderError("Action parser model call failed.") from exc
 
         if parsed_output is not None:
-            return ParsedAction(
+            parsed_action = ParsedAction(
                 raw_text=message,
                 action=parsed_output.action,
                 target=parsed_output.target,
@@ -156,6 +167,9 @@ class ActionParserAgent(BaseAgent):
                 reasoning_output_tokens=usage.reasoning_output_tokens if usage is not None else None,
                 total_tokens=usage.total_tokens if usage is not None else None,
             )
+            if parsed_action.action == ActionType.ABILITY_CHECK:
+                return self._validate_model_ability_request(parsed_action, parser_context)
+            return parsed_action
 
         return ParsedAction(
             raw_text=message,
@@ -231,23 +245,22 @@ class ActionParserAgent(BaseAgent):
         confidence = 0.45
         notes = "Deterministic heuristic parser was used."
 
-        ability_id = self._requested_ability_id(lower, campaign_state)
-        if ability_id is not None:
-            requested_ability = self._requested_ability_request(
-                lower,
-                campaign_state,
-                ability_id=ability_id,
-            )
-            if requested_ability is None:
-                ability_id = None
-            else:
-                ability_id, ability_target = requested_ability
-        if ability_id is not None:
+        requested_ability = self._requested_ability_request(
+            lower, self._build_parser_context(campaign_state)
+        )
+        if requested_ability is not None:
+            if requested_ability.parse_status != "ok":
+                return ParsedAction(
+                    raw_text=message,
+                    action=ActionType.UNKNOWN,
+                    parse_status=requested_ability.parse_status,
+                    parser_notes="The explicit ability request is incomplete or ambiguous.",
+                )
             return ParsedAction(
                 raw_text=message,
                 action=ActionType.ABILITY_CHECK,
-                target=ability_target,
-                parameters={"ability_id": ability_id},
+                target=requested_ability.target,
+                parameters={"ability_id": requested_ability.ability_id},
                 confidence=0.82,
                 parse_status="ok",
                 parser_notes="Explicit ability request recognized deterministically.",
@@ -438,72 +451,105 @@ class ActionParserAgent(BaseAgent):
             abilities=abilities,
         )
 
-    def _requested_ability_id(self, lower: str, campaign_state: str) -> str | None:
-        for ability in self._build_parser_context(campaign_state).abilities:
-            ability_id = ability["ability_id"]
-            name = ability["name"]
-            if not isinstance(ability_id, str) or not isinstance(name, str):
-                continue
-            references = {
-                ability_id.replace("_", " ").strip().casefold(),
-                name.strip().casefold(),
-            }
-            references.discard("")
-            if any(self._explicit_ability_match(lower, reference) is not None for reference in references):
-                return ability_id
-        return None
+    def _validate_model_ability_request(
+        self, parsed_action: ParsedAction, parser_context: ParserContext
+    ) -> ParsedAction:
+        request = self._requested_ability_request(
+            parsed_action.raw_text.casefold(), parser_context
+        )
+        if (
+            parsed_action.parse_status != "ok"
+            or request is None
+            or request.parse_status != "ok"
+            or parsed_action.parameters.get("ability_id") != request.ability_id
+            or (
+                request.target is not None
+                and parsed_action.target is not None
+                and parsed_action.target.strip().casefold() != request.target
+            )
+        ):
+            logger.warning("action_parser_ability_request_rejected reason=explicit_request_mismatch")
+            return parsed_action.model_copy(update={
+                "action": ActionType.UNKNOWN,
+                "target": None,
+                "parameters": {},
+                "confidence": 0.0,
+                "parse_status": (
+                    request.parse_status if request is not None and request.parse_status != "ok"
+                    else "invalid"
+                ),
+                "parser_notes": "The model ability request does not match one explicit available ability request.",
+            })
+        return parsed_action.model_copy(update={
+            "target": request.target,
+            "parameters": {"ability_id": request.ability_id},
+        })
 
     def _requested_ability_request(
         self,
         lower: str,
-        campaign_state: str,
-        *,
-        ability_id: str,
-    ) -> tuple[str, str | None] | None:
-        for ability in self._build_parser_context(campaign_state).abilities:
-            if ability.get("ability_id") != ability_id:
-                continue
+        parser_context: ParserContext,
+    ) -> ExplicitAbilityRequest | None:
+        candidates: list[tuple[int, str, str | None, bool]] = []
+        invocation_starts: set[int] = set()
+        for ability in parser_context.abilities:
+            ability_id = ability.get("ability_id")
             name = ability.get("name")
-            if not isinstance(name, str):
-                return None
-            references = {
-                ability_id.replace("_", " ").strip().casefold(),
-                name.strip().casefold(),
-            }
-            for reference in references:
-                match = self._explicit_ability_match(lower, reference)
-                if match is None:
-                    continue
-                suffix = lower[match.end():]
-                target_match = re.fullmatch(
-                    r"\s+(?:on|toward|at)\s+(?:the\s+|a\s+|an\s+)?(.+?)\s*[.!?]*",
-                    suffix,
-                )
-                requires_target = ability.get("requires_target") is True
-                if target_match is None:
-                    return ability_id, None
-                if not requires_target or self._has_ambiguous_common_name_reference(
-                    lower, match, reference
-                ):
-                    continue
-                target = target_match.group(1).strip()
-                if len(target) > 80 or len(target.split()) > 8:
-                    return None
-                return ability_id, target
-        return None
-
-    def _explicit_ability_match(self, lower: str, reference: str) -> re.Match[str] | None:
-        if not reference:
+            if (
+                not isinstance(ability_id, str)
+                or not isinstance(name, str)
+                or ability.get("available") is not True
+            ):
+                continue
+            for reference in ability_invocation_references(ability_id, name):
+                for match in re.finditer(self._explicit_ability_pattern(reference), lower):
+                    suffix = lower[match.end():].rstrip().rstrip(".!?").rstrip()
+                    requires_target = ability.get("requires_target") is True
+                    if not suffix:
+                        invocation_starts.add(match.start())
+                        candidates.append((len(reference), ability_id, None, requires_target))
+                        continue
+                    if self._has_ambiguous_common_name_reference(lower, match, reference):
+                        continue
+                    invocation_starts.add(match.start())
+                    target_match = re.fullmatch(
+                        r"\s+(?:on|toward|at)\s+(?:the\s+|a\s+|an\s+)?(.+)",
+                        suffix,
+                    )
+                    if target_match is None:
+                        continue
+                    target = target_match.group(1).strip()
+                    if len(target) > 80 or len(target.split()) > 8:
+                        continue
+                    candidates.append((len(reference), ability_id, target, requires_target))
+        if not invocation_starts:
             return None
+        if len(invocation_starts) > 1:
+            return ExplicitAbilityRequest(parse_status="ambiguous")
+        if not candidates:
+            return ExplicitAbilityRequest(parse_status="invalid")
+        longest_reference = max(length for length, _, _, _ in candidates)
+        requests = {
+            (ability_id, target, requires_target)
+            for length, ability_id, target, requires_target in candidates
+            if length == longest_reference
+        }
+        if len(requests) != 1:
+            return ExplicitAbilityRequest(parse_status="ambiguous")
+        ability_id, target, requires_target = requests.pop()
+        if target is not None and not requires_target:
+            return ExplicitAbilityRequest(parse_status="invalid")
+        return ExplicitAbilityRequest(ability_id=ability_id, target=target, parse_status="ok")
+
+    def _explicit_ability_pattern(self, reference: str) -> str:
         reference_pattern = re.escape(reference).replace(r"\ ", r"\s+")
-        pattern = (
+        return (
             r"\b(?:use|using|activate|invoke)\s+"
             r"(?:my\s+|the\s+|an?\s+)?"
             r"(?:ability\s+)?"
             f"(?P<reference>{reference_pattern})"
             r"\b"
         )
-        return re.search(pattern, lower)
 
     def _has_ambiguous_common_name_reference(
         self,
