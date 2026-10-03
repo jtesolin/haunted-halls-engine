@@ -47,6 +47,12 @@ from app.schemas.generated_abilities import (
     GeneratedAbilityMechanics,
     StarterAbilityGeneration,
 )
+from app.schemas.starter_ability_provider import (
+    StarterAbilityProviderGeneration,
+    StarterAbilitySensoryProviderOutput,
+    StarterAbilityUtilityProviderOutput,
+    StarterUtilityOperation,
+)
 from app.services import tool_executor as tool_executor_module
 from app.services.tool_executor import ToolExecutor
 from app.tools.registry import ToolRegistry
@@ -235,7 +241,7 @@ def test_generated_ability_schema_rejects_contradictory_primitives() -> None:
             )
 
 
-def test_generated_ability_structured_output_schema_has_closed_bounded_fields() -> None:
+def test_domain_generated_ability_schema_has_closed_bounded_fields() -> None:
     schema = to_strict_json_schema(StarterAbilityGeneration)
     definitions = schema["$defs"]
     mechanics = definitions["GeneratedAbilityMechanics"]
@@ -283,12 +289,28 @@ def test_provider_disabled_starters_are_valid_distinct_and_available() -> None:
 
 def test_starter_generation_uses_dedicated_bounded_reasoning_policy(monkeypatch) -> None:
     monkeypatch.setattr(StarterAbilityGenerator, "generate", _STARTER_GENERATE)
-    generation = StarterAbilityGenerator()._stub_generation()
+    provider_generation = StarterAbilityProviderGeneration(
+        sensory_ability=StarterAbilitySensoryProviderOutput(
+            ability_id="grave_echo",
+            display_name="Grave Echo",
+            description="Feel supernatural presence through a faint chill in the air.",
+            track=ProgressionTrackId.INVESTIGATION,
+            sense_filter=AbilitySenseFilter.SUPERNATURAL_PRESENCE,
+            range=1,
+        ),
+        utility_ability=StarterAbilityUtilityProviderOutput(
+            ability_id="whispering_touch",
+            display_name="Whispering Grasp",
+            description="Draw a small object near with a quiet, unseen pull.",
+            track=ProgressionTrackId.OCCULT,
+            operation=StarterUtilityOperation.RETRIEVE,
+        ),
+    )
     captured: dict[str, object] = {}
 
     async def fake_generate_structured(**kwargs):  # noqa: ANN003, ANN202
         captured.update(kwargs)
-        return ModelCallResult(output=generation)
+        return ModelCallResult(output=provider_generation)
 
     monkeypatch.setattr(
         starter_abilities_module.model_client,
@@ -303,7 +325,16 @@ def test_starter_generation_uses_dedicated_bounded_reasoning_policy(monkeypatch)
         )
     )
 
-    assert result.output == generation
+    assert result.output is not None
+    assert [ability.ability_id for ability in result.output.abilities] == [
+        "grave_echo",
+        "whispering_touch",
+    ]
+    assert result.output.abilities[0].mechanics.sense_filter == (
+        AbilitySenseFilter.SUPERNATURAL_PRESENCE
+    )
+    assert result.output.abilities[1].mechanics.effect == AbilityEffect.MOVE
+    assert captured["response_model"] is StarterAbilityProviderGeneration
     assert captured["model"] == ModelPolicy.narrator_model()
     assert captured["reasoning_effort"] == "minimal"
     assert captured["reasoning_effort"] == ModelPolicy.starter_ability_reasoning_effort()
@@ -321,11 +352,11 @@ def test_starter_generation_prompt_bounds_names_and_descriptions() -> None:
     for requirement in (
         "thematic, evocative name",
         "one to three short words",
-        "sense_filter presence or supernatural_presence",
-        "move/object/toward_player",
-        "toggle/object/open",
-        "toggle/object/lit",
-        "only the validated mechanics define what it does",
+        "sense_filter",
+        "retrieve",
+        "toggle_open",
+        "toggle_lit",
+        "engine-defined operation determines what it",
         "read minds",
         "see remotely",
         "invisibility",
@@ -364,7 +395,7 @@ def test_starter_generator_preserves_missing_output_when_usage_is_requested(
         )
     )
 
-    assert result is missing_output
+    assert result == missing_output
 
 
 def test_starter_generator_fails_explicitly_without_usage_when_output_is_missing(

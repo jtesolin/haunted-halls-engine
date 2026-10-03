@@ -93,6 +93,11 @@ Stable cross-repository authority and security invariants belong in
   references use the same bounded canonical semantics without rewriting legacy names.
   Successful typed generated retrievals emit the existing item-acquisition story
   signal, preserving same-turn quest completion and authored reward processing.
+- **Starter provider contract hardening:** Provider-facing generation uses
+  separate sensory and utility slots with only bounded operation choices;
+  deterministic conversion builds the engine-owned mechanics, leaving persisted
+  definitions and existing campaigns unchanged. CI exercises the real OpenAI
+  Structured Outputs SDK boundary with mocked HTTP and no network or token spend.
 
 ## Current Phase 8 status
 
