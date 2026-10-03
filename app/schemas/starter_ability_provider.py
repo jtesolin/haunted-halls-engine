@@ -18,9 +18,9 @@ class StarterUtilityOperation(StrEnum):
 class StarterAbilitySensoryProviderOutput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    ability_id: str = Field(min_length=1, max_length=64, pattern=r"^[a-z][a-z0-9_]*$")
-    display_name: str = Field(min_length=1, max_length=80)
-    description: str = Field(min_length=1, max_length=240)
+    ability_id: str = Field(pattern=r"^[a-z][a-z0-9_]*$")
+    display_name: str
+    description: str
     track: ProgressionTrackId
     sense_filter: AbilitySenseFilter
     range: Literal[0, 1]
@@ -29,9 +29,9 @@ class StarterAbilitySensoryProviderOutput(BaseModel):
 class StarterAbilityUtilityProviderOutput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    ability_id: str = Field(min_length=1, max_length=64, pattern=r"^[a-z][a-z0-9_]*$")
-    display_name: str = Field(min_length=1, max_length=80)
-    description: str = Field(min_length=1, max_length=240)
+    ability_id: str = Field(pattern=r"^[a-z][a-z0-9_]*$")
+    display_name: str
+    description: str
     track: ProgressionTrackId
     operation: StarterUtilityOperation
 

@@ -148,6 +148,17 @@ def _resolve_schema_reference(
     return resolved
 
 
+def _find_schema_keywords(value: Any, keywords: set[str]) -> set[str]:
+    if isinstance(value, dict):
+        found = set(value) & keywords
+        for child in value.values():
+            found.update(_find_schema_keywords(child, keywords))
+        return found
+    if isinstance(value, list):
+        return set().union(*(_find_schema_keywords(child, keywords) for child in value))
+    return set()
+
+
 def _assert_provider_schema_is_minimal_and_closed(
     request_body: dict[str, Any],
 ) -> None:
@@ -155,6 +166,18 @@ def _assert_provider_schema_is_minimal_and_closed(
     assert response_format["type"] == "json_schema"
     assert response_format["strict"] is True
     schema = response_format["schema"]
+    unsupported_keywords = {
+        "minLength",
+        "maxLength",
+        "allOf",
+        "not",
+        "dependentRequired",
+        "dependentSchemas",
+        "if",
+        "then",
+        "else",
+    }
+    assert _find_schema_keywords(schema, unsupported_keywords) == set()
     assert schema["type"] == "object"
     assert schema["additionalProperties"] is False
     assert set(schema["properties"]) == {"sensory_ability", "utility_ability"}
