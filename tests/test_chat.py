@@ -19,6 +19,7 @@ from app.api.dependencies import INTERNAL_USER_ID_HEADER_NAME
 from app.core.config import settings
 from app.db.repositories import Repository
 from app.db.session import session
+from app.game.abilities import generated_ability_definitions
 from app.game.campaign_state import build_fresh_campaign_state
 from app.game.character_progression import ensure_character_progression_state, unlock_ability
 from app.guardrails.model_policy import ModelPolicy
@@ -194,18 +195,33 @@ def test_existing_campaign_chat_does_not_insert_campaign() -> None:
         assert any(event.type == "tool_executed" for event in events)
 
 
+@pytest.mark.parametrize("campaign_id", [None, ""], ids=["missing-id", "empty-id"])
 def test_auto_created_chat_inserts_once_across_subsequent_turns(
     campaign_creation_spy: MagicMock,
+    campaign_id: str | None,
 ) -> None:
     owner_user_id = _resolved_internal_user_id(TestClient(app), "auto-chat-one-insert")
+    request = ChatRequest(message="look around", campaign_id=campaign_id)
     first = asyncio.run(
         orchestrator_module.orchestrator.handle_chat(
-            ChatRequest(message="look around"), owner_user_id=owner_user_id
+            request, owner_user_id=owner_user_id
         )
     )
+    assert request.campaign_id == campaign_id
+    assert first.campaign_id.startswith("campaign_")
     assert campaign_creation_spy.call_count == 1
     assert campaign_creation_spy.call_args.kwargs["campaign_id"] == first.campaign_id
     assert campaign_creation_spy.call_args.kwargs["state"] is not None
+
+    with session() as db:
+        campaign = db.get_campaign_for_owner(first.campaign_id, owner_user_id)
+        assert campaign is not None
+        assert campaign.state is not None
+        state = json.loads(campaign.state)
+        assert state["player"]["location"] == "entry_hall"
+        assert generated_ability_definitions(state) == tuple(
+            starter_ability_generation().abilities
+        )
 
     for _ in range(2):
         response = asyncio.run(
@@ -1859,7 +1875,11 @@ def test_auto_created_chat_idempotency_claim_prevents_duplicate_starter_generati
     assert campaign_creation_spy.call_count == 1
 
 
-def test_auto_created_chat_rechecks_parser_budget_after_starter_generation(monkeypatch) -> None:
+@pytest.mark.parametrize("campaign_id", [None, ""], ids=["missing-id", "empty-id"])
+def test_auto_created_chat_rechecks_parser_budget_after_starter_generation(
+    monkeypatch,
+    campaign_id: str | None,
+) -> None:
     monkeypatch.setattr(settings, "OPENAI_API_KEY", "test-key")
     monkeypatch.setattr(settings, "MAX_DAILY_PROJECT_REQUESTS", 1)
     generated = starter_ability_generation()
@@ -1892,7 +1912,7 @@ def test_auto_created_chat_rechecks_parser_budget_after_starter_generation(monke
     with pytest.raises(HTTPException, match="Daily project request limit reached"):
         asyncio.run(
             orchestrator_module.orchestrator.handle_chat(
-                ChatRequest(message="look around"),
+                ChatRequest(message="look around", campaign_id=campaign_id),
                 owner_user_id=owner_user_id,
                 idempotency_key=idempotency_key,
             )

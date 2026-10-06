@@ -145,8 +145,9 @@ player-supplied target rather than conflating invocation and target vocabulary.
   an earned reward but never grant one.
 - The engine enforces internal authentication, trusted user resolution,
   campaign ownership, transaction rollback, and explicit migration execution.
-  Chat auto-creation inserts a campaign once; existing-campaign turns and
-  completed idempotent replays do not attempt another campaign insert.
+  Chat auto-creation (missing or empty campaign ID) inserts a campaign once;
+  existing-campaign turns and completed idempotent replays do not attempt
+  another campaign insert.
 - D7A's observability foundation (OpenTelemetry tracing) is implemented;
   remaining D7 slices and production observability activation beyond D7A,
   generic reward/achievement/rules DSLs, combat progression, levels/classes,
