@@ -364,13 +364,15 @@ class ChatOrchestrator:
                     db.conn.commit()
                 raise
 
-            db.create_campaign(
-                campaign_id=campaign_id,
-                owner_user_id=owner_user_id,
-                name=f"Campaign {campaign_id}",
-                description="Auto-created campaign",
-                state=initial_state,
-            )
+            if request.campaign_id is None:
+                assert initial_state is not None
+                db.create_campaign(
+                    campaign_id=campaign_id,
+                    owner_user_id=owner_user_id,
+                    name=f"Campaign {campaign_id}",
+                    description="Auto-created campaign",
+                    state=initial_state,
+                )
             db.create_turn(
                 turn_id=player_turn_id,
                 campaign_id=campaign_id,

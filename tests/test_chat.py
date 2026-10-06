@@ -3,6 +3,7 @@ from concurrent.futures import ThreadPoolExecutor
 import json
 import threading
 from collections.abc import Iterator
+from unittest.mock import MagicMock, patch
 from uuid import uuid4
 
 import pytest
@@ -16,6 +17,7 @@ from app.agents.director import DirectorAgentResult
 from app.ai.model_client import ModelCallResult, ModelUsage
 from app.api.dependencies import INTERNAL_USER_ID_HEADER_NAME
 from app.core.config import settings
+from app.db.repositories import Repository
 from app.db.session import session
 from app.game.campaign_state import build_fresh_campaign_state
 from app.game.character_progression import ensure_character_progression_state, unlock_ability
@@ -126,13 +128,112 @@ def test_chat_echoes_message() -> None:
     assert data["turn_id"].startswith("turn_")
 
 
-def test_keyed_chat_replays_without_duplicate_side_effects() -> None:
+@pytest.fixture
+def campaign_creation_spy() -> Iterator[MagicMock]:
+    with patch.object(
+        Repository,
+        "create_campaign",
+        autospec=True,
+        side_effect=Repository.create_campaign,
+    ) as spy:
+        yield spy
+
+
+def test_existing_campaign_chat_does_not_insert_campaign() -> None:
+    owner_user_id = _resolved_internal_user_id(TestClient(app), "existing-chat-no-insert")
+    campaign_id = f"campaign_{uuid4().hex}"
+    initial_state = build_fresh_campaign_state()
+    with session() as db:
+        original_campaign = db.create_campaign(
+            campaign_id=campaign_id,
+            owner_user_id=owner_user_id,
+            name="Existing campaign",
+            description="Preserve this campaign",
+            state=initial_state,
+        )
+
+    with patch.object(
+        Repository,
+        "create_campaign",
+        autospec=True,
+        side_effect=Repository.create_campaign,
+    ) as spy:
+        response = asyncio.run(
+            orchestrator_module.orchestrator.handle_chat(
+                ChatRequest(message="look around", campaign_id=campaign_id),
+                owner_user_id=owner_user_id,
+            )
+        )
+        spy.assert_not_called()
+
+    assert response.campaign_id == campaign_id
+    assert response.reply == "AI narrator replies: look around"
+    with session() as db:
+        campaign, turns, truncated = db.get_campaign_with_turns_for_owner(
+            campaign_id, owner_user_id
+        )
+        assert campaign is not None
+        assert campaign.name == original_campaign.name
+        assert campaign.description == original_campaign.description
+        assert campaign.created_at == original_campaign.created_at
+        assert campaign.owner_user_id == owner_user_id
+        assert campaign.state is not None
+        assert json.loads(campaign.state) == initial_state
+        assert not truncated
+        assert [(turn.role, turn.content) for turn in turns] == [
+            ("user", "look around"),
+            ("assistant", response.reply),
+        ]
+        assert turns[-1].turn_id == response.turn_id
+        events = db.list_campaign_events(campaign_id)
+        assert any(
+            event.type == "player_message_received"
+            and event.turn_id == turns[0].turn_id
+            for event in events
+        )
+        assert any(event.type == "tool_executed" for event in events)
+
+
+def test_auto_created_chat_inserts_once_across_subsequent_turns(
+    campaign_creation_spy: MagicMock,
+) -> None:
+    owner_user_id = _resolved_internal_user_id(TestClient(app), "auto-chat-one-insert")
+    first = asyncio.run(
+        orchestrator_module.orchestrator.handle_chat(
+            ChatRequest(message="look around"), owner_user_id=owner_user_id
+        )
+    )
+    assert campaign_creation_spy.call_count == 1
+    assert campaign_creation_spy.call_args.kwargs["campaign_id"] == first.campaign_id
+    assert campaign_creation_spy.call_args.kwargs["state"] is not None
+
+    for _ in range(2):
+        response = asyncio.run(
+            orchestrator_module.orchestrator.handle_chat(
+                ChatRequest(message="look around", campaign_id=first.campaign_id),
+                owner_user_id=owner_user_id,
+            )
+        )
+        assert response.campaign_id == first.campaign_id
+        assert response.turn_id != first.turn_id
+        assert campaign_creation_spy.call_count == 1
+
+    with session() as db:
+        assert db.count_owner_campaigns(owner_user_id) == 1
+        assert db.count_campaign_turns(first.campaign_id, owner_user_id) == 3
+
+
+def test_keyed_chat_replays_without_duplicate_side_effects(
+    campaign_creation_spy: MagicMock,
+) -> None:
     client = TestClient(app)
     headers = _user_scoped_headers(client, "idempotent-replay")
     headers["Idempotency-Key"] = str(uuid4())
 
     first = client.post("/api/chat", json={"message": "I go north."}, headers=headers)
     assert first.status_code == 200
+    assert campaign_creation_spy.call_count == 1
+    assert campaign_creation_spy.call_args.kwargs["campaign_id"] == first.json()["campaign_id"]
 
     with session() as db:
         turns_before = db.conn.execute(text("SELECT COUNT(*) FROM turns")).scalar_one()
@@ -174,6 +275,7 @@ def test_keyed_chat_replays_without_duplicate_side_effects() -> None:
 
     assert second.status_code == 200
     assert second.json() == first.json()
+    assert campaign_creation_spy.call_count == 1
 
     with session() as db:
         assert db.conn.execute(text("SELECT COUNT(*) FROM turns")).scalar_one() == turns_before
@@ -1661,6 +1763,7 @@ def test_auto_created_chat_starter_failure_keeps_audit_without_chat_side_effects
 
 def test_auto_created_chat_idempotency_claim_prevents_duplicate_starter_generation(
     monkeypatch,
+    campaign_creation_spy: MagicMock,
 ) -> None:
     monkeypatch.setattr(settings, "OPENAI_API_KEY", "test-key")
     generated = starter_ability_generation()
@@ -1740,6 +1843,8 @@ def test_auto_created_chat_idempotency_claim_prevents_duplicate_starter_generati
     assert len(completed) == 1
     assert len(rejected) == 1
     assert parser_calls == 1
+    assert campaign_creation_spy.call_count == 1
+    assert campaign_creation_spy.call_args.kwargs["campaign_id"] == completed[0].campaign_id
 
     replay = asyncio.run(
         orchestrator_module.orchestrator.handle_chat(
@@ -1751,6 +1856,7 @@ def test_auto_created_chat_idempotency_claim_prevents_duplicate_starter_generati
     assert replay == completed[0]
     assert starter_calls == 1
     assert parser_calls == 1
+    assert campaign_creation_spy.call_count == 1
 
 
 def test_auto_created_chat_rechecks_parser_budget_after_starter_generation(monkeypatch) -> None:
