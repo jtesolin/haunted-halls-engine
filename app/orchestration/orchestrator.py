@@ -233,6 +233,7 @@ class ChatOrchestrator:
         self, request: ChatRequest, owner_user_id: str, idempotency_key: str | None = None
     ) -> ChatResponse:
         request_fingerprint = self._chat_request_fingerprint(request)
+        auto_create_campaign = not request.campaign_id
         campaign_id = request.campaign_id or f"campaign_{uuid4().hex}"
         player_turn_id = f"turn_{uuid4().hex}"
         assistant_turn_id = f"turn_{uuid4().hex}"
@@ -312,7 +313,7 @@ class ChatOrchestrator:
             validate_daily_request_limit(db, owner_user_id)
 
             initial_state = None
-            if request.campaign_id is None:
+            if auto_create_campaign:
                 try:
                     initial_state = await self._build_initial_campaign_state(
                         db=db,
@@ -354,7 +355,7 @@ class ChatOrchestrator:
                     TokenBudget.action_parser_max_output_tokens(),
                 )
             except HTTPException:
-                if request.campaign_id is None:
+                if auto_create_campaign:
                     if idempotency_key is not None:
                         db.release_chat_request_idempotency(
                             owner_user_id=owner_user_id,
@@ -364,13 +365,15 @@ class ChatOrchestrator:
                     db.conn.commit()
                 raise
 
-            db.create_campaign(
-                campaign_id=campaign_id,
-                owner_user_id=owner_user_id,
-                name=f"Campaign {campaign_id}",
-                description="Auto-created campaign",
-                state=initial_state,
-            )
+            if auto_create_campaign:
+                assert initial_state is not None
+                db.create_campaign(
+                    campaign_id=campaign_id,
+                    owner_user_id=owner_user_id,
+                    name=f"Campaign {campaign_id}",
+                    description="Auto-created campaign",
+                    state=initial_state,
+                )
             db.create_turn(
                 turn_id=player_turn_id,
                 campaign_id=campaign_id,
