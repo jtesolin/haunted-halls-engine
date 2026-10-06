@@ -20,11 +20,15 @@ invariants. Current milestone progress and chronological status belong in
 
 ## Preview environment invariants
 
-- Preview runtime and control-plane resources live in the dedicated GCP project
-  `hh-preview-458395246135`. Production and staging remain in
-  `haunted-halls-development` as hard trust boundaries: preview automation has
-  no production/staging Cloud Run mutation authority, and preview runtime
-  identities cannot read production/staging secrets.
+- Preview application/runtime resources and the broad preview deployment
+  control plane live in the dedicated GCP project `hh-preview-458395246135`.
+  The fixed trusted preview DB provisioner is the narrow exception: it lives
+  in `haunted-halls-development` alongside the shared Cloud SQL trust boundary
+  and is the controlled bridge only for strictly generated preview database
+  create/drop operations. This does not give the general preview deployer
+  production/staging Cloud Run mutation authority. Production and staging
+  remain hard trust boundaries, and preview runtime identities cannot read
+  production/staging secrets.
 - Previews reuse the existing Cloud SQL instance with isolated per-PR databases
   and one hardened shared preview app login. Only the fixed trusted DB
   provisioner may create/drop strictly generated preview database names.
