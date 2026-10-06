@@ -18,6 +18,39 @@ invariants. Current milestone progress and chronological status belong in
   game-domain state. API-contract changes between the repositories require
   coordinated review.
 
+## Preview environment invariants
+
+- Preview application/runtime resources and the broad preview deployment
+  control plane live in the dedicated GCP project `hh-preview-458395246135`.
+  The fixed trusted preview DB provisioner is the narrow exception: it lives
+  in `haunted-halls-development` alongside the shared Cloud SQL trust boundary
+  and is the controlled bridge only for strictly generated preview database
+  create/drop operations. This does not give the general preview deployer
+  production/staging Cloud Run mutation authority. Production and staging
+  remain hard trust boundaries, and preview runtime identities cannot read
+  production/staging secrets.
+- Previews reuse the existing Cloud SQL instance with isolated per-PR databases
+  and one hardened shared preview app login. Only the fixed trusted DB
+  provisioner may create/drop strictly generated preview database names.
+  Neither the preview app login nor the provisioner login may `CONNECT` to
+  production/staging databases.
+- OpenAI access uses a separate preview-only credential. Preview frontend
+  access uses direct Cloud Run IAP only, with no public fallback. Tester
+  `roles/iap.httpsResourceAccessor` grants are scoped to each preview frontend
+  resource, never project-wide.
+- Workload Identity Federation (WIF) impersonation is bound to exact reviewed
+  default-branch workflow refs. PR-controlled code never receives preview
+  deployment credentials; privileged deployment runs from reviewed
+  default-branch workflow definitions on a fresh job/runner.
+- Durable foundation Terraform state is separate from per-PR preview state;
+  per-PR state is isolated by repository/PR key.
+- The preview lifecycle is an empty database, then an explicit Alembic migration,
+  then a private engine and IAP frontend. PR updates preserve the database;
+  PR close destroys preview runtime, secrets, per-PR state, and database.
+- Frontend PR previews pin the exact stable, currently serving engine staging
+  artifact. Engine PR previews pin the exact stable, currently serving frontend
+  staging artifact. Cross-repository PR pairing is out of scope for v1.
+
 ## Game and agent authority
 
 Player language is valuable input for AI interpretation, while authoritative
