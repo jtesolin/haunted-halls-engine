@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import text
 
@@ -13,6 +14,8 @@ from app.memory.services import MemoryService
 from app.orchestration import orchestrator as orchestrator_module
 from app.schemas.internal_auth import CANONICAL_GOOGLE_ISSUER
 from tests.db_helpers import migrate_database
+
+pytestmark = pytest.mark.usefixtures("fake_runtime_model_provider")
 
 
 def _resolve_user(
@@ -49,8 +52,6 @@ def _create_campaign(client: TestClient, headers: dict[str, str]) -> str:
 
 def _setup() -> None:
     settings.INTERNAL_ENGINE_SERVICE_TOKEN = "test-token"
-    settings.AI_ENABLED = False
-    settings.OPENAI_API_KEY = None
 
 
 # ---------------------------------------------------------------------------
@@ -346,10 +347,16 @@ def test_chat_unauthorized_creates_no_turn_or_event() -> None:
 
     campaign_id = _create_campaign(client, headers_a)
 
-    # Count initial turns/events for campaign_a
+    # Count initial turns/events/provider requests for campaign_a. Campaign
+    # creation is model-backed now, so authorization must not add to its
+    # existing provider-call history.
     with session() as db:
         _, turns_before, _ = db.get_campaign_with_turns(campaign_id, limit=100)
         events_before = db.list_campaign_events(campaign_id, limit=100)
+        requests_before = db.conn.execute(
+            text("SELECT COUNT(*) FROM model_requests WHERE campaign_id = :campaign_id"),
+            {"campaign_id": campaign_id},
+        ).scalar_one()
 
     client.post(
         "/api/chat",
@@ -371,7 +378,7 @@ def test_chat_unauthorized_creates_no_turn_or_event() -> None:
     assert len(turns_after) == len(turns_before)
     assert len(events_after) == len(events_before)
     assert len(memories_after) == 0
-    assert int(requests_after) == 0
+    assert int(requests_after) == int(requests_before)
 
 
 def test_chat_unauthorized_does_not_consume_usage_quota() -> None:

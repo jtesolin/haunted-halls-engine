@@ -278,7 +278,6 @@ def test_real_openai_sdk_contract_converts_all_supported_operations(
 
     result = asyncio.run(
         StarterAbilityGenerator().generate(
-            provider_model_enabled=True,
             return_usage=True,
         )
     )

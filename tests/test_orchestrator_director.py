@@ -41,16 +41,7 @@ from app.schemas.world import (
     SetNpcStatusWorldAction,
 )
 
-
-def _enable_provider(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(settings, "INTERNAL_ENGINE_SERVICE_TOKEN", "test-token")
-    monkeypatch.setattr(settings, "AI_ENABLED", True)
-    monkeypatch.setattr(settings, "OPENAI_API_KEY", "test-key")
-
-
-def _disable_provider(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(settings, "AI_ENABLED", False)
-    monkeypatch.setattr(settings, "OPENAI_API_KEY", None)
+pytestmark = pytest.mark.usefixtures("fake_runtime_model_provider")
 
 
 def _resolve_user(client: TestClient, provider_subject: str) -> tuple[dict[str, str], str]:
@@ -146,7 +137,6 @@ def _create_revealable_campaign(owner_user_id: str) -> str:
 
 
 def test_director_invoked_once_with_post_player_state_projection(monkeypatch) -> None:
-    _enable_provider(monkeypatch)
     _install_move_and_narrator_stubs(monkeypatch)
 
     calls = []
@@ -174,44 +164,9 @@ def test_director_invoked_once_with_post_player_state_projection(monkeypatch) ->
     assert director_input.player_action.succeeded is True
 
 
-def test_provider_disabled_skips_director_and_world_authority(monkeypatch) -> None:
-    _disable_provider(monkeypatch)
-
-    def fail_if_called_propose(*args, **kwargs):  # noqa: ANN002, ANN003, ANN202
-        raise AssertionError("Director must not be invoked without a provider model.")
-
-    def fail_if_called_execute(*args, **kwargs):  # noqa: ANN002, ANN003, ANN202
-        raise AssertionError(
-            "WorldAuthorityExecutor must not execute without a provider model."
-        )
-
-    orchestrator_instance = orchestrator_module.orchestrator
-    monkeypatch.setattr(orchestrator_instance.director_agent, "propose", fail_if_called_propose)
-    monkeypatch.setattr(
-        orchestrator_instance.world_authority_executor, "execute", fail_if_called_execute
-    )
-
-    client = TestClient(app)
-    _headers, user_id = _resolve_user(client, "director-provider-disabled")
-
-    response = asyncio.run(
-        orchestrator_instance.handle_chat(
-            ChatRequest(message="I go north."), owner_user_id=user_id
-        )
-    )
-
-    assert response.reply == "AI narrator replies (stub): I go north."
-
-    with session() as db:
-        events = db.list_campaign_events(response.campaign_id)
-        assert "world_action_executed" not in {event.type for event in events}
-        assert "world_action_failed" not in {event.type for event in events}
-
-
 def test_no_action_decision_does_not_invoke_world_authority_or_mutate_state(
     monkeypatch,
 ) -> None:
-    _enable_provider(monkeypatch)
     _install_move_and_narrator_stubs(monkeypatch)
 
     async def fake_propose(*, director_input, model=None):  # noqa: ANN001, ARG001, ANN202
@@ -254,7 +209,6 @@ def test_no_action_decision_does_not_invoke_world_authority_or_mutate_state(
 def test_world_action_executes_exactly_once_and_grounds_narrator_with_npc_presence(
     monkeypatch,
 ) -> None:
-    _enable_provider(monkeypatch)
     _install_move_and_narrator_stubs(monkeypatch)
 
     move_npc_action = MoveNpcWorldAction(
@@ -345,7 +299,6 @@ def test_world_action_executes_exactly_once_and_grounds_narrator_with_npc_presen
 def test_director_reveal_clue_executes_persists_and_grounds_narrator(
     monkeypatch,
 ) -> None:
-    _enable_provider(monkeypatch)
     orchestrator_instance = orchestrator_module.orchestrator
     monkeypatch.setattr(
         orchestrator_instance.action_parser_agent,
@@ -462,7 +415,6 @@ def test_director_reveal_context_not_sent_to_narrator_for_failed_or_non_reveal_a
     monkeypatch,
     proposal_action,
 ) -> None:
-    _enable_provider(monkeypatch)
     orchestrator_instance = orchestrator_module.orchestrator
     monkeypatch.setattr(
         orchestrator_instance.action_parser_agent,
@@ -507,7 +459,6 @@ def test_director_reveal_context_not_sent_to_narrator_for_failed_or_non_reveal_a
 
 
 def test_duplicate_reveal_noop_is_not_sent_to_narrator(monkeypatch) -> None:
-    _enable_provider(monkeypatch)
     orchestrator_instance = orchestrator_module.orchestrator
     monkeypatch.setattr(
         orchestrator_instance.action_parser_agent,
@@ -567,7 +518,6 @@ def test_duplicate_reveal_noop_is_not_sent_to_narrator(monkeypatch) -> None:
 
 
 def test_completed_reveal_replay_does_not_reveal_or_narrate_again(monkeypatch) -> None:
-    _enable_provider(monkeypatch)
     client = TestClient(app)
     headers, user_id = _resolve_user(client, "director-reveal-idempotency")
     headers["Idempotency-Key"] = str(uuid4())
@@ -638,7 +588,6 @@ def test_completed_reveal_replay_does_not_reveal_or_narrate_again(monkeypatch) -
 
 
 def test_later_turn_excludes_already_revealed_clue_from_director_context(monkeypatch) -> None:
-    _enable_provider(monkeypatch)
     orchestrator_instance = orchestrator_module.orchestrator
     monkeypatch.setattr(
         orchestrator_instance.action_parser_agent,
@@ -691,7 +640,6 @@ def test_later_turn_excludes_already_revealed_clue_from_director_context(monkeyp
 def test_successful_no_op_world_action_records_event_without_state_replacement(
     monkeypatch,
 ) -> None:
-    _enable_provider(monkeypatch)
     _install_move_and_narrator_stubs(monkeypatch)
 
     from app.schemas.director import WorldActionProposal
@@ -734,7 +682,6 @@ def test_successful_no_op_world_action_records_event_without_state_replacement(
 def test_semantic_world_action_failure_leaves_state_unchanged_and_completes_turn(
     monkeypatch,
 ) -> None:
-    _enable_provider(monkeypatch)
     _install_move_and_narrator_stubs(monkeypatch)
 
     from app.schemas.director import WorldActionProposal
@@ -785,8 +732,6 @@ def test_semantic_world_action_failure_leaves_state_unchanged_and_completes_turn
 def test_director_provider_failure_rolls_back_transaction_and_allows_retry(
     monkeypatch,
 ) -> None:
-    _enable_provider(monkeypatch)
-
     client = TestClient(app)
     headers, user_id = _resolve_user(client, "director-provider-failure")
     idempotency_key = str(uuid4())
@@ -841,7 +786,6 @@ async def _fake_no_action_propose(*, director_input, model=None):  # noqa: ANN00
 
 
 def test_director_proposal_output_error_rolls_back_transaction(monkeypatch) -> None:
-    _enable_provider(monkeypatch)
     monkeypatch.setattr(
         orchestrator_module.orchestrator.action_parser_agent,
         "parse",
@@ -864,8 +808,6 @@ def test_director_proposal_output_error_rolls_back_transaction(monkeypatch) -> N
 
 
 def test_malformed_director_context_fails_explicitly_without_repair(monkeypatch) -> None:
-    _enable_provider(monkeypatch)
-
     client = TestClient(app)
     _headers, user_id = _resolve_user(client, "director-malformed-context")
     campaign_id = "campaign_malformed_director_context"
@@ -913,7 +855,6 @@ def test_malformed_director_context_fails_explicitly_without_repair(monkeypatch)
 
 
 def test_director_success_telemetry_records_estimated_tokens_and_usage(monkeypatch) -> None:
-    _enable_provider(monkeypatch)
     _install_move_and_narrator_stubs(monkeypatch)
 
     async def fake_propose(*, director_input, model=None):  # noqa: ANN001, ARG001, ANN202
@@ -964,7 +905,6 @@ def test_director_success_telemetry_records_estimated_tokens_and_usage(monkeypat
 
 
 def test_memory_maintenance_receives_final_post_director_state(monkeypatch) -> None:
-    _enable_provider(monkeypatch)
     _install_move_and_narrator_stubs(monkeypatch)
 
     from app.schemas.director import WorldActionProposal
@@ -1003,7 +943,6 @@ def test_memory_maintenance_receives_final_post_director_state(monkeypatch) -> N
 
 
 def test_completed_keyed_replay_does_not_rerun_director_or_world_authority(monkeypatch) -> None:
-    _enable_provider(monkeypatch)
     client = TestClient(app)
     headers, _user_id = _resolve_user(client, "director-idempotent-replay")
     headers["Idempotency-Key"] = str(uuid4())
@@ -1107,8 +1046,6 @@ def test_director_none_decision_materializes_and_persists_fresh_state_once(
     must be reloaded (not rerolled) on a later turn.
     """
     monkeypatch.setattr(settings, "INTERNAL_ENGINE_SERVICE_TOKEN", "test-token")
-    monkeypatch.setattr(settings, "AI_ENABLED", True)
-    monkeypatch.setattr(settings, "OPENAI_API_KEY", "test-key")
 
     monkeypatch.setattr(
         orchestrator_module.orchestrator.action_parser_agent,

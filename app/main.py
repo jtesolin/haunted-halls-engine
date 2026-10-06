@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.dependencies import get_internal_engine_service_token
 from app.api.routes import campaign, chat, health, internal_auth
+from app.core.config import settings
 from app.core.observability import observability
 
 app = FastAPI(
@@ -31,6 +32,14 @@ app.include_router(internal_auth.router)
 @app.on_event("startup")
 async def validate_internal_service_auth_configuration() -> None:
     get_internal_engine_service_token()
+
+
+@app.on_event("startup")
+async def validate_openai_configuration() -> None:
+    if not (settings.OPENAI_API_KEY or "").strip():
+        raise RuntimeError(
+            "OPENAI_API_KEY must be configured with a non-whitespace value before starting the application."
+        )
 
 
 @app.on_event("startup")

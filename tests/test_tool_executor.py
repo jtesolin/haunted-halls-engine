@@ -11,7 +11,7 @@ from app.db.session import session
 from app.game.items import ensure_items_state
 from app.schemas.internal_auth import CANONICAL_GOOGLE_ISSUER
 from app.agents.action_parser import ActionParserAgent
-from app.schemas.chat import ActionType, ParsedAction
+from app.schemas.chat import ActionParserOutput, ActionType, ParsedAction
 from app.services.tool_executor import ToolExecutor
 from app.tools.registry import ToolRegistry
 
@@ -845,9 +845,24 @@ def test_take_drop_cannot_be_bypassed_by_mcp_mappings() -> None:
     assert "magic_sword" not in state["player"]["inventory"]
 
 
-def test_parser_freeform_take_integrates_with_deterministic_item_transfer() -> None:
+def test_model_parsed_freeform_take_integrates_with_deterministic_item_transfer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     parser = ActionParserAgent()
     executor = _build_local_executor()
+
+    async def fake_generate_structured(*, messages, **kwargs):
+        return ActionParserOutput(
+            action=ActionType.TAKE,
+            target="tarnished brass key",
+            confidence=1.0,
+            parse_status="ok",
+        )
+
+    monkeypatch.setattr(
+        "app.agents.action_parser.model_client.generate_structured",
+        fake_generate_structured,
+    )
 
     parsed_action = asyncio.run(
         parser.parse(
@@ -855,7 +870,6 @@ def test_parser_freeform_take_integrates_with_deterministic_item_transfer() -> N
             campaign_state='{"player": {"location": "library", "inventory": []}}',
             recent_turns=[],
             memory_context=[],
-            deterministic_only=True,
         )
     )
 

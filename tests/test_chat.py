@@ -31,10 +31,12 @@ from app.schemas.chat import (
     ChatRequest,
     ChatResponse,
     ParsedAction,
-    ToolExecutionResult,
 )
 from app.schemas.director import NoActionProposal
 from app.schemas.internal_auth import CANONICAL_GOOGLE_ISSUER
+from tests.factories import starter_ability_generation
+
+pytestmark = pytest.mark.usefixtures("fake_runtime_model_provider")
 
 
 @pytest.fixture(autouse=True)
@@ -107,8 +109,6 @@ def _resolved_internal_user_id(client: TestClient, provider_subject: str) -> str
 
 def test_chat_echoes_message() -> None:
     settings.INTERNAL_ENGINE_SERVICE_TOKEN = "test-token"
-    settings.AI_ENABLED = False
-    settings.OPENAI_API_KEY = None
     client = TestClient(app)
     headers = _user_scoped_headers(client, "chat-echo")
 
@@ -121,14 +121,12 @@ def test_chat_echoes_message() -> None:
     assert response.status_code == 200
     data = response.json()
 
-    assert data["reply"] == "AI narrator replies (stub): hello"
+    assert data["reply"] == "AI narrator replies: hello"
     assert data["campaign_id"].startswith("campaign_")
     assert data["turn_id"].startswith("turn_")
 
 
 def test_keyed_chat_replays_without_duplicate_side_effects() -> None:
-    settings.AI_ENABLED = False
-    settings.OPENAI_API_KEY = None
     client = TestClient(app)
     headers = _user_scoped_headers(client, "idempotent-replay")
     headers["Idempotency-Key"] = str(uuid4())
@@ -196,8 +194,6 @@ def test_keyed_chat_replays_without_duplicate_side_effects() -> None:
 
 
 def test_keyed_chat_conflicting_request_is_rejected() -> None:
-    settings.AI_ENABLED = False
-    settings.OPENAI_API_KEY = None
     client = TestClient(app)
     headers = _user_scoped_headers(client, "idempotent-conflict")
     headers["Idempotency-Key"] = str(uuid4())
@@ -209,8 +205,6 @@ def test_keyed_chat_conflicting_request_is_rejected() -> None:
 
 
 def test_identical_text_with_different_keys_executes_twice() -> None:
-    settings.AI_ENABLED = False
-    settings.OPENAI_API_KEY = None
     client = TestClient(app)
     headers = _user_scoped_headers(client, "idempotent-distinct-keys")
     first_headers = {**headers, "Idempotency-Key": str(uuid4())}
@@ -225,8 +219,6 @@ def test_identical_text_with_different_keys_executes_twice() -> None:
 
 
 def test_completed_replay_bypasses_later_limit(monkeypatch) -> None:
-    settings.AI_ENABLED = False
-    settings.OPENAI_API_KEY = None
     client = TestClient(app)
     headers = _user_scoped_headers(client, "idempotent-limit-replay")
     headers["Idempotency-Key"] = str(uuid4())
@@ -244,8 +236,6 @@ def test_completed_replay_bypasses_later_limit(monkeypatch) -> None:
 
 
 def test_same_key_is_scoped_to_authenticated_user() -> None:
-    settings.AI_ENABLED = False
-    settings.OPENAI_API_KEY = None
     client = TestClient(app)
     headers_a = _user_scoped_headers(client, "idempotent-user-a")
     headers_b = _user_scoped_headers(client, "idempotent-user-b")
@@ -262,8 +252,6 @@ def test_same_key_is_scoped_to_authenticated_user() -> None:
 
 
 def test_pre_execution_rejection_does_not_consume_key(monkeypatch) -> None:
-    settings.AI_ENABLED = False
-    settings.OPENAI_API_KEY = None
     client = TestClient(app)
     headers = _user_scoped_headers(client, "idempotent-limit-retry")
     headers["Idempotency-Key"] = str(uuid4())
@@ -288,8 +276,6 @@ def test_pre_execution_rejection_does_not_consume_key(monkeypatch) -> None:
 
 
 def test_concurrent_duplicate_has_one_execution_owner(monkeypatch) -> None:
-    settings.AI_ENABLED = False
-    settings.OPENAI_API_KEY = None
     client = TestClient(app)
     headers = _user_scoped_headers(client, "idempotent-concurrent")
     headers["Idempotency-Key"] = str(uuid4())
@@ -341,8 +327,6 @@ def test_existing_non_owned_in_progress_claim_never_executes(monkeypatch) -> Non
     call's own claim attempt must observe ``acquired=False`` and short-circuit
     before parser/tool/narrator execution, regardless of the row's status.
     """
-    settings.AI_ENABLED = False
-    settings.OPENAI_API_KEY = None
     client = TestClient(app)
     owner_user_id = _resolved_internal_user_id(client, "idempotent-non-owner")
     idempotency_key = str(uuid4())
@@ -393,8 +377,6 @@ def test_existing_non_owned_in_progress_claim_never_executes(monkeypatch) -> Non
 
 
 def test_malformed_idempotency_key_is_rejected_before_execution() -> None:
-    settings.AI_ENABLED = False
-    settings.OPENAI_API_KEY = None
     client = TestClient(app)
     headers = _user_scoped_headers(client, "idempotent-malformed")
     headers["Idempotency-Key"] = "not-a-uuid"
@@ -418,8 +400,6 @@ def test_chat_requires_authorization() -> None:
 
 def test_campaign_routes_list_without_legacy_identity_param() -> None:
     settings.INTERNAL_ENGINE_SERVICE_TOKEN = "test-token"
-    settings.AI_ENABLED = False
-    settings.OPENAI_API_KEY = None
     client = TestClient(app)
     headers = _user_scoped_headers(client, "campaign-anonymous")
 
@@ -430,8 +410,6 @@ def test_campaign_routes_list_without_legacy_identity_param() -> None:
 
 def test_create_campaign_returns_hydrated_campaign() -> None:
     settings.INTERNAL_ENGINE_SERVICE_TOKEN = "test-token"
-    settings.AI_ENABLED = False
-    settings.OPENAI_API_KEY = None
     client = TestClient(app)
     headers = _user_scoped_headers(client, "campaign-create")
 
@@ -454,8 +432,6 @@ def test_create_campaign_returns_hydrated_campaign() -> None:
 
 def test_create_campaign_uses_narrator_for_opening_and_title(monkeypatch) -> None:
     settings.INTERNAL_ENGINE_SERVICE_TOKEN = "test-token"
-    settings.AI_ENABLED = True
-    settings.OPENAI_API_KEY = None
     prompts: list[str] = []
 
     async def fake_generate_text(*, messages, **kwargs) -> str:
@@ -493,8 +469,6 @@ def test_create_campaign_uses_narrator_for_opening_and_title(monkeypatch) -> Non
 
 def test_create_campaign_persists_authoritative_entry_hall_state_ai_disabled() -> None:
     settings.INTERNAL_ENGINE_SERVICE_TOKEN = "test-token"
-    settings.AI_ENABLED = False
-    settings.OPENAI_API_KEY = None
     client = TestClient(app)
     headers = _user_scoped_headers(client, "campaign-genesis-ai-disabled")
 
@@ -521,8 +495,6 @@ def test_create_campaign_persists_authoritative_entry_hall_state_ai_enabled(
     monkeypatch,
 ) -> None:
     settings.INTERNAL_ENGINE_SERVICE_TOKEN = "test-token"
-    settings.AI_ENABLED = True
-    settings.OPENAI_API_KEY = None
     client = TestClient(app)
     headers = _user_scoped_headers(client, "campaign-genesis-ai-enabled")
 
@@ -549,8 +521,6 @@ def test_create_campaign_opening_narrator_receives_grounded_scene_context(
     monkeypatch,
 ) -> None:
     settings.INTERNAL_ENGINE_SERVICE_TOKEN = "test-token"
-    settings.AI_ENABLED = True
-    settings.OPENAI_API_KEY = None
     captured_message_batches: list[list[dict]] = []
 
     async def fake_generate_text(*, messages, **kwargs) -> str:
@@ -589,8 +559,6 @@ def test_create_campaign_title_uses_same_scene_context_no_raw_state(
     monkeypatch,
 ) -> None:
     settings.INTERNAL_ENGINE_SERVICE_TOKEN = "test-token"
-    settings.AI_ENABLED = True
-    settings.OPENAI_API_KEY = None
     captured_message_batches: list[list[dict]] = []
 
     async def fake_generate_text(*, messages, **kwargs) -> str:
@@ -615,8 +583,6 @@ def test_create_campaign_title_uses_same_scene_context_no_raw_state(
 
 def test_first_action_does_not_reroll_starting_inventory(monkeypatch) -> None:
     settings.INTERNAL_ENGINE_SERVICE_TOKEN = "test-token"
-    settings.AI_ENABLED = False
-    settings.OPENAI_API_KEY = None
     client = TestClient(app)
     headers = _user_scoped_headers(client, "campaign-first-action-no-reroll")
 
@@ -658,8 +624,6 @@ def test_first_action_does_not_reroll_starting_inventory(monkeypatch) -> None:
 
 def test_delete_campaign_removes_player_campaign() -> None:
     settings.INTERNAL_ENGINE_SERVICE_TOKEN = "test-token"
-    settings.AI_ENABLED = False
-    settings.OPENAI_API_KEY = None
     client = TestClient(app)
     headers = _user_scoped_headers(client, "campaign-delete")
 
@@ -687,8 +651,6 @@ def test_delete_campaign_removes_player_campaign() -> None:
 
 def test_delete_campaign_returns_404_for_missing_or_unowned_campaign() -> None:
     settings.INTERNAL_ENGINE_SERVICE_TOKEN = "test-token"
-    settings.AI_ENABLED = False
-    settings.OPENAI_API_KEY = None
     client = TestClient(app)
     headers = _user_scoped_headers(client, "campaign-missing")
 
@@ -701,8 +663,6 @@ def test_delete_campaign_returns_404_for_missing_or_unowned_campaign() -> None:
 
 
 def test_delete_campaign_requires_authorization() -> None:
-    settings.AI_ENABLED = False
-    settings.OPENAI_API_KEY = None
     client = TestClient(app)
 
     response = client.delete(
@@ -714,7 +674,6 @@ def test_delete_campaign_requires_authorization() -> None:
 
 def test_chat_request_count_tracks_user_turns_only(monkeypatch) -> None:
     settings.INTERNAL_ENGINE_SERVICE_TOKEN = "test-token"
-    settings.AI_ENABLED = True
     settings.OPENAI_API_KEY = "test-key"
     client = TestClient(app)
     headers = _user_scoped_headers(client, "chat-request-count")
@@ -773,8 +732,6 @@ def test_chat_request_count_tracks_user_turns_only(monkeypatch) -> None:
 
 
 def test_usage_aggregation_uses_provider_tokens_and_estimates_missing_usage() -> None:
-    settings.AI_ENABLED = False
-    settings.OPENAI_API_KEY = None
     with session() as db:
         user = db.resolve_internal_user(
             identity_provider="google",
@@ -821,10 +778,8 @@ def test_usage_aggregation_uses_provider_tokens_and_estimates_missing_usage() ->
         assert db.sum_user_model_tokens_since(user.id, "2000-01-01T00:00:00") == 252
 
 
-def test_ai_disabled_stub_does_not_create_model_requests() -> None:
+def test_runtime_logs_provider_requests() -> None:
     settings.INTERNAL_ENGINE_SERVICE_TOKEN = "test-token"
-    settings.AI_ENABLED = False
-    settings.OPENAI_API_KEY = None
     client = TestClient(app)
     headers = _user_scoped_headers(client, "chat-ai-disabled-no-requests")
 
@@ -841,13 +796,11 @@ def test_ai_disabled_stub_does_not_create_model_requests() -> None:
         ).mappings().fetchone()
 
     assert total_row is not None
-    assert int(total_row["total"]) == 0
+    assert int(total_row["total"]) > 0
 
 
 def test_chat_daily_request_limit_rejects_before_persisting_side_effects() -> None:
     settings.INTERNAL_ENGINE_SERVICE_TOKEN = "test-token"
-    settings.AI_ENABLED = False
-    settings.OPENAI_API_KEY = None
     original_limit = settings.MAX_DAILY_PLAYER_REQUESTS
     settings.MAX_DAILY_PLAYER_REQUESTS = 0
     client = TestClient(app)
@@ -921,8 +874,6 @@ def test_chat_daily_request_limit_rejects_before_persisting_side_effects() -> No
 
 def test_model_call_budget_reserves_max_output_tokens_for_user_and_project() -> None:
     settings.INTERNAL_ENGINE_SERVICE_TOKEN = "test-token"
-    settings.AI_ENABLED = False
-    settings.OPENAI_API_KEY = None
     original_user_limit = settings.MAX_DAILY_PLAYER_TOKENS
     original_project_limit = settings.MAX_DAILY_PROJECT_TOKENS
     settings.MAX_DAILY_PLAYER_TOKENS = 100
@@ -989,8 +940,6 @@ def test_model_call_budget_reserves_max_output_tokens_for_user_and_project() -> 
 
 def test_chat_daily_token_limit_returns_structured_error() -> None:
     settings.INTERNAL_ENGINE_SERVICE_TOKEN = "test-token"
-    settings.AI_ENABLED = False
-    settings.OPENAI_API_KEY = None
     original_limit = settings.MAX_DAILY_PLAYER_TOKENS
     settings.MAX_DAILY_PLAYER_TOKENS = 0
     client = TestClient(app)
@@ -1003,16 +952,13 @@ def test_chat_daily_token_limit_returns_structured_error() -> None:
             headers=headers,
         )
 
-        assert response.status_code == 200
-        assert response.json()["reply"] == "AI narrator replies (stub): hello"
+        assert response.status_code == 429
     finally:
         settings.MAX_DAILY_PLAYER_TOKENS = original_limit
 
 
 def test_chat_campaign_turn_limit_returns_structured_error(monkeypatch) -> None:
     settings.INTERNAL_ENGINE_SERVICE_TOKEN = "test-token"
-    settings.AI_ENABLED = False
-    settings.OPENAI_API_KEY = None
     monkeypatch.setattr(settings, "MAX_TURNS_PER_CAMPAIGN", 0)
     client = TestClient(app)
     headers = _user_scoped_headers(client, "chat-turn-limit")
@@ -1035,8 +981,6 @@ def test_chat_campaign_turn_limit_returns_structured_error(monkeypatch) -> None:
 
 def test_create_campaign_limit_returns_structured_error(monkeypatch) -> None:
     settings.INTERNAL_ENGINE_SERVICE_TOKEN = "test-token"
-    settings.AI_ENABLED = False
-    settings.OPENAI_API_KEY = None
     monkeypatch.setattr(settings, "MAX_CAMPAIGNS_PER_PLAYER", 0)
     monkeypatch.setattr("app.guardrails.usage_limits.UsageLimits.MAX_CAMPAIGNS_PER_PLAYER", 0)
     client = TestClient(app)
@@ -1053,7 +997,6 @@ def test_create_campaign_limit_returns_structured_error(monkeypatch) -> None:
 
 
 def test_orchestrator_uses_narrator_agent_and_persists_turn(monkeypatch) -> None:
-    settings.AI_ENABLED = True
     settings.OPENAI_API_KEY = "test-key"
 
     saw_tool_context = False
@@ -1145,7 +1088,6 @@ def test_orchestrator_uses_narrator_agent_and_persists_turn(monkeypatch) -> None
 
 
 def test_orchestrator_records_parse_failure_for_invalid_action(monkeypatch) -> None:
-    settings.AI_ENABLED = True
     settings.OPENAI_API_KEY = "test-key"
 
     async def fake_generate_structured(*, messages, model=None, **kwargs):  # noqa: ANN202, ARG001
@@ -1194,7 +1136,6 @@ def test_orchestrator_records_parse_failure_for_invalid_action(monkeypatch) -> N
 def test_orchestrator_returns_502_when_action_parser_provider_fails(
     monkeypatch,
 ) -> None:
-    settings.AI_ENABLED = True
     settings.OPENAI_API_KEY = "test-key"
 
     async def broken_generate_structured(*, messages, **kwargs):  # noqa: ANN202, ARG001
@@ -1223,8 +1164,6 @@ def test_orchestrator_returns_502_when_action_parser_provider_fails(
 def test_orchestrator_persists_genesis_state_for_non_mutating_first_action(
     monkeypatch,
 ) -> None:
-    settings.AI_ENABLED = True
-    settings.OPENAI_API_KEY = None
 
     async def fake_generate_structured(*, messages, model=None, **kwargs):  # noqa: ANN202, ARG001
         return ActionParserOutput(
@@ -1248,6 +1187,11 @@ def test_orchestrator_persists_genesis_state_for_non_mutating_first_action(
     monkeypatch.setattr(
         narrator_module.model_client, "generate_text", fake_generate_text
     )
+    monkeypatch.setattr(
+        orchestrator_module.orchestrator.director_agent,
+        "propose",
+        _fake_no_action_director_propose,
+    )
 
     response = asyncio.run(
         orchestrator_module.orchestrator.handle_chat(
@@ -1269,8 +1213,6 @@ def test_orchestrator_persists_genesis_state_for_non_mutating_first_action(
 
 
 def test_auto_created_campaign_receives_starter_abilities() -> None:
-    settings.AI_ENABLED = False
-    settings.OPENAI_API_KEY = None
 
     response = asyncio.run(
         orchestrator_module.orchestrator.handle_chat(
@@ -1295,11 +1237,9 @@ def test_auto_created_campaign_receives_starter_abilities() -> None:
 
 
 def test_existing_campaign_chat_does_not_regenerate_starter_abilities() -> None:
-    settings.AI_ENABLED = False
-    settings.OPENAI_API_KEY = None
     user_id = _resolved_internal_user_id(TestClient(app), "existing-starter-abilities")
     state = build_fresh_campaign_state()
-    generated = orchestrator_module.orchestrator.starter_ability_generator._stub_generation()
+    generated = starter_ability_generation()
     sentinel_ability = generated.abilities[0].model_copy(update={"display_name": "Sentinel Echo"})
     state["player"]["generated_abilities"] = [
         sentinel_ability.model_dump(mode="json"),
@@ -1334,12 +1274,10 @@ def test_existing_campaign_chat_does_not_regenerate_starter_abilities() -> None:
 
 
 def test_provider_backed_starter_generation_is_logged_without_live_model(monkeypatch) -> None:
-    monkeypatch.setattr(settings, "AI_ENABLED", True)
     monkeypatch.setattr(settings, "OPENAI_API_KEY", "test-key")
-    generated = orchestrator_module.orchestrator.starter_ability_generator._stub_generation()
+    generated = starter_ability_generation()
 
-    async def fake_starter_generate(*, provider_model_enabled, return_usage=False):  # noqa: ANN202
-        assert provider_model_enabled is True
+    async def fake_starter_generate(*, return_usage=False):  # noqa: ANN202
         assert return_usage is True
         return ModelCallResult(
             output=generated,
@@ -1395,7 +1333,6 @@ def test_provider_backed_starter_generation_is_logged_without_live_model(monkeyp
 
 
 def test_provider_backed_starter_generation_respects_project_request_limit(monkeypatch) -> None:
-    monkeypatch.setattr(settings, "AI_ENABLED", True)
     monkeypatch.setattr(settings, "OPENAI_API_KEY", "test-key")
     monkeypatch.setattr(settings, "MAX_DAILY_PROJECT_REQUESTS", 0)
 
@@ -1422,9 +1359,8 @@ def test_provider_backed_starter_generation_respects_project_request_limit(monke
 def test_provider_backed_starter_generation_semantic_failure_is_logged_and_rolls_back(
     monkeypatch,
 ) -> None:
-    monkeypatch.setattr(settings, "AI_ENABLED", True)
     monkeypatch.setattr(settings, "OPENAI_API_KEY", "test-key")
-    generated = orchestrator_module.orchestrator.starter_ability_generator._stub_generation()
+    generated = starter_ability_generation()
     invalid_generation = generated.model_copy(
         update={
             "abilities": (
@@ -1437,8 +1373,7 @@ def test_provider_backed_starter_generation_semantic_failure_is_logged_and_rolls
         TestClient(app), "provider-starter-semantic-failure"
     )
 
-    async def fake_starter_generate(*, provider_model_enabled, return_usage=False):  # noqa: ANN202
-        assert provider_model_enabled is True
+    async def fake_starter_generate(*, return_usage=False):  # noqa: ANN202
         assert return_usage is True
         return ModelCallResult(
             output=invalid_generation,
@@ -1503,7 +1438,6 @@ def test_provider_backed_starter_generation_semantic_failure_is_logged_and_rolls
 def test_incomplete_starter_response_fails_campaign_without_partial_state(
     monkeypatch,
 ) -> None:
-    monkeypatch.setattr(settings, "AI_ENABLED", True)
     monkeypatch.setattr(settings, "OPENAI_API_KEY", "test-key")
     owner_user_id = _resolved_internal_user_id(
         TestClient(app), "provider-starter-incomplete"
@@ -1521,8 +1455,7 @@ def test_incomplete_starter_response_fails_campaign_without_partial_state(
     def capture_error(*args, **kwargs) -> None:  # noqa: ANN002, ANN003
         logged_errors.append((args, kwargs))
 
-    async def fake_starter_generate(*, provider_model_enabled, return_usage=False):  # noqa: ANN202
-        assert provider_model_enabled is True
+    async def fake_starter_generate(*, return_usage=False):  # noqa: ANN202
         assert return_usage is True
         return ModelCallResult(
             output=None,
@@ -1607,9 +1540,8 @@ def test_incomplete_starter_response_fails_campaign_without_partial_state(
 def test_auto_created_chat_starter_failure_keeps_audit_without_chat_side_effects(
     monkeypatch,
 ) -> None:
-    monkeypatch.setattr(settings, "AI_ENABLED", True)
     monkeypatch.setattr(settings, "OPENAI_API_KEY", "test-key")
-    generated = orchestrator_module.orchestrator.starter_ability_generator._stub_generation()
+    generated = starter_ability_generation()
     invalid_generation = generated.model_copy(
         update={
             "abilities": (
@@ -1624,9 +1556,8 @@ def test_auto_created_chat_starter_failure_keeps_audit_without_chat_side_effects
     idempotency_key = str(uuid4())
     starter_attempts = 0
 
-    async def fake_starter_generate(*, provider_model_enabled, return_usage=False):  # noqa: ANN202
+    async def fake_starter_generate(*, return_usage=False):  # noqa: ANN202
         nonlocal starter_attempts
-        assert provider_model_enabled is True
         assert return_usage is True
         starter_attempts += 1
         return ModelCallResult(
@@ -1731,9 +1662,8 @@ def test_auto_created_chat_starter_failure_keeps_audit_without_chat_side_effects
 def test_auto_created_chat_idempotency_claim_prevents_duplicate_starter_generation(
     monkeypatch,
 ) -> None:
-    monkeypatch.setattr(settings, "AI_ENABLED", True)
     monkeypatch.setattr(settings, "OPENAI_API_KEY", "test-key")
-    generated = orchestrator_module.orchestrator.starter_ability_generator._stub_generation()
+    generated = starter_ability_generation()
     owner_user_id = _resolved_internal_user_id(
         TestClient(app), "auto-created-idempotency-starter-claim"
     )
@@ -1741,9 +1671,8 @@ def test_auto_created_chat_idempotency_claim_prevents_duplicate_starter_generati
     starter_calls = 0
     parser_calls = 0
 
-    async def fake_starter_generate(*, provider_model_enabled, return_usage=False):  # noqa: ANN202
+    async def fake_starter_generate(*, return_usage=False):  # noqa: ANN202
         nonlocal starter_calls
-        assert provider_model_enabled is True
         assert return_usage is True
         starter_calls += 1
         await asyncio.sleep(0)
@@ -1825,17 +1754,15 @@ def test_auto_created_chat_idempotency_claim_prevents_duplicate_starter_generati
 
 
 def test_auto_created_chat_rechecks_parser_budget_after_starter_generation(monkeypatch) -> None:
-    monkeypatch.setattr(settings, "AI_ENABLED", True)
     monkeypatch.setattr(settings, "OPENAI_API_KEY", "test-key")
     monkeypatch.setattr(settings, "MAX_DAILY_PROJECT_REQUESTS", 1)
-    generated = orchestrator_module.orchestrator.starter_ability_generator._stub_generation()
+    generated = starter_ability_generation()
     owner_user_id = _resolved_internal_user_id(
         TestClient(app), "auto-created-parser-refreshed-budget"
     )
     idempotency_key = str(uuid4())
 
-    async def fake_starter_generate(*, provider_model_enabled, return_usage=False):  # noqa: ANN202
-        assert provider_model_enabled is True
+    async def fake_starter_generate(*, return_usage=False):  # noqa: ANN202
         assert return_usage is True
         return ModelCallResult(
             output=generated,
@@ -1894,8 +1821,6 @@ def test_auto_created_chat_rechecks_parser_budget_after_starter_generation(monke
 
 
 def test_ai_disabled_still_runs_parser_and_tools() -> None:
-    settings.AI_ENABLED = False
-    settings.OPENAI_API_KEY = None
 
     response = asyncio.run(
         orchestrator_module.orchestrator.handle_chat(
@@ -1906,9 +1831,7 @@ def test_ai_disabled_still_runs_parser_and_tools() -> None:
         )
     )
 
-    assert (
-        response.reply == "AI narrator replies (stub): I go north."
-    )
+    assert response.reply == "AI narrator replies: I go north."
 
     with session() as db:
         campaign = db.get_campaign(response.campaign_id)
@@ -1927,45 +1850,8 @@ def test_ai_disabled_still_runs_parser_and_tools() -> None:
         ]
 
 
-def test_ai_enabled_without_api_key_uses_deterministic_parser(monkeypatch) -> None:
-    settings.AI_ENABLED = True
-    settings.OPENAI_API_KEY = None
 
-    async def fail_if_structured_called(*, messages, **kwargs):  # noqa: ANN202, ARG001
-        raise AssertionError("generate_structured should not be called without API key")
-
-    monkeypatch.setattr(
-        action_parser_module.model_client,
-        "generate_structured",
-        fail_if_structured_called,
-    )
-
-    response = asyncio.run(
-        orchestrator_module.orchestrator.handle_chat(
-            ChatRequest(message="I go north."),
-            owner_user_id=_resolved_internal_user_id(
-                TestClient(app), "orchestrator-ai-flag-no-key"
-            ),
-        )
-    )
-
-    assert response.reply == "AI narrator replies: I go north."
-
-    with session() as db:
-        campaign = db.get_campaign(response.campaign_id)
-        assert campaign is not None
-        assert campaign.state is not None
-        campaign_state = json.loads(campaign.state)
-        assert campaign_state["player"]["location"] == "grand_corridor"
-
-        request_total = db.conn.execute(text("SELECT COUNT(*) AS total FROM model_requests")).mappings().fetchone()
-        assert request_total is not None
-        assert int(request_total["total"]) == 0
-
-
-def test_ai_enabled_without_api_key_does_not_consume_project_quota() -> None:
-    settings.AI_ENABLED = True
-    settings.OPENAI_API_KEY = None
+def test_chat_always_enforces_project_quota() -> None:
     original_limit = settings.MAX_DAILY_PROJECT_REQUESTS
     settings.MAX_DAILY_PROJECT_REQUESTS = 0
     client = TestClient(app)
@@ -1978,8 +1864,7 @@ def test_ai_enabled_without_api_key_does_not_consume_project_quota() -> None:
             headers=headers,
         )
 
-        assert response.status_code == 200
-        assert response.json()["reply"] == "AI narrator replies: hello"
+        assert response.status_code == 429
 
         with session() as db:
             request_total = db.conn.execute(text("SELECT COUNT(*) AS total FROM model_requests")).mappings().fetchone()
@@ -1989,76 +1874,8 @@ def test_ai_enabled_without_api_key_does_not_consume_project_quota() -> None:
         settings.MAX_DAILY_PROJECT_REQUESTS = original_limit
 
 
-def test_ai_enabled_without_api_key_skips_memory_agent_provider_logging() -> None:
-    settings.AI_ENABLED = True
-    settings.OPENAI_API_KEY = None
-
-    with session() as db:
-        user = db.resolve_internal_user(
-            identity_provider="google",
-            provider_issuer=CANONICAL_GOOGLE_ISSUER,
-            provider_subject="memory-fallback-no-provider",
-            email="memory-fallback-no-provider@example.com",
-            email_verified=True,
-            display_name="Memory Fallback",
-            avatar_url=None,
-        )
-        db.create_campaign(
-            campaign_id="campaign_memory_fallback",
-            owner_user_id=user.id,
-            name="Fallback Campaign",
-        )
-        db.create_turn(
-            campaign_id="campaign_memory_fallback",
-            turn_id="turn_memory_1",
-            role="user",
-            content="hello",
-        )
-        db.create_turn(
-            campaign_id="campaign_memory_fallback",
-            turn_id="turn_memory_2",
-            role="assistant",
-            content="welcome",
-        )
-
-        asyncio.run(
-            orchestrator_module.orchestrator._maybe_update_memory_layers(
-                db=db,
-                memory_service=orchestrator_module.MemoryService(db),
-                owner_user_id=user.id,
-                campaign_id="campaign_memory_fallback",
-                user_turn_id="turn_memory_1",
-                assistant_turn_id="turn_memory_2",
-                campaign_state="No campaign state yet.",
-                recent_turns=[{"role": "user", "content": "hello"}, {"role": "assistant", "content": "welcome"}],
-                parsed_action=ActionParserOutput(
-                    action=ActionType.MOVE,
-                    target="north",
-                    parameters=ActionParserParameters(),
-                    stealth=False,
-                    confidence=0.9,
-                    parse_status="ok",
-                    parser_notes=None,
-                ),
-                tool_result=ToolExecutionResult(
-                    success=True,
-                    summary="moved north",
-                    state_delta={"location": "north"},
-                ),
-                reply="The corridor settles into silence.",
-                ai_enabled=True,
-                provider_model_enabled=False,
-                request_message="hello",
-            )
-        )
-
-        total = db.conn.execute(text("SELECT COUNT(*) AS total FROM model_requests")).mappings().fetchone()
-        assert total is not None
-        assert int(total["total"]) == 0
-
 
 def test_provider_request_budget_rejects_large_action_parser_input(monkeypatch) -> None:
-    settings.AI_ENABLED = True
     settings.OPENAI_API_KEY = "test-key"
     original_limit = settings.MAX_ESTIMATED_INPUT_TOKENS
     settings.MAX_ESTIMATED_INPUT_TOKENS = 64
@@ -2091,7 +1908,6 @@ def test_provider_request_budget_rejects_large_action_parser_input(monkeypatch) 
 
 
 def test_provider_request_budget_rejects_large_narrator_input(monkeypatch) -> None:
-    settings.AI_ENABLED = True
     settings.OPENAI_API_KEY = "test-key"
     original_limit = settings.MAX_ESTIMATED_INPUT_TOKENS
     settings.MAX_ESTIMATED_INPUT_TOKENS = 128
@@ -2139,7 +1955,6 @@ def test_provider_request_budget_rejects_large_narrator_input(monkeypatch) -> No
 
 
 def test_orchestrator_uses_public_action_parser_estimator(monkeypatch) -> None:
-    settings.AI_ENABLED = True
     settings.OPENAI_API_KEY = "test-key"
 
     async def fake_generate_structured(*, messages, model=None, **kwargs):  # noqa: ANN202, ARG001
@@ -2246,8 +2061,6 @@ def test_memory_context_budget_skips_oversized_summary_and_entries() -> None:
 
 
 def test_orchestrator_includes_relevant_memory_context(monkeypatch) -> None:
-    settings.AI_ENABLED = True
-    settings.OPENAI_API_KEY = None
     monkeypatch.setattr(settings, "MAX_RECENT_MESSAGES", 1)
     monkeypatch.setattr(settings, "MEMORY_SUMMARY_EVERY_TURNS", 99)
     monkeypatch.setattr(settings, "MEMORY_REFLECTION_EVERY_TURNS", 99)
@@ -2288,6 +2101,11 @@ def test_orchestrator_includes_relevant_memory_context(monkeypatch) -> None:
     monkeypatch.setattr(
         narrator_module.model_client, "generate_text", fake_generate_text
     )
+    monkeypatch.setattr(
+        orchestrator_module.orchestrator.director_agent,
+        "propose",
+        _fake_no_action_director_propose,
+    )
 
     first_response = asyncio.run(
         orchestrator_module.orchestrator.handle_chat(
@@ -2316,7 +2134,6 @@ def test_orchestrator_includes_relevant_memory_context(monkeypatch) -> None:
 def test_orchestrator_writes_campaign_summary_and_reflection_memory(
     monkeypatch,
 ) -> None:
-    settings.AI_ENABLED = True
     settings.OPENAI_API_KEY = "test-key"
     monkeypatch.setattr(settings, "MEMORY_SUMMARY_EVERY_TURNS", 1)
     monkeypatch.setattr(settings, "MEMORY_REFLECTION_EVERY_TURNS", 1)
@@ -2385,7 +2202,6 @@ def test_orchestrator_writes_campaign_summary_and_reflection_memory(
 
 
 def test_orchestrator_logs_memory_agent_usage(monkeypatch) -> None:
-    settings.AI_ENABLED = True
     settings.OPENAI_API_KEY = "test-key"
     monkeypatch.setattr(settings, "MEMORY_SUMMARY_EVERY_TURNS", 1)
     monkeypatch.setattr(settings, "MEMORY_REFLECTION_EVERY_TURNS", 1)
@@ -2446,7 +2262,6 @@ def test_orchestrator_logs_memory_agent_usage(monkeypatch) -> None:
 
 
 def test_orchestrator_uses_policy_models_per_agent(monkeypatch) -> None:
-    settings.AI_ENABLED = True
     settings.OPENAI_API_KEY = "test-key"
     monkeypatch.setattr(settings, "MEMORY_SUMMARY_EVERY_TURNS", 1)
     monkeypatch.setattr(settings, "MEMORY_REFLECTION_EVERY_TURNS", 1)

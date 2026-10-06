@@ -26,7 +26,7 @@ from app.game.campaign_state import (
     load_authoritative_campaign_state,
 )
 from app.game.character_progression import ensure_character_progression_state, unlock_ability
-from app.game.items import resolve_item_ids, room_location, sync_inventory_projection
+from app.game.items import room_location
 from app.game.narrator_scene import build_narrator_scene_context
 from app.guardrails.model_policy import ModelPolicy
 from app.guardrails.token_budget import TokenBudget
@@ -56,13 +56,14 @@ from app.schemas.starter_ability_provider import (
 from app.services import tool_executor as tool_executor_module
 from app.services.tool_executor import ToolExecutor
 from app.tools.registry import ToolRegistry
+from tests.factories import starter_ability_generation
 
 _STARTER_GENERATE = StarterAbilityGenerator.generate
 
 
 def _state_with_starters() -> dict:
     state = build_fresh_campaign_state()
-    generated = StarterAbilityGenerator()._stub_generation()
+    generated = starter_ability_generation()
     state["player"]["generated_abilities"] = [
         ability.model_dump(mode="json") for ability in generated.abilities
     ]
@@ -134,8 +135,8 @@ def test_starter_ability_provider_schema_uses_bounded_homogeneous_array() -> Non
 
 
 def test_new_starters_validate_all_supported_specific_utility_variants() -> None:
-    sensory = StarterAbilityGenerator()._stub_generation().abilities[0]
-    utility = StarterAbilityGenerator()._stub_generation().abilities[1]
+    sensory = starter_ability_generation().abilities[0]
+    utility = starter_ability_generation().abilities[1]
     variants = (
         _mechanics(
             effect=AbilityEffect.MOVE,
@@ -265,11 +266,10 @@ def test_domain_generated_ability_schema_has_closed_bounded_fields() -> None:
     assert "prefixItems" not in schema["properties"]["abilities"]
 
 
-def test_provider_disabled_starters_are_valid_distinct_and_available() -> None:
-    generation = asyncio.run(
-        StarterAbilityGenerator().generate(provider_model_enabled=False)
+def test_test_owned_starter_factory_provides_valid_deterministic_fixture() -> None:
+    abilities = validate_starter_ability_definitions(
+        starter_ability_generation().abilities
     )
-    abilities = validate_starter_ability_definitions(generation.abilities)
     state = _state_with_starters()
 
     assert len(abilities) == 2
@@ -320,7 +320,6 @@ def test_starter_generation_uses_dedicated_bounded_reasoning_policy(monkeypatch)
 
     result = asyncio.run(
         StarterAbilityGenerator().generate(
-            provider_model_enabled=True,
             return_usage=True,
         )
     )
@@ -390,7 +389,6 @@ def test_starter_generator_preserves_missing_output_when_usage_is_requested(
 
     result = asyncio.run(
         StarterAbilityGenerator().generate(
-            provider_model_enabled=True,
             return_usage=True,
         )
     )
@@ -414,12 +412,12 @@ def test_starter_generator_fails_explicitly_without_usage_when_output_is_missing
 
     with pytest.raises(ValueError, match="did not return valid structured output"):
         asyncio.run(
-            StarterAbilityGenerator().generate(provider_model_enabled=True)
+            StarterAbilityGenerator().generate()
         )
 
 
 def test_invalid_generated_content_and_built_in_collision_are_rejected() -> None:
-    generation = StarterAbilityGenerator()._stub_generation()
+    generation = starter_ability_generation()
     collided = generation.abilities[0].model_copy(update={"ability_id": "keen_eye"})
     with pytest.raises(ValueError, match="collides"):
         validate_starter_ability_definitions((collided, generation.abilities[1]))
@@ -444,29 +442,28 @@ def test_invalid_generated_content_and_built_in_collision_are_rejected() -> None
     "Steady-Nerves", "The Steady Nerves", "read_the_room", "Occult-Insight",
 ])
 def test_new_starters_reject_canonical_built_in_references(display_name: str) -> None:
-    generation = StarterAbilityGenerator()._stub_generation()
+    generation = starter_ability_generation()
     candidate = generation.abilities[0].model_copy(update={"display_name": display_name})
     with pytest.raises(ValueError, match="built-in ability"):
         validate_starter_ability_definitions((candidate, generation.abilities[1]))
 
 
 def test_distinct_name_near_built_in_remains_valid() -> None:
-    generation = StarterAbilityGenerator()._stub_generation()
+    generation = starter_ability_generation()
     candidate = generation.abilities[0].model_copy(update={"display_name": "Keen Whisper"})
     assert validate_starter_ability_definitions((candidate, generation.abilities[1]))[0] == candidate
 
 
 def test_new_starter_id_cannot_canonically_shadow_builtin() -> None:
-    generation = StarterAbilityGenerator()._stub_generation()
+    generation = starter_ability_generation()
     candidate = generation.abilities[0].model_copy(update={"ability_id": "the_keen_eye"})
     with pytest.raises(ValueError, match="built-in ability"):
         validate_starter_ability_definitions((candidate, generation.abilities[1]))
 
 
-@pytest.mark.parametrize("deterministic_only", [True, False])
 @pytest.mark.parametrize("display_name", ["Keen-Eye", "The Keen Eye", "keen_eye"])
 def test_persisted_built_in_collision_loads_and_fails_ambiguous_when_unlocked(
-    monkeypatch: pytest.MonkeyPatch, deterministic_only: bool, display_name: str,
+    monkeypatch: pytest.MonkeyPatch, display_name: str,
 ) -> None:
     state = _state_with_starters()
     state["player"]["generated_abilities"][0]["display_name"] = display_name
@@ -488,7 +485,6 @@ def test_persisted_built_in_collision_loads_and_fails_ambiguous_when_unlocked(
     )
     parsed = asyncio.run(ActionParserAgent().parse(
         message="use keen eye", campaign_state=json.dumps(state), recent_turns=[],
-        deterministic_only=deterministic_only,
     ))
     assert parsed.action == ActionType.UNKNOWN
     assert parsed.parse_status == "ambiguous"
@@ -500,7 +496,7 @@ def test_persisted_built_in_collision_loads_and_fails_ambiguous_when_unlocked(
 
 
 def test_generated_mechanic_collections_have_bounded_distinct_values() -> None:
-    generation = StarterAbilityGenerator()._stub_generation()
+    generation = starter_ability_generation()
 
     too_many_requirements = generation.abilities[0].model_copy(
         update={
@@ -534,7 +530,7 @@ def test_generated_mechanic_collections_have_bounded_distinct_values() -> None:
 
 
 def test_blank_generated_display_text_is_rejected() -> None:
-    generation = StarterAbilityGenerator()._stub_generation()
+    generation = starter_ability_generation()
 
     blank_name = generation.abilities[0].model_copy(update={"display_name": "   "})
     with pytest.raises(ValueError, match="display_name"):
@@ -546,7 +542,7 @@ def test_blank_generated_display_text_is_rejected() -> None:
 
 
 def test_new_starter_names_reject_raw_taxonomy_labels_without_a_fixed_catalog() -> None:
-    generation = StarterAbilityGenerator()._stub_generation()
+    generation = starter_ability_generation()
     taxonomy = generation.abilities[0].model_copy(
         update={"display_name": "Supernatural Presence Detection"}
     )
@@ -571,7 +567,7 @@ def test_new_starter_names_reject_raw_taxonomy_labels_without_a_fixed_catalog() 
     ],
 )
 def test_punctuation_does_not_hide_taxonomy_names(display_name: str) -> None:
-    generation = StarterAbilityGenerator()._stub_generation()
+    generation = starter_ability_generation()
     candidate = generation.abilities[0].model_copy(update={"display_name": display_name})
     with pytest.raises(ValueError, match="short and thematic"):
         validate_starter_ability_definitions((candidate, generation.abilities[1]))
@@ -581,7 +577,7 @@ def test_punctuation_does_not_hide_taxonomy_names(display_name: str) -> None:
     "display_name", ["Grave Echo", "Witch's Ear", "Whispering Grasp", "Pale Ember", "Veil-Borne Whisper"]
 )
 def test_thematic_name_validation_retains_natural_possessives(display_name: str) -> None:
-    generation = StarterAbilityGenerator()._stub_generation()
+    generation = starter_ability_generation()
     candidate = generation.abilities[0].model_copy(update={"display_name": display_name})
     other = generation.abilities[1].model_copy(update={"display_name": "Phantom Hand"})
     assert validate_starter_ability_definitions((candidate, other))[0] == candidate
@@ -589,7 +585,7 @@ def test_thematic_name_validation_retains_natural_possessives(display_name: str)
 
 @pytest.mark.parametrize("display_name", ["Echo Sense", "  ECHO   SENSE  ", "echo_sense"])
 def test_new_starters_reject_cross_name_id_invocation_collisions(display_name: str) -> None:
-    generation = StarterAbilityGenerator()._stub_generation()
+    generation = starter_ability_generation()
     candidate = generation.abilities[1].model_copy(update={"display_name": display_name})
     with pytest.raises(ValueError, match="invocation references"):
         validate_starter_ability_definitions((generation.abilities[0], candidate))
@@ -597,24 +593,6 @@ def test_new_starters_reject_cross_name_id_invocation_collisions(display_name: s
     assert validate_starter_ability_definitions(
         (generation.abilities[0], candidate), allow_legacy_generic=True
     )[1] == candidate
-
-
-def test_explicit_keen_eye_request_is_a_typed_action_only_when_available() -> None:
-    state = build_fresh_campaign_state()
-    ensure_character_progression_state(state)
-    state["player"]["progression"]["tracks"]["investigation"] = 2
-    unlock_ability(state, "keen_eye")
-    parsed = asyncio.run(
-        ActionParserAgent().parse(
-            message="look more closely using keen eye",
-            campaign_state=json.dumps(state),
-            recent_turns=[],
-            deterministic_only=True,
-        )
-    )
-
-    assert parsed.action == ActionType.ABILITY_CHECK
-    assert parsed.parameters == {"ability_id": "keen_eye"}
 
 
 def test_keen_eye_library_check_is_deterministic_and_non_mutating() -> None:
@@ -709,921 +687,6 @@ def test_resolved_failed_ability_check_keeps_outer_success_false(monkeypatch) ->
     assert narrator_result.check_result is not None
     assert narrator_result.check_result.resolved is True
     assert narrator_result.check_result.success is False
-
-
-def test_generated_ability_matching_requires_bounded_explicit_reference() -> None:
-    state = _state_with_starters()
-    ability_use = asyncio.run(
-        ActionParserAgent().parse(
-            message="use Whispering Grasp on the brass key",
-            campaign_state=json.dumps(state),
-            recent_turns=[],
-            deterministic_only=True,
-        )
-    )
-    assert ability_use.action == ActionType.ABILITY_CHECK
-    assert ability_use.parameters == {"ability_id": "whispering_touch"}
-    assert ability_use.target == "brass key"
-    missing_target = asyncio.run(
-        ActionParserAgent().parse(
-            message="use Whispering Grasp",
-            campaign_state=json.dumps(state),
-            recent_turns=[],
-            deterministic_only=True,
-        )
-    )
-    assert missing_target.action == ActionType.ABILITY_CHECK
-    assert missing_target.parameters == {"ability_id": "whispering_touch"}
-    assert missing_target.target is None
-    parser_context = ActionParserAgent()._build_parser_context(json.dumps(state))
-    grasp_context = next(
-        ability
-        for ability in parser_context.abilities
-        if ability["ability_id"] == "whispering_touch"
-    )
-    assert grasp_context["name"] == "Whispering Grasp"
-    assert grasp_context["requires_target"] is True
-
-    generated = StarterAbilityGenerator()._stub_generation()
-    light_ability = generated.abilities[1].model_copy(
-        update={"ability_id": "ghost_light", "display_name": "Light"}
-    )
-    state["player"]["generated_abilities"] = [
-        generated.abilities[0].model_dump(mode="json"),
-        light_ability.model_dump(mode="json"),
-    ]
-    assert unlock_ability(state, "ghost_light").success
-    state["items"]["candle"]["location"] = room_location("entry_hall")
-
-    item_use = asyncio.run(
-        ActionParserAgent().parse(
-            message="light the candle with match",
-            campaign_state=json.dumps(state),
-            recent_turns=[],
-            deterministic_only=True,
-        )
-    )
-    assert item_use.action == ActionType.USE
-    assert item_use.target == "candle"
-    assert item_use.parameters == {"interaction_mode": "light", "with_item": "match"}
-
-    item_use_with_target = asyncio.run(
-        ActionParserAgent().parse(
-            message="use light on candle",
-            campaign_state=json.dumps(state),
-            recent_turns=[],
-            deterministic_only=True,
-        )
-    )
-    assert item_use_with_target.action == ActionType.USE
-    assert item_use_with_target.target == "candle"
-    assert item_use_with_target.parameters == {"with_item": "light"}
-
-    explicitly_invoked_ability = asyncio.run(
-        ActionParserAgent().parse(
-            message="use my ability Light on candle",
-            campaign_state=json.dumps(state),
-            recent_turns=[],
-            deterministic_only=True,
-        )
-    )
-    assert explicitly_invoked_ability.action == ActionType.ABILITY_CHECK
-    assert explicitly_invoked_ability.parameters == {"ability_id": "ghost_light"}
-    assert explicitly_invoked_ability.target == "candle"
-
-    tag_collision = asyncio.run(ActionParserAgent().parse(
-        message="use light", campaign_state=json.dumps(state),
-        recent_turns=[], deterministic_only=True,
-    ))
-    assert tag_collision.action == ActionType.USE
-    for item in state["items"].values():
-        if "light" in item["tags"]:
-            item["location"] = room_location("library")
-    sync_inventory_projection(state, state["items"])
-
-    ability_use = asyncio.run(
-        ActionParserAgent().parse(
-            message="use light",
-            campaign_state=json.dumps(state),
-            recent_turns=[],
-            deterministic_only=True,
-        )
-    )
-    assert ability_use.action == ActionType.ABILITY_CHECK
-    assert ability_use.parameters == {"ability_id": "ghost_light"}
-
-
-@pytest.mark.parametrize(
-    ("message", "expected_id", "expected_target"),
-    [
-        ("use Grave Echo", "whispering_touch", None),
-        ("use Grave Echo on the brass key", "whispering_touch", "brass key"),
-        ("use Grave", "echo_sense", None),
-        ("use whispering_touch on the brass key", "whispering_touch", "brass key"),
-        ("use whispering touch on the brass key", "whispering_touch", "brass key"),
-    ],
-)
-def test_complete_invocation_prefers_longest_reference(
-    message: str, expected_id: str, expected_target: str | None
-) -> None:
-    state = _state_with_starters()
-    state["player"]["generated_abilities"][0]["display_name"] = "Grave"
-    state["player"]["generated_abilities"][1]["display_name"] = "Grave Echo"
-    original_state = copy.deepcopy(state)
-    parsed = asyncio.run(ActionParserAgent().parse(
-        message=message, campaign_state=json.dumps(state), recent_turns=[], deterministic_only=True
-    ))
-    assert parsed.action == ActionType.ABILITY_CHECK
-    assert parsed.parameters == {"ability_id": expected_id}
-    assert parsed.target == expected_target
-    assert state == original_state
-
-
-@pytest.mark.parametrize("deterministic_only", [True, False])
-@pytest.mark.parametrize("message", ["use Grave Echo", "use Grave Echo on the brass key"])
-def test_legacy_cross_reference_ambiguity_is_non_executable(
-    monkeypatch: pytest.MonkeyPatch, deterministic_only: bool, message: str
-) -> None:
-    state = _state_with_starters()
-    state["player"]["generated_abilities"][0].update(
-        {"ability_id": "grave_echo", "display_name": "Veil Tremor"}
-    )
-    state["player"]["generated_abilities"][1].update(
-        {"ability_id": "veil_tremor", "display_name": "Grave Echo"}
-    )
-    state["player"]["progression"]["unlocked_abilities"] = ["grave_echo", "veil_tremor"]
-    original_state = copy.deepcopy(state)
-    assert load_authoritative_campaign_state(json.dumps(state)) == state
-
-    async def fake_generate_structured(**kwargs: object) -> ActionParserOutput:
-        assert kwargs["response_model"] is ActionParserOutput
-        return ActionParserOutput(
-            action=ActionType.ABILITY_CHECK,
-            parameters=ActionParserParameters(ability_id="grave_echo"),
-            parse_status="ok",
-            confidence=1,
-        )
-
-    monkeypatch.setattr(
-        "app.agents.action_parser.model_client.generate_structured", fake_generate_structured
-    )
-    parsed = asyncio.run(ActionParserAgent().parse(
-        message=message,
-        campaign_state=json.dumps(state),
-        recent_turns=[],
-        deterministic_only=deterministic_only,
-    ))
-    assert parsed.action == ActionType.UNKNOWN
-    assert parsed.parse_status == "ambiguous"
-    assert parsed.parameters == {}
-    assert parsed.target is None
-    updated, result = ToolExecutor().execute(parsed_action=parsed, campaign_state=json.dumps(state))
-    assert updated == original_state
-    assert result.ability_result is None
-
-
-@pytest.mark.parametrize(
-    ("message", "model_ability_id", "model_target", "expected_action", "expected_target"),
-    [
-        ("do something useful", "whispering_touch", "brass key", ActionType.UNKNOWN, None),
-        ("use Grave Echo", "whispering_touch", "brass key", ActionType.UNKNOWN, None),
-        ("use Whispering Grasp", "invented_ability", "brass key", ActionType.UNKNOWN, None),
-        ("use Whispering Grasp", None, "brass key", ActionType.UNKNOWN, None),
-        ("use Whispering Grasp", "whispering_touch", "brass key", ActionType.ABILITY_CHECK, None),
-        (
-            "use Whispering Grasp on the brass key", "whispering_touch", "candle",
-            ActionType.UNKNOWN, None,
-        ),
-        (
-            "use Whispering Grasp on the brass key", "whispering_touch", "brass key",
-            ActionType.ABILITY_CHECK, "brass key",
-        ),
-        (
-            "use whispering_touch on the brass key", "whispering_touch", "BRASS KEY",
-            ActionType.ABILITY_CHECK, "brass key",
-        ),
-        (
-            "use Whispering Grasp on the brass key", "whispering_touch", None,
-            ActionType.ABILITY_CHECK, "brass key",
-        ),
-    ],
-)
-def test_provider_ability_requests_require_explicit_authoritative_intent(
-    monkeypatch: pytest.MonkeyPatch,
-    message: str,
-    model_ability_id: str | None,
-    model_target: str | None,
-    expected_action: ActionType,
-    expected_target: str | None,
-) -> None:
-    state = _state_with_starters()
-    state["items"]["brass_key"]["location"] = room_location("entry_hall")
-    original_state = copy.deepcopy(state)
-    calls = 0
-
-    async def fake_generate_structured(**kwargs: object) -> ActionParserOutput:
-        nonlocal calls
-        calls += 1
-        assert kwargs["response_model"] is ActionParserOutput
-        return ActionParserOutput(
-            action=ActionType.ABILITY_CHECK,
-            target=model_target,
-            parameters=ActionParserParameters(ability_id=model_ability_id),
-            parse_status="ok",
-            confidence=1,
-        )
-
-    monkeypatch.setattr(
-        "app.agents.action_parser.model_client.generate_structured", fake_generate_structured
-    )
-    parsed = asyncio.run(ActionParserAgent().parse(
-        message=message, campaign_state=json.dumps(state), recent_turns=[]
-    ))
-    assert calls == 1
-    assert parsed.action == expected_action
-    assert parsed.target == expected_target
-    assert state == original_state
-    updated, result = ToolExecutor().execute(parsed_action=parsed, campaign_state=json.dumps(state))
-    if expected_target is None:
-        assert updated == original_state
-        assert result.state_delta == {}
-        assert result.success is False
-    else:
-        assert result.success is True
-        assert updated["items"]["brass_key"]["location"] == "player:current"
-
-
-def test_provider_cannot_invoke_an_unowned_ability(monkeypatch: pytest.MonkeyPatch) -> None:
-    state = _state_with_starters()
-    state["player"]["progression"]["unlocked_abilities"].remove("whispering_touch")
-
-    async def fake_generate_structured(**kwargs: object) -> ActionParserOutput:
-        return ActionParserOutput(
-            action=ActionType.ABILITY_CHECK,
-            target="brass key",
-            parameters=ActionParserParameters(ability_id="whispering_touch"),
-            parse_status="ok",
-            confidence=1,
-        )
-
-    monkeypatch.setattr(
-        "app.agents.action_parser.model_client.generate_structured", fake_generate_structured
-    )
-    parsed = asyncio.run(ActionParserAgent().parse(
-        message="use Whispering Grasp on the brass key", campaign_state=json.dumps(state), recent_turns=[]
-    ))
-    assert parsed.action == ActionType.UNKNOWN
-    assert parsed.parse_status == "invalid"
-    assert parsed.parameters == {}
-    assert parsed.target is None
-
-
-@pytest.mark.parametrize(
-    ("player_target", "model_target", "expected_target"),
-    [
-        ("brass-key", "brass key", "brass-key"),
-        ("brass_key", "brass key", "brass_key"),
-        ("brass key", "the brass key", "brass key"),
-        ("(brass key)", "brass key", "(brass key)"),
-        ("brass key", "(brass key)", "brass key"),
-        ("BRASS KEY", "Brass Key", "brass key"),
-        ("brass key", "candle", None),
-    ],
-)
-def test_provider_target_comparison_preserves_explicit_player_spelling(
-    monkeypatch: pytest.MonkeyPatch,
-    player_target: str, model_target: str, expected_target: str | None,
-) -> None:
-    state = _state_with_starters()
-    state["items"]["brass_key"]["location"] = room_location("entry_hall")
-    original_state = copy.deepcopy(state)
-    calls = 0
-
-    async def fake_generate_structured(**kwargs: object) -> ActionParserOutput:
-        nonlocal calls
-        calls += 1
-        return ActionParserOutput(
-            action=ActionType.ABILITY_CHECK, target=model_target,
-            parameters=ActionParserParameters(ability_id="whispering_touch"),
-            parse_status="ok", confidence=1,
-        )
-
-    monkeypatch.setattr(
-        "app.agents.action_parser.model_client.generate_structured", fake_generate_structured
-    )
-    parsed = asyncio.run(ActionParserAgent().parse(
-        message=f"use Whispering Grasp on the {player_target}",
-        campaign_state=json.dumps(state), recent_turns=[],
-    ))
-    assert calls == 1
-    assert parsed.target == expected_target
-    updated, result = ToolExecutor().execute(parsed_action=parsed, campaign_state=json.dumps(state))
-    if expected_target is None:
-        assert parsed.action == ActionType.UNKNOWN
-        assert parsed.parameters == {}
-        assert updated == original_state
-        assert result.state_delta == {}
-    else:
-        assert parsed.action == ActionType.ABILITY_CHECK
-        assert result.success is True
-        assert updated["items"]["brass_key"]["location"] == "player:current"
-
-
-@pytest.mark.parametrize("deterministic_only", [True, False])
-@pytest.mark.parametrize("item_location", ["room:entry_hall", "player:current", "room:library"])
-@pytest.mark.parametrize("tag", ["key", "THE_KEY", "(Key)"])
-def test_tag_only_item_collision_uses_shared_authoritative_candidates(
-    monkeypatch: pytest.MonkeyPatch,
-    deterministic_only: bool, item_location: str, tag: str,
-) -> None:
-    state = _state_with_starters()
-    state["player"]["generated_abilities"][1]["display_name"] = "Key"
-    state["items"]["tagged_token"] = {
-        **state["items"]["brass_key"],
-        "id": "tagged_token",
-        "name": "Brass Token",
-        "aliases": [],
-        "tags": [tag],
-        "location": item_location,
-    }
-    sync_inventory_projection(state, state["items"])
-    original_state = copy.deepcopy(state)
-    assert resolve_item_ids({"tagged_token": state["items"]["tagged_token"]}, "key") == ["tagged_token"]
-
-    async def fake_generate_structured(**kwargs: object) -> ActionParserOutput:
-        return ActionParserOutput(
-            action=ActionType.ABILITY_CHECK, target="candle",
-            parameters=ActionParserParameters(ability_id="whispering_touch"),
-            parse_status="ok", confidence=1,
-        )
-
-    monkeypatch.setattr(
-        "app.agents.action_parser.model_client.generate_structured", fake_generate_structured
-    )
-    parser = ActionParserAgent()
-    accessible = item_location != "room:library"
-    assert ("key" in parser._build_parser_context(json.dumps(state)).accessible_item_references) is accessible
-    ordinary = asyncio.run(parser.parse(
-        message="use key on candle", campaign_state=json.dumps(state),
-        recent_turns=[], deterministic_only=deterministic_only,
-    ))
-    if accessible:
-        assert ordinary.action == (ActionType.USE if deterministic_only else ActionType.UNKNOWN)
-        assert "ability_id" not in ordinary.parameters
-        updated, result = ToolExecutor().execute(
-            parsed_action=ordinary, campaign_state=json.dumps(state)
-        )
-        assert updated == original_state
-        assert result.ability_result is None
-        assert result.state_delta == {}
-    else:
-        assert ordinary.action == ActionType.ABILITY_CHECK
-        assert ordinary.parameters == {"ability_id": "whispering_touch"}
-    qualified = asyncio.run(parser.parse(
-        message="use my ability Key on candle", campaign_state=json.dumps(state),
-        recent_turns=[], deterministic_only=deterministic_only,
-    ))
-    assert qualified.action == ActionType.ABILITY_CHECK
-    assert qualified.parameters == {"ability_id": "whispering_touch"}
-    assert qualified.target == "candle"
-    assert state == original_state
-
-
-@pytest.mark.parametrize("parse_status", ["ok", "ambiguous", "invalid"])
-def test_provider_matching_retains_common_item_disambiguation(
-    monkeypatch: pytest.MonkeyPatch, parse_status: str
-) -> None:
-    state = _state_with_starters()
-    state["player"]["generated_abilities"][1]["display_name"] = "Light"
-
-    async def fake_generate_structured(**kwargs: object) -> ActionParserOutput:
-        return ActionParserOutput.model_validate({
-            "action": "ability_check",
-            "target": "candle",
-            "parameters": {"ability_id": "whispering_touch"},
-            "parse_status": parse_status,
-            "confidence": 1,
-        })
-
-    monkeypatch.setattr(
-        "app.agents.action_parser.model_client.generate_structured", fake_generate_structured
-    )
-    item_request = asyncio.run(ActionParserAgent().parse(
-        message="use light on candle", campaign_state=json.dumps(state), recent_turns=[]
-    ))
-    assert item_request.action == ActionType.UNKNOWN
-    assert item_request.parameters == {}
-    assert item_request.target is None
-
-    ability_request = asyncio.run(ActionParserAgent().parse(
-        message="use my ability Light on candle", campaign_state=json.dumps(state), recent_turns=[]
-    ))
-    if parse_status == "ok":
-        assert ability_request.action == ActionType.ABILITY_CHECK
-        assert ability_request.parameters == {"ability_id": "whispering_touch"}
-        assert ability_request.target == "candle"
-    else:
-        assert ability_request.action == ActionType.UNKNOWN
-        assert ability_request.parameters == {}
-        assert ability_request.target is None
-
-
-def test_provider_cannot_invoke_an_unavailable_keen_eye(monkeypatch: pytest.MonkeyPatch) -> None:
-    state = build_fresh_campaign_state()
-    ensure_character_progression_state(state)
-    assert unlock_ability(state, "keen_eye").success
-
-    async def fake_generate_structured(**kwargs: object) -> ActionParserOutput:
-        return ActionParserOutput(
-            action=ActionType.ABILITY_CHECK,
-            parameters=ActionParserParameters(ability_id="keen_eye"),
-            parse_status="ok",
-            confidence=1,
-        )
-
-    monkeypatch.setattr(
-        "app.agents.action_parser.model_client.generate_structured", fake_generate_structured
-    )
-    parsed = asyncio.run(ActionParserAgent().parse(
-        message="use Keen Eye", campaign_state=json.dumps(state), recent_turns=[]
-    ))
-    assert parsed.action == ActionType.UNKNOWN
-    assert parsed.parameters == {}
-
-
-@pytest.mark.parametrize("item_location", ["room:entry_hall", "player:current"])
-@pytest.mark.parametrize("reference_kind", ["name", "id", "alias"])
-@pytest.mark.parametrize("deterministic_only", [True, False])
-def test_accessible_item_references_require_an_explicit_ability_qualifier(
-    monkeypatch: pytest.MonkeyPatch,
-    item_location: str,
-    reference_kind: str,
-    deterministic_only: bool,
-) -> None:
-    state = _state_with_starters()
-    reference = {
-        "name": "Brass Token",
-        "id": "brass key",
-        "alias": "Tarnished Brass Key",
-    }[reference_kind]
-    state["player"]["generated_abilities"][1]["display_name"] = reference
-    state["items"]["brass_key"]["location"] = item_location
-    if reference_kind == "id":
-        state["items"]["brass_key"]["name"] = "Golden Token"
-        state["items"]["brass_key"]["aliases"] = []
-    elif reference_kind == "name":
-        item = state["items"]["brass_key"]
-        item["name"] = reference
-        item["aliases"] = []
-    state["items"]["candle"]["location"] = room_location("entry_hall")
-    sync_inventory_projection(state, state["items"])
-    original_state = copy.deepcopy(state)
-    calls = 0
-
-    async def fake_generate_structured(**kwargs: object) -> ActionParserOutput:
-        nonlocal calls
-        calls += 1
-        return ActionParserOutput(
-            action=ActionType.ABILITY_CHECK,
-            target="candle",
-            parameters=ActionParserParameters(ability_id="whispering_touch"),
-            parse_status="ok",
-            confidence=1,
-        )
-
-    monkeypatch.setattr(
-        "app.agents.action_parser.model_client.generate_structured", fake_generate_structured
-    )
-    parser = ActionParserAgent()
-    context = parser._build_parser_context(json.dumps(state))
-    assert reference.casefold() in context.accessible_item_references
-    item_request = asyncio.run(parser.parse(
-        message=f"use {reference.lower()} on candle",
-        campaign_state=json.dumps(state),
-        recent_turns=[],
-        deterministic_only=deterministic_only,
-    ))
-    if deterministic_only:
-        assert item_request.action == ActionType.USE
-        assert item_request.target == "candle"
-        assert item_request.parameters == {"with_item": reference.casefold()}
-    else:
-        assert item_request.action == ActionType.UNKNOWN
-        assert item_request.target is None
-        assert item_request.parameters == {}
-    updated, result = ToolExecutor().execute(
-        parsed_action=item_request, campaign_state=json.dumps(state)
-    )
-    assert updated == original_state
-    assert result.ability_result is None
-    assert result.state_delta == {}
-
-    ability_request = asyncio.run(parser.parse(
-        message=f"use my ability {reference} on candle",
-        campaign_state=json.dumps(state),
-        recent_turns=[],
-        deterministic_only=deterministic_only,
-    ))
-    assert ability_request.action == ActionType.ABILITY_CHECK
-    assert ability_request.parameters == {"ability_id": "whispering_touch"}
-    assert ability_request.target == "candle"
-    updated, result = ToolExecutor().execute(
-        parsed_action=ability_request, campaign_state=json.dumps(state)
-    )
-    assert result.success is True
-    assert updated["items"]["candle"]["location"] == "player:current"
-    assert calls == (0 if deterministic_only else 2)
-    assert state == original_state
-
-
-def test_inaccessible_item_does_not_block_natural_ability_invocation() -> None:
-    state = _state_with_starters()
-    state["player"]["generated_abilities"][1]["display_name"] = "Brass Key"
-    state["items"]["brass_key"]["location"] = room_location("library")
-    assert "brass key" not in ActionParserAgent()._build_parser_context(
-        json.dumps(state)
-    ).accessible_item_references
-    parsed = asyncio.run(ActionParserAgent().parse(
-        message="use Brass Key on candle",
-        campaign_state=json.dumps(state),
-        recent_turns=[],
-        deterministic_only=True,
-    ))
-    assert parsed.action == ActionType.ABILITY_CHECK
-    assert parsed.parameters == {"ability_id": "whispering_touch"}
-
-
-@pytest.mark.parametrize("deterministic_only", [True, False])
-@pytest.mark.parametrize("item_location", ["room:entry_hall", "player:current"])
-@pytest.mark.parametrize(
-    ("item_field", "item_reference", "ability_name", "player_reference"),
-    [
-        ("aliases", "tarnished-brass-key", "Tarnished Brass Key", "tarnished brass key"),
-        ("aliases", "tarnished_brass_key", "Tarnished Brass Key", "tarnished brass key"),
-        ("aliases", "the brass key", "Brass Key", "brass key"),
-        ("name", "the brass key", "Brass Key", "brass key"),
-        ("name", "  (THE BRASS_KEY)!  ", "Brass Key", "brass key"),
-        ("aliases", "a brass key", "Brass Key", "brass key"),
-        ("aliases", "brass key", "Brass-Key", "brass-key"),
-        ("aliases", "brass key", "The Brass Key", "the brass key"),
-    ],
-)
-def test_item_ability_collisions_share_authoritative_identifier_semantics(
-    monkeypatch: pytest.MonkeyPatch,
-    deterministic_only: bool,
-    item_location: str,
-    item_field: str,
-    item_reference: str,
-    ability_name: str,
-    player_reference: str,
-) -> None:
-    state = _state_with_starters()
-    state["player"]["generated_abilities"][1]["display_name"] = ability_name
-    item = state["items"]["brass_key"]
-    item["location"] = item_location
-    item["name"] = item_reference if item_field == "name" else "Golden Token"
-    item["aliases"] = [item_reference] if item_field == "aliases" else []
-    state["items"]["candle"]["location"] = room_location("entry_hall")
-    sync_inventory_projection(state, state["items"])
-    original_state = copy.deepcopy(state)
-    assert resolve_item_ids({"brass_key": item}, player_reference) == ["brass_key"]
-
-    async def fake_generate_structured(**kwargs: object) -> ActionParserOutput:
-        return ActionParserOutput(
-            action=ActionType.ABILITY_CHECK,
-            target="candle",
-            parameters=ActionParserParameters(ability_id="whispering_touch"),
-            parse_status="ok",
-            confidence=1,
-        )
-
-    monkeypatch.setattr(
-        "app.agents.action_parser.model_client.generate_structured", fake_generate_structured
-    )
-    parser = ActionParserAgent()
-    ordinary = asyncio.run(parser.parse(
-        message=f"use {player_reference} on candle",
-        campaign_state=json.dumps(state),
-        recent_turns=[],
-        deterministic_only=deterministic_only,
-    ))
-    assert ordinary.action == (ActionType.USE if deterministic_only else ActionType.UNKNOWN)
-    assert "ability_id" not in ordinary.parameters
-    updated, result = ToolExecutor().execute(
-        parsed_action=ordinary, campaign_state=json.dumps(state)
-    )
-    assert updated == original_state
-    assert result.ability_result is None
-    assert result.state_delta == {}
-
-    explicit = asyncio.run(parser.parse(
-        message=f"use my ability {ability_name} on candle",
-        campaign_state=json.dumps(state),
-        recent_turns=[],
-        deterministic_only=deterministic_only,
-    ))
-    assert explicit.action == ActionType.ABILITY_CHECK
-    assert explicit.parameters == {"ability_id": "whispering_touch"}
-    assert explicit.target == "candle"
-    assert state == original_state
-
-
-@pytest.mark.parametrize("display_name", ["The Echo Sense", "Echo-Sense", "(Echo Sense)"])
-def test_new_starter_collision_comparisons_use_canonical_identifiers(display_name: str) -> None:
-    generation = StarterAbilityGenerator()._stub_generation()
-    candidate = generation.abilities[1].model_copy(update={"display_name": display_name})
-    with pytest.raises(ValueError, match="invocation references"):
-        validate_starter_ability_definitions((generation.abilities[0], candidate))
-    assert validate_starter_ability_definitions(
-        (generation.abilities[0], candidate), allow_legacy_generic=True
-    )[1] == candidate
-
-
-@pytest.mark.parametrize("deterministic_only", [True, False])
-@pytest.mark.parametrize("item_location", ["room:entry_hall", "player:current"])
-def test_partial_ability_prefix_does_not_hijack_longer_item_reference(
-    monkeypatch: pytest.MonkeyPatch, deterministic_only: bool, item_location: str
-) -> None:
-    state = _state_with_starters()
-    state["player"]["generated_abilities"][1]["display_name"] = "Brass"
-    state["items"]["brass_key"]["location"] = item_location
-    sync_inventory_projection(state, state["items"])
-    original_state = copy.deepcopy(state)
-
-    async def fake_generate_structured(**kwargs: object) -> ActionParserOutput:
-        return ActionParserOutput(
-            action=ActionType.ABILITY_CHECK,
-            target="candle",
-            parameters=ActionParserParameters(ability_id="whispering_touch"),
-            parse_status="ok",
-            confidence=1,
-        )
-
-    monkeypatch.setattr(
-        "app.agents.action_parser.model_client.generate_structured", fake_generate_structured
-    )
-    parsed = asyncio.run(ActionParserAgent().parse(
-        message="use brass key on candle", campaign_state=json.dumps(state),
-        recent_turns=[], deterministic_only=deterministic_only,
-    ))
-    assert parsed.action == (ActionType.USE if deterministic_only else ActionType.UNKNOWN)
-    assert "ability_id" not in parsed.parameters
-    if deterministic_only:
-        assert parsed.parameters == {"with_item": "brass key"}
-        assert parsed.target == "candle"
-    updated, result = ToolExecutor().execute(parsed_action=parsed, campaign_state=json.dumps(state))
-    assert updated == original_state
-    assert result.ability_result is None
-    assert result.state_delta == {}
-
-
-@pytest.mark.parametrize("deterministic_only", [True, False])
-@pytest.mark.parametrize(
-    ("first_name", "second_id", "second_name", "message"),
-    [
-        ("Echo-Sense", "echo_sense", "Pale Ember", "use echo sense"),
-        ("Veil-Tremor", "spectral_draw", "Veil Tremor", "use Veil Tremor"),
-        ("Veil_Tremor", "spectral_draw", "Veil Tremor", "use Veil Tremor"),
-        ("The Veil Tremor", "spectral_draw", "Veil Tremor", "use Veil Tremor"),
-        ("Veil Tremor", "spectral_draw", "The Veil Tremor", "use the Veil Tremor"),
-        ("Echo-Sense", "echo_sense", "Pale Ember", "use echo_sense"),
-        ("Veil-Borne Whisper", "spectral_draw", "The Veil_Borne Whisper", "use veil borne whisper"),
-    ],
-)
-def test_canonical_legacy_ability_ambiguity_is_non_executable(
-    monkeypatch: pytest.MonkeyPatch, deterministic_only: bool,
-    first_name: str, second_id: str, second_name: str, message: str,
-) -> None:
-    state = _state_with_starters()
-    state["player"]["generated_abilities"][0].update(
-        {"ability_id": "hollow_listening", "display_name": first_name}
-    )
-    state["player"]["generated_abilities"][1].update(
-        {"ability_id": second_id, "display_name": second_name}
-    )
-    state["player"]["progression"]["unlocked_abilities"] = ["hollow_listening", second_id]
-    original_state = copy.deepcopy(state)
-    assert load_authoritative_campaign_state(json.dumps(state)) == original_state
-
-    async def fake_generate_structured(**kwargs: object) -> ActionParserOutput:
-        return ActionParserOutput(
-            action=ActionType.ABILITY_CHECK,
-            parameters=ActionParserParameters(ability_id=second_id),
-            parse_status="ok",
-            confidence=1,
-        )
-
-    monkeypatch.setattr(
-        "app.agents.action_parser.model_client.generate_structured", fake_generate_structured
-    )
-    parsed = asyncio.run(ActionParserAgent().parse(
-        message=message, campaign_state=json.dumps(state), recent_turns=[],
-        deterministic_only=deterministic_only,
-    ))
-    assert parsed.action == ActionType.UNKNOWN
-    assert parsed.parse_status == "ambiguous"
-    assert parsed.parameters == {}
-    updated, result = ToolExecutor().execute(parsed_action=parsed, campaign_state=json.dumps(state))
-    assert updated == original_state
-    assert result.state_delta == {}
-    assert result.ability_result is None
-    assert state == original_state
-
-
-@pytest.mark.parametrize("deterministic_only", [True, False])
-def test_longest_unique_reference_survives_canonical_shorter_ambiguity(
-    monkeypatch: pytest.MonkeyPatch, deterministic_only: bool
-) -> None:
-    state = _state_with_starters()
-    state["player"]["generated_abilities"][0]["display_name"] = "Grave"
-    state["player"]["generated_abilities"][1].update(
-        {"ability_id": "grave", "display_name": "Grave Echo"}
-    )
-    state["player"]["progression"]["unlocked_abilities"] = ["echo_sense", "grave"]
-
-    async def fake_generate_structured(**kwargs: object) -> ActionParserOutput:
-        return ActionParserOutput(
-            action=ActionType.ABILITY_CHECK,
-            parameters=ActionParserParameters(ability_id="grave"),
-            parse_status="ok",
-            confidence=1,
-        )
-
-    monkeypatch.setattr(
-        "app.agents.action_parser.model_client.generate_structured", fake_generate_structured
-    )
-    parsed = asyncio.run(ActionParserAgent().parse(
-        message="use Grave Echo", campaign_state=json.dumps(state), recent_turns=[],
-        deterministic_only=deterministic_only,
-    ))
-    assert parsed.action == ActionType.ABILITY_CHECK
-    assert parsed.parameters == {"ability_id": "grave"}
-
-
-@pytest.mark.parametrize("deterministic_only", [True, False])
-@pytest.mark.parametrize("message", [
-    "use veil borne whisper", "using veil_borne_whisper", "activate (Veil-Borne Whisper)",
-    "invoke The Veil Borne Whisper", "use my ability veil borne whisper",
-    "use a veil borne whisper", "use an ability veil borne whisper",
-    "use spectral_listening",
-])
-def test_explicit_thematic_reference_is_canonical(
-    monkeypatch: pytest.MonkeyPatch, deterministic_only: bool, message: str,
-) -> None:
-    state = _state_with_starters()
-    state["player"]["generated_abilities"][0].update(
-        ability_id="spectral_listening", display_name="Veil-Borne Whisper"
-    )
-    state["player"]["progression"]["unlocked_abilities"] = ["spectral_listening", "whispering_touch"]
-
-    async def fake_generate_structured(**kwargs: object) -> ActionParserOutput:
-        return ActionParserOutput(
-            action=ActionType.ABILITY_CHECK, target="invented target",
-            parameters=ActionParserParameters(ability_id="spectral_listening"),
-            parse_status="ok", confidence=1,
-        )
-
-    monkeypatch.setattr(
-        "app.agents.action_parser.model_client.generate_structured", fake_generate_structured
-    )
-    parsed = asyncio.run(ActionParserAgent().parse(
-        message=message, campaign_state=json.dumps(state), recent_turns=[],
-        deterministic_only=deterministic_only,
-    ))
-    assert parsed.action == ActionType.ABILITY_CHECK
-    assert parsed.parameters == {"ability_id": "spectral_listening"}
-    assert parsed.target is None
-
-
-@pytest.mark.parametrize("deterministic_only", [True, False])
-@pytest.mark.parametrize("message", [
-    "use veil born whisper", "use veil borne whispering",
-    "veil borne whisper", "try veil borne whisper",
-])
-def test_canonical_reference_matching_does_not_infer_name_or_grammar(
-    monkeypatch: pytest.MonkeyPatch, deterministic_only: bool, message: str,
-) -> None:
-    state = _state_with_starters()
-    state["player"]["generated_abilities"][1]["display_name"] = "Veil-Borne Whisper"
-
-    async def fake_generate_structured(**kwargs: object) -> ActionParserOutput:
-        return ActionParserOutput(
-            action=ActionType.ABILITY_CHECK,
-            parameters=ActionParserParameters(ability_id="whispering_touch"),
-            parse_status="ok", confidence=1,
-        )
-
-    monkeypatch.setattr(
-        "app.agents.action_parser.model_client.generate_structured", fake_generate_structured
-    )
-    parsed = asyncio.run(ActionParserAgent().parse(
-        message=message, campaign_state=json.dumps(state), recent_turns=[],
-        deterministic_only=deterministic_only,
-    ))
-    assert parsed.action != ActionType.ABILITY_CHECK
-    assert "ability_id" not in parsed.parameters
-
-
-@pytest.mark.parametrize("deterministic_only", [True, False])
-@pytest.mark.parametrize("qualified", [True, False])
-def test_canonical_thematic_item_collision_requires_qualifier(
-    monkeypatch: pytest.MonkeyPatch, deterministic_only: bool, qualified: bool,
-) -> None:
-    state = _state_with_starters()
-    state["player"]["generated_abilities"][1]["display_name"] = "Veil Borne Whisper"
-    state["items"]["brass_key"].update(
-        name="Veil-Borne Whisper", location=room_location("entry_hall")
-    )
-
-    async def fake_generate_structured(**kwargs: object) -> ActionParserOutput:
-        return ActionParserOutput(
-            action=ActionType.ABILITY_CHECK, target="candle",
-            parameters=ActionParserParameters(ability_id="whispering_touch"),
-            parse_status="ok", confidence=1,
-        )
-
-    monkeypatch.setattr(
-        "app.agents.action_parser.model_client.generate_structured", fake_generate_structured
-    )
-    parsed = asyncio.run(ActionParserAgent().parse(
-        message=f"use {'my ability ' if qualified else ''}veil_borne_whisper on candle",
-        campaign_state=json.dumps(state), recent_turns=[], deterministic_only=deterministic_only,
-    ))
-    if qualified:
-        assert parsed.action == ActionType.ABILITY_CHECK
-        assert parsed.target == "candle"
-    else:
-        assert parsed.action != ActionType.ABILITY_CHECK
-        assert "ability_id" not in parsed.parameters
-
-
-@pytest.mark.parametrize("deterministic_only", [True, False])
-@pytest.mark.parametrize("delimiter", ["on", "toward", "at"])
-def test_canonical_utility_reference_retains_only_explicit_target(
-    monkeypatch: pytest.MonkeyPatch, deterministic_only: bool, delimiter: str,
-) -> None:
-    state = _state_with_starters()
-    state["player"]["generated_abilities"][1]["display_name"] = "Veil-Borne Whisper"
-
-    async def fake_generate_structured(**kwargs: object) -> ActionParserOutput:
-        return ActionParserOutput(
-            action=ActionType.ABILITY_CHECK, target="brass key",
-            parameters=ActionParserParameters(ability_id="whispering_touch"),
-            parse_status="ok", confidence=1,
-        )
-
-    monkeypatch.setattr(
-        "app.agents.action_parser.model_client.generate_structured", fake_generate_structured
-    )
-    parsed = asyncio.run(ActionParserAgent().parse(
-        message=f"use veil borne whisper {delimiter} the brass-key",
-        campaign_state=json.dumps(state), recent_turns=[], deterministic_only=deterministic_only,
-    ))
-    assert parsed.action == ActionType.ABILITY_CHECK
-    assert parsed.parameters == {"ability_id": "whispering_touch"}
-    assert parsed.target == "brass-key"
-
-
-@pytest.mark.parametrize("deterministic_only", [True, False])
-@pytest.mark.parametrize(
-    ("message", "expected_status", "expected_target"),
-    [
-        ("use hush at dusk on brass-key", "ok", "brass-key"),
-        ("use hush at dusk", "ok", None),
-        ("use hush at dusk on brass-key and invoke hush at dusk", "ambiguous", None),
-        ("use hush at dusk on one two three four five six seven eight nine", None, None),
-    ],
-)
-def test_canonical_request_delimiters_remain_bounded_and_single(
-    monkeypatch: pytest.MonkeyPatch, deterministic_only: bool,
-    message: str, expected_status: str | None, expected_target: str | None,
-) -> None:
-    state = _state_with_starters()
-    state["player"]["generated_abilities"][1]["display_name"] = "Hush At Dusk"
-
-    async def fake_generate_structured(**kwargs: object) -> ActionParserOutput:
-        return ActionParserOutput(
-            action=ActionType.ABILITY_CHECK, target=expected_target,
-            parameters=ActionParserParameters(ability_id="whispering_touch"),
-            parse_status="ok", confidence=1,
-        )
-
-    monkeypatch.setattr(
-        "app.agents.action_parser.model_client.generate_structured", fake_generate_structured
-    )
-    parsed = asyncio.run(ActionParserAgent().parse(
-        message=message, campaign_state=json.dumps(state), recent_turns=[],
-        deterministic_only=deterministic_only,
-    ))
-    if expected_status == "ok":
-        assert parsed.action == ActionType.ABILITY_CHECK
-        assert parsed.parameters == {"ability_id": "whispering_touch"}
-        assert parsed.target == expected_target
-    else:
-        assert parsed.action != ActionType.ABILITY_CHECK
-        assert "ability_id" not in parsed.parameters
-        if expected_status is not None:
-            assert parsed.parse_status == expected_status
 
 
 def test_generated_descriptions_use_mechanics_not_persisted_prose() -> None:

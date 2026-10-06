@@ -45,41 +45,38 @@ class MemoryReflectionAgent(BaseAgent):
         *,
         payload: MemoryReflectionInput,
         model: str | None = None,
-        ai_enabled: bool,
-        provider_model_enabled: bool = False,
     ) -> MemoryReflectionOutput:
-        if provider_model_enabled:
-            messages = self._build_messages(payload)
-            result = await model_client.generate_text(
-                messages=messages,
-                model=model or ModelPolicy.memory_reflection_model(),
-                max_output_tokens=TokenBudget.memory_reflection_max_output_tokens(),
-                reasoning_effort=ModelPolicy.memory_reflection_reasoning_effort(),
-                retry_reasoning_effort=ModelPolicy.memory_reflection_reasoning_effort(),
-                timeout=15,
-                return_usage=True,
-            )
-            usage = result.usage if isinstance(result, ModelCallResult) else None
-            raw_facts = result.output if isinstance(result, ModelCallResult) else result
-            facts = self._parse_reflection_facts(raw_facts or "")
-            if facts:
-                if usage is not None:
-                    return MemoryReflectionOutput(
-                        memories_to_store=[
-                            MemoryCandidate(text=fact, importance=1.0, memory_type="reflection") for fact in facts
-                        ],
-                        input_tokens=usage.input_tokens,
-                        cached_input_tokens=usage.cached_input_tokens,
-                        cache_write_input_tokens=usage.cache_write_input_tokens,
-                        output_tokens=usage.output_tokens,
-                        reasoning_output_tokens=usage.reasoning_output_tokens,
-                        total_tokens=usage.total_tokens,
-                    )
+        messages = self._build_messages(payload)
+        result = await model_client.generate_text(
+            messages=messages,
+            model=model or ModelPolicy.memory_reflection_model(),
+            max_output_tokens=TokenBudget.memory_reflection_max_output_tokens(),
+            reasoning_effort=ModelPolicy.memory_reflection_reasoning_effort(),
+            retry_reasoning_effort=ModelPolicy.memory_reflection_reasoning_effort(),
+            timeout=15,
+            return_usage=True,
+        )
+        usage = result.usage if isinstance(result, ModelCallResult) else None
+        raw_facts = result.output if isinstance(result, ModelCallResult) else result
+        facts = self._parse_reflection_facts(raw_facts or "")
+        if facts:
+            if usage is not None:
                 return MemoryReflectionOutput(
                     memories_to_store=[
                         MemoryCandidate(text=fact, importance=1.0, memory_type="reflection") for fact in facts
-                    ]
+                    ],
+                    input_tokens=usage.input_tokens,
+                    cached_input_tokens=usage.cached_input_tokens,
+                    cache_write_input_tokens=usage.cache_write_input_tokens,
+                    output_tokens=usage.output_tokens,
+                    reasoning_output_tokens=usage.reasoning_output_tokens,
+                    total_tokens=usage.total_tokens,
                 )
+            return MemoryReflectionOutput(
+                memories_to_store=[
+                    MemoryCandidate(text=fact, importance=1.0, memory_type="reflection") for fact in facts
+                ]
+            )
 
         fallback_facts = self._fallback_reflection_facts(
             campaign_state=payload.campaign_state,

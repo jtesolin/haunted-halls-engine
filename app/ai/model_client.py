@@ -84,9 +84,7 @@ class ModelClient:
         client = self._get_client()
 
         if client is None:
-            content = self._fake_ai_narration(messages)
-            return ModelCallResult(output=content, usage=None) if return_usage else content
-        assert client is not None
+            raise RuntimeError("Text generation requires an OpenAI client.")
 
         request_model = model
         request_max_output_tokens = max_output_tokens
@@ -120,7 +118,8 @@ class ModelClient:
             content = self._extract_response_text(response)
             usage = self._extract_usage(response)
 
-        content = content or self._fake_ai_narration(messages)
+        if not content:
+            raise RuntimeError("OpenAI returned no text output.")
         result = ModelCallResult(output=content, usage=usage)
         return result if return_usage else content
 
@@ -301,12 +300,5 @@ class ModelClient:
                     chunks.append(text)
 
         return "\n".join(chunks).strip()
-
-    def _fake_ai_narration(self, messages: list[ChatCompletionMessageParam]) -> str:
-        for turn in reversed(messages):
-            if turn.get("role") == "user" and isinstance(turn.get("content"), str):
-                return f"AI narrator replies: {turn.get('content', '')}"
-        return "AI narrator replies:"
-
 
 model_client = ModelClient()

@@ -1,11 +1,13 @@
 import asyncio
 from typing import Any
 
+from app.agents import memory_reflection as memory_reflection_module
 from app.agents.action_parser import ActionParserAgent
 from app.agents.director import DirectorAgent, DirectorProposalResponse
 from app.agents.memory_reflection import MemoryReflectionAgent, MemoryReflectionInput
 from app.agents.memory_summarizer import MemorySummarizerAgent, MemorySummarizerInput
 from app.agents.narrator import NarratorAgent, NarratorAgentInput
+from app.ai.model_client import ModelClient
 from app.game.campaign_state import build_fresh_campaign_state
 from app.guardrails.model_policy import ModelPolicy
 from app.schemas.chat import (
@@ -87,8 +89,6 @@ def test_memory_reflection_agent_passes_policy_reasoning_effort(monkeypatch: Any
     asyncio.run(
         MemoryReflectionAgent().reflect(
             payload=payload,
-            ai_enabled=True,
-            provider_model_enabled=True,
         )
     )
 
@@ -147,8 +147,6 @@ def test_memory_summarizer_agent_passes_policy_reasoning_effort(monkeypatch: Any
     asyncio.run(
         MemorySummarizerAgent().summarize(
             payload=payload,
-            ai_enabled=True,
-            provider_model_enabled=True,
         )
     )
 
@@ -225,8 +223,6 @@ class _FakeClient:
 
 
 def test_memory_reflection_retry_uses_policy_reasoning_effort(monkeypatch: Any) -> None:
-    from app.ai.model_client import model_client
-
     incomplete_resp = _IncompleteResponseNoText()
     assert incomplete_resp.status == "incomplete"
     assert incomplete_resp.incomplete_details.reason == "max_output_tokens"
@@ -234,7 +230,13 @@ def test_memory_reflection_retry_uses_policy_reasoning_effort(monkeypatch: Any) 
     successful_resp = _ResponseWithText('["The player found a rusty key."]')
     fake_client = _FakeClient([incomplete_resp, successful_resp])
 
-    monkeypatch.setattr(model_client, "_get_client", lambda: fake_client)
+    isolated_model_client = ModelClient()
+    monkeypatch.setattr(isolated_model_client, "_get_client", lambda: fake_client)
+    monkeypatch.setattr(
+        memory_reflection_module,
+        "model_client",
+        isolated_model_client,
+    )
 
     payload = MemoryReflectionInput(
         recent_turns=[],
@@ -244,8 +246,6 @@ def test_memory_reflection_retry_uses_policy_reasoning_effort(monkeypatch: Any) 
     output = asyncio.run(
         MemoryReflectionAgent().reflect(
             payload=payload,
-            ai_enabled=True,
-            provider_model_enabled=True,
         )
     )
 
@@ -265,4 +265,3 @@ def test_memory_reflection_retry_uses_policy_reasoning_effort(monkeypatch: Any) 
 
     assert len(output.memories_to_store) == 1
     assert output.memories_to_store[0].text == "The player found a rusty key."
-

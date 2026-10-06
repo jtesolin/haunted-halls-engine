@@ -1,8 +1,12 @@
-from app.main import app
-from app.core.config import settings
-from app.api.dependencies import INTERNAL_USER_ID_HEADER_NAME
-from app.schemas.internal_auth import CANONICAL_GOOGLE_ISSUER
+import pytest
 from fastapi.testclient import TestClient
+
+from app.api.dependencies import INTERNAL_USER_ID_HEADER_NAME
+from app.core.config import settings
+from app.main import app
+from app.schemas.internal_auth import CANONICAL_GOOGLE_ISSUER
+
+pytestmark = pytest.mark.usefixtures("fake_runtime_model_provider")
 
 
 def _auth_headers(token: str, user_id: str | None = None) -> dict[str, str]:
@@ -87,8 +91,6 @@ def test_protected_endpoint_rejects_incorrect_token() -> None:
 
 
 def test_protected_endpoint_accepts_the_configured_token() -> None:
-    settings.AI_ENABLED = False
-    settings.OPENAI_API_KEY = None
     client = TestClient(app)
     user_id = _resolve_internal_user_id(client, "service-auth-accept")
 

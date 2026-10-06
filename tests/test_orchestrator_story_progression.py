@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 
 import pytest
@@ -8,9 +9,7 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from app.agents.director import DirectorProviderError
-from app.agents.action_parser import ActionParserAgent
 from app.agents.narrator import NarratorAgentInput
-from app.agents.starter_abilities import StarterAbilityGenerator
 from app.api.routes import chat as chat_routes
 from app.core.config import settings
 from app.db.session import session
@@ -20,42 +19,36 @@ from app.game.world import DEFAULT_WORLD
 from app.main import app
 from app.orchestration import orchestrator as orchestrator_module
 from app.orchestration.orchestrator import ChatOrchestrator
-from app.schemas.chat import ActionType, ChatRequest, ParsedAction, ToolExecutionResult
+from app.schemas.chat import (
+    ActionParserOutput,
+    ActionParserParameters,
+    ActionType,
+    ChatRequest,
+    ParsedAction,
+    ToolExecutionResult,
+)
 from app.schemas.character_progression import ProgressionTrackId
 from app.schemas.director import DirectorInput, NoActionProposal
 from app.schemas.generated_abilities import AbilityObjectEffectOperation
 from app.schemas.story import ItemAcquiredSignal, NpcSpokenToSignal, StorySignal
+from tests.factories import starter_ability_generation
+
+pytestmark = pytest.mark.usefixtures("fake_runtime_model_provider")
 
 
 @pytest.fixture(autouse=True)
 def story_progression_isolation(monkeypatch):
-    original_ai_enabled = settings.AI_ENABLED
-    original_openai_key = settings.OPENAI_API_KEY
     original_orchestrator = orchestrator_module.orchestrator
     original_chat_orchestrator = chat_routes.orchestrator
 
-    settings.AI_ENABLED = True
-    settings.OPENAI_API_KEY = "test-key"
     orchestrator_module.orchestrator = ChatOrchestrator()
     chat_routes.orchestrator = orchestrator_module.orchestrator
 
     try:
         yield
     finally:
-        settings.AI_ENABLED = original_ai_enabled
-        settings.OPENAI_API_KEY = original_openai_key
         orchestrator_module.orchestrator = original_orchestrator
         chat_routes.orchestrator = original_chat_orchestrator
-
-
-def _enable_provider(monkeypatch) -> None:
-    monkeypatch.setattr(settings, "AI_ENABLED", True)
-    monkeypatch.setattr(settings, "OPENAI_API_KEY", "test-key")
-
-
-def _disable_provider(monkeypatch) -> None:
-    monkeypatch.setattr(settings, "AI_ENABLED", False)
-    monkeypatch.setattr(settings, "OPENAI_API_KEY", None)
 
 
 def _resolve_user(client: TestClient, provider_subject: str) -> str:
@@ -137,9 +130,112 @@ async def _stub_director_response(*, director_input, model=None):
     return _DirectorResult()
 
 
-def test_story_progression_move_into_library_advances_objective_1(monkeypatch) -> None:
-    _enable_provider(monkeypatch)
+def test_recall_object_on_heavy_statue_reaches_gameplay_and_safe_narration(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state = build_fresh_campaign_state()
+    generation = starter_ability_generation()
+    generation.abilities[1].ability_id = "recall_object"
+    generation.abilities[1].display_name = "Recall Object"
+    state["player"]["generated_abilities"] = [
+        ability.model_dump(mode="json") for ability in generation.abilities
+    ]
+    state["items"]["heavy_statue"]["portable"] = False
+    ensure_character_progression_state(state)
+    for ability in generation.abilities:
+        assert unlock_ability(state, ability.ability_id).success
+    initial_state = copy.deepcopy(state)
 
+    captured_actions: list[ParsedAction] = []
+    captured_tool_results: list[ToolExecutionResult] = []
+    captured_narrator_requests: list[dict[str, object]] = []
+    original_execute = orchestrator_module.ToolExecutor.execute
+
+    async def fake_action_parser_provider(*, response_model, **kwargs):
+        assert response_model is ActionParserOutput
+        return ActionParserOutput(
+            action=ActionType.ABILITY_CHECK,
+            target="statue",
+            parameters=ActionParserParameters(ability_id="recall_object"),
+            confidence=1,
+            parse_status="ok",
+        )
+
+    def capture_tool_execution(self, *, parsed_action, campaign_state):
+        captured_actions.append(parsed_action)
+        updated_state, result = original_execute(
+            self,
+            parsed_action=parsed_action,
+            campaign_state=campaign_state,
+        )
+        captured_tool_results.append(result)
+        return updated_state, result
+
+    async def fake_narrator_provider(*, messages, **kwargs):
+        captured_narrator_requests.extend(messages)
+        return "The Heavy Statue remains immovable."
+
+    monkeypatch.setattr(
+        "app.agents.action_parser.model_client.generate_structured",
+        fake_action_parser_provider,
+    )
+    monkeypatch.setattr(
+        orchestrator_module.ToolExecutor,
+        "execute",
+        capture_tool_execution,
+    )
+    monkeypatch.setattr(
+        "app.agents.narrator.model_client.generate_text",
+        fake_narrator_provider,
+    )
+    monkeypatch.setattr(
+        orchestrator_module.orchestrator.director_agent,
+        "propose",
+        _stub_director_response,
+    )
+
+    client = TestClient(app)
+    user_id = _resolve_user(client, "recall-object-heavy-statue")
+    campaign_id = _create_campaign(
+        user_id=user_id,
+        campaign_id="campaign_recall_object_heavy_statue",
+        state=state,
+    )
+    response = asyncio.run(
+        orchestrator_module.orchestrator.handle_chat(
+            ChatRequest(
+                message="recall object on the statue",
+                campaign_id=campaign_id,
+            ),
+            owner_user_id=user_id,
+        )
+    )
+
+    assert response.campaign_id == campaign_id
+    assert captured_actions[0].action == ActionType.ABILITY_CHECK
+    assert captured_actions[0].parameters == {"ability_id": "recall_object"}
+    assert captured_actions[0].target == "statue"
+    tool_result = captured_tool_results[0]
+    assert tool_result.success is False
+    assert tool_result.state_delta == {}
+    assert tool_result.ability_result is not None
+    assert tool_result.ability_result.error_code == "target_not_portable"
+    narrator_request_text = "\n".join(
+        str(message.get("content", "")) for message in captured_narrator_requests
+    )
+    assert "The attempt produces no discernible effect." in narrator_request_text
+    assert "target_not_portable" not in narrator_request_text
+    assert "The Heavy Statue remains immovable." == response.reply
+
+    with session() as db:
+        persisted_state = _load_campaign_state(db.get_campaign(campaign_id))
+    assert persisted_state == initial_state
+    assert persisted_state["items"]["heavy_statue"]["location"] == "room:entry_hall"
+    assert persisted_state["items"]["heavy_statue"]["portable"] is False
+    assert persisted_state["player"]["inventory"] == initial_state["player"]["inventory"]
+
+
+def test_story_progression_move_into_library_advances_objective_1(monkeypatch) -> None:
     async def fake_parse(**kwargs):
         return ParsedAction(
             raw_text="go to the library",
@@ -198,8 +294,6 @@ def test_story_progression_move_into_library_advances_objective_1(monkeypatch) -
 
 
 def test_failed_move_does_not_progress(monkeypatch) -> None:
-    _enable_provider(monkeypatch)
-
     async def fake_parse(**kwargs):
         return ParsedAction(
             raw_text="go to the library",
@@ -239,8 +333,6 @@ def test_failed_move_does_not_progress(monkeypatch) -> None:
 
 
 def test_talk_to_library_ghost_before_objective_1_cannot_skip_ordering(monkeypatch) -> None:
-    _enable_provider(monkeypatch)
-
     async def fake_parse(**kwargs):
         return ParsedAction(raw_text="talk to the ghost", action=ActionType.TALK, target="library_ghost", confidence=1.0, parse_status="ok")
 
@@ -275,8 +367,6 @@ def test_talk_to_library_ghost_before_objective_1_cannot_skip_ordering(monkeypat
 
 
 def test_successful_talk_after_objective_1_advances_objective_2(monkeypatch) -> None:
-    _enable_provider(monkeypatch)
-
     async def fake_parse(**kwargs):
         return ParsedAction(raw_text="talk to the ghost", action=ActionType.TALK, target="library_ghost", confidence=1.0, parse_status="ok")
 
@@ -319,8 +409,6 @@ def test_successful_talk_after_objective_1_advances_objective_2(monkeypatch) -> 
     ],
 )
 def test_failed_talk_variants_do_not_progress(monkeypatch, error_code: str, summary: str) -> None:
-    _enable_provider(monkeypatch)
-
     async def fake_parse(**kwargs):
         return ParsedAction(raw_text="talk to the ghost", action=ActionType.TALK, target="library_ghost", confidence=1.0, parse_status="ok")
 
@@ -354,7 +442,6 @@ def test_failed_talk_variants_do_not_progress(monkeypatch, error_code: str, summ
 
 
 def test_take_after_objectives_1_and_2_completes_quest(monkeypatch) -> None:
-    _enable_provider(monkeypatch)
     captured_director_inputs = []
 
     async def fake_parse(**kwargs):
@@ -412,10 +499,9 @@ def test_take_after_objectives_1_and_2_completes_quest(monkeypatch) -> None:
 def test_generated_retrieve_completes_quest_and_rewards_once_through_real_executor(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _enable_provider(monkeypatch)
     state = _story_state(objective_1="completed", objective_2="completed", objective_3="active")
     state["player"]["location"] = "library"
-    generation = StarterAbilityGenerator()._stub_generation()
+    generation = starter_ability_generation()
     state["player"]["generated_abilities"] = [
         ability.model_dump(mode="json") for ability in generation.abilities
     ]
@@ -425,16 +511,19 @@ def test_generated_retrieve_completes_quest_and_rewards_once_through_real_execut
     captured_tools: list[ToolExecutionResult] = []
     captured_director_inputs: list[DirectorInput] = []
     captured_narrator_payloads: list[NarratorAgentInput] = []
-    real_parser = ActionParserAgent()
     original_derive = orchestrator_module.derive_story_signal
 
     async def deterministic_parse(
         *, message: str, campaign_state: str, recent_turns: list[dict[str, str]],
         **kwargs: object,
     ) -> ParsedAction:
-        return await real_parser.parse(
-            message=message, campaign_state=campaign_state,
-            recent_turns=recent_turns, deterministic_only=True,
+        return ParsedAction(
+            raw_text=message,
+            action=ActionType.ABILITY_CHECK,
+            target="old book",
+            parameters={"ability_id": "whispering_touch"},
+            confidence=1,
+            parse_status="ok",
         )
 
     def capture_signal(tool_result: ToolExecutionResult) -> StorySignal | None:
@@ -518,7 +607,6 @@ def test_generated_retrieve_completes_quest_and_rewards_once_through_real_execut
 def test_final_objective_completion_forwards_authoritative_reward_to_narrator(monkeypatch) -> None:
     """Prove the orchestration boundary itself forwards the narrow authoritative
     8F1 reward earned this turn to the Narrator, and nothing broader."""
-    _enable_provider(monkeypatch)
     captured_narrator_payloads: list[NarratorAgentInput] = []
 
     async def fake_parse(**kwargs):
@@ -572,7 +660,6 @@ def test_idempotent_replay_does_not_regrant_or_renarrate_final_objective_reward(
     through the real orchestration/idempotency path, rather than a generic
     replay scenario, so it proves the reward-specific acceptance
     requirement directly."""
-    _enable_provider(monkeypatch)
     captured_narrator_payloads: list[NarratorAgentInput] = []
 
     async def fake_parse(**kwargs):
@@ -695,8 +782,6 @@ def test_idempotent_replay_does_not_regrant_or_renarrate_final_objective_reward(
 
 
 def test_malformed_reward_claims_roll_back_quest_completion(monkeypatch) -> None:
-    _enable_provider(monkeypatch)
-
     async def fake_parse(**kwargs):
         return ParsedAction(
             raw_text="take the old book",
@@ -770,8 +855,6 @@ def test_malformed_reward_claims_roll_back_quest_completion(monkeypatch) -> None
     ],
 )
 def test_failed_take_or_mentioning_old_book_does_not_progress(monkeypatch, message: str, action: ActionType, tool_result: ToolExecutionResult) -> None:
-    _enable_provider(monkeypatch)
-
     async def fake_parse(**kwargs):
         return ParsedAction(raw_text=message, action=action, target="old_book" if "old" in message else None, confidence=1.0, parse_status="ok")
 
@@ -797,8 +880,6 @@ def test_failed_take_or_mentioning_old_book_does_not_progress(monkeypatch, messa
 
 
 def test_story_progression_occurs_before_director_and_receives_post_story_state(monkeypatch) -> None:
-    _enable_provider(monkeypatch)
-
     async def fake_parse(**kwargs):
         return ParsedAction(raw_text="go to the library", action=ActionType.MOVE, target="library", confidence=0.94, parse_status="ok")
 
@@ -852,7 +933,6 @@ def test_story_progression_occurs_before_director_and_receives_post_story_state(
 def test_director_input_contains_same_turn_post_story_progression_with_real_tool_executor(
     monkeypatch,
 ) -> None:
-    _enable_provider(monkeypatch)
     captured_director_inputs = []
 
     async def fake_parse(**kwargs):
@@ -910,9 +990,7 @@ def test_director_input_contains_same_turn_post_story_progression_with_real_tool
         assert objectives["speak_to_library_ghost"] == "active"
 
 
-def test_provider_disabled_mode_still_performs_story_progression(monkeypatch) -> None:
-    _disable_provider(monkeypatch)
-
+def test_story_progression_runs_with_explicit_model_agent_doubles(monkeypatch) -> None:
     async def fake_parse(**kwargs):
         return ParsedAction(raw_text="go to the library", action=ActionType.MOVE, target="library", confidence=0.94, parse_status="ok")
 
@@ -947,7 +1025,6 @@ def test_provider_disabled_mode_still_performs_story_progression(monkeypatch) ->
 
 
 def test_talk_with_empty_state_delta_persists_story_progress_and_reloads_on_later_turn(monkeypatch) -> None:
-    _enable_provider(monkeypatch)
     seen_states = []
 
     async def fake_parse(**kwargs):
@@ -1007,7 +1084,6 @@ def test_talk_with_empty_state_delta_persists_story_progress_and_reloads_on_late
 
 
 def test_non_advancing_signal_does_not_write_a_story_only_state_update(monkeypatch) -> None:
-    _enable_provider(monkeypatch)
     derived_signals = []
 
     async def fake_parse(**kwargs):
@@ -1065,8 +1141,6 @@ def test_non_advancing_signal_does_not_write_a_story_only_state_update(monkeypat
 
 
 def test_completed_idempotent_replay_does_not_call_story_progression_again(monkeypatch) -> None:
-    _disable_provider(monkeypatch)
-
     async def fake_parse(**kwargs):
         return ParsedAction(raw_text="talk to the ghost", action=ActionType.TALK, target="library_ghost", confidence=1.0, parse_status="ok")
 
@@ -1127,8 +1201,6 @@ def test_completed_idempotent_replay_does_not_call_story_progression_again(monke
 
 
 def test_director_provider_failure_rolls_story_progression_back_with_transaction(monkeypatch) -> None:
-    _enable_provider(monkeypatch)
-
     async def fake_parse(**kwargs):
         return ParsedAction(raw_text="talk to the ghost", action=ActionType.TALK, target="library_ghost", confidence=1.0, parse_status="ok")
 
@@ -1181,8 +1253,6 @@ def test_director_provider_failure_rolls_back_final_objective_and_reward_with_tr
     the final quest objective; a subsequent Director/provider failure must
     roll the story completion and the reward back together at the DB
     transaction boundary, not just within domain-level copying."""
-    _enable_provider(monkeypatch)
-
     async def fake_parse(**kwargs):
         return ParsedAction(
             raw_text="take the old book",
@@ -1235,8 +1305,6 @@ def test_director_provider_failure_rolls_back_final_objective_and_reward_with_tr
 
 
 def test_real_tool_executor_executes_full_library_whisper_sequence(monkeypatch) -> None:
-    _disable_provider(monkeypatch)
-
     async def fake_parse(message: str, **kwargs):
         lowered = message.lower()
         if "north" in lowered:

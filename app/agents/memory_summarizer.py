@@ -41,34 +41,31 @@ class MemorySummarizerAgent(BaseAgent):
         *,
         payload: MemorySummarizerInput,
         model: str | None = None,
-        ai_enabled: bool,
-        provider_model_enabled: bool = False,
     ) -> MemorySummarizerOutput:
-        if provider_model_enabled:
-            messages = self._build_messages(payload)
-            result = await model_client.generate_text(
-                messages=messages,
-                model=model or ModelPolicy.summarizer_model(),
-                max_output_tokens=TokenBudget.summarizer_max_output_tokens(),
-                reasoning_effort=ModelPolicy.summarizer_reasoning_effort(),
-                timeout=15,
-                return_usage=True,
-            )
-            usage = result.usage if isinstance(result, ModelCallResult) else None
-            summary_text = result.output if isinstance(result, ModelCallResult) else result
-            summary = (summary_text or "").strip()
-            if summary:
-                if usage is not None:
-                    return MemorySummarizerOutput(
-                        summary_text=summary,
-                        input_tokens=usage.input_tokens,
-                        cached_input_tokens=usage.cached_input_tokens,
-                        cache_write_input_tokens=usage.cache_write_input_tokens,
-                        output_tokens=usage.output_tokens,
-                        reasoning_output_tokens=usage.reasoning_output_tokens,
-                        total_tokens=usage.total_tokens,
-                    )
-                return MemorySummarizerOutput(summary_text=summary)
+        messages = self._build_messages(payload)
+        result = await model_client.generate_text(
+            messages=messages,
+            model=model or ModelPolicy.summarizer_model(),
+            max_output_tokens=TokenBudget.summarizer_max_output_tokens(),
+            reasoning_effort=ModelPolicy.summarizer_reasoning_effort(),
+            timeout=15,
+            return_usage=True,
+        )
+        usage = result.usage if isinstance(result, ModelCallResult) else None
+        summary_text = result.output if isinstance(result, ModelCallResult) else result
+        summary = (summary_text or "").strip()
+        if summary:
+            if usage is not None:
+                return MemorySummarizerOutput(
+                    summary_text=summary,
+                    input_tokens=usage.input_tokens,
+                    cached_input_tokens=usage.cached_input_tokens,
+                    cache_write_input_tokens=usage.cache_write_input_tokens,
+                    output_tokens=usage.output_tokens,
+                    reasoning_output_tokens=usage.reasoning_output_tokens,
+                    total_tokens=usage.total_tokens,
+                )
+            return MemorySummarizerOutput(summary_text=summary)
 
         fallback_summary = self._build_fallback_summary(payload)
         return MemorySummarizerOutput(summary_text=fallback_summary)
