@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 
 import pytest
@@ -18,7 +19,14 @@ from app.game.world import DEFAULT_WORLD
 from app.main import app
 from app.orchestration import orchestrator as orchestrator_module
 from app.orchestration.orchestrator import ChatOrchestrator
-from app.schemas.chat import ActionType, ChatRequest, ParsedAction, ToolExecutionResult
+from app.schemas.chat import (
+    ActionParserOutput,
+    ActionParserParameters,
+    ActionType,
+    ChatRequest,
+    ParsedAction,
+    ToolExecutionResult,
+)
 from app.schemas.character_progression import ProgressionTrackId
 from app.schemas.director import DirectorInput, NoActionProposal
 from app.schemas.generated_abilities import AbilityObjectEffectOperation
@@ -120,6 +128,111 @@ async def _stub_director_response(*, director_input, model=None):
         usage = None
 
     return _DirectorResult()
+
+
+def test_recall_object_on_heavy_statue_reaches_gameplay_and_safe_narration(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state = build_fresh_campaign_state()
+    generation = starter_ability_generation()
+    generation.abilities[1].ability_id = "recall_object"
+    generation.abilities[1].display_name = "Recall Object"
+    state["player"]["generated_abilities"] = [
+        ability.model_dump(mode="json") for ability in generation.abilities
+    ]
+    state["items"]["heavy_statue"]["portable"] = False
+    ensure_character_progression_state(state)
+    for ability in generation.abilities:
+        assert unlock_ability(state, ability.ability_id).success
+    initial_state = copy.deepcopy(state)
+
+    captured_actions: list[ParsedAction] = []
+    captured_tool_results: list[ToolExecutionResult] = []
+    captured_narrator_requests: list[dict[str, object]] = []
+    original_execute = orchestrator_module.ToolExecutor.execute
+
+    async def fake_action_parser_provider(*, response_model, **kwargs):
+        assert response_model is ActionParserOutput
+        return ActionParserOutput(
+            action=ActionType.ABILITY_CHECK,
+            target="statue",
+            parameters=ActionParserParameters(ability_id="recall_object"),
+            confidence=1,
+            parse_status="ok",
+        )
+
+    def capture_tool_execution(self, *, parsed_action, campaign_state):
+        captured_actions.append(parsed_action)
+        updated_state, result = original_execute(
+            self,
+            parsed_action=parsed_action,
+            campaign_state=campaign_state,
+        )
+        captured_tool_results.append(result)
+        return updated_state, result
+
+    async def fake_narrator_provider(*, messages, **kwargs):
+        captured_narrator_requests.extend(messages)
+        return "The Heavy Statue remains immovable."
+
+    monkeypatch.setattr(
+        "app.agents.action_parser.model_client.generate_structured",
+        fake_action_parser_provider,
+    )
+    monkeypatch.setattr(
+        orchestrator_module.ToolExecutor,
+        "execute",
+        capture_tool_execution,
+    )
+    monkeypatch.setattr(
+        "app.agents.narrator.model_client.generate_text",
+        fake_narrator_provider,
+    )
+    monkeypatch.setattr(
+        orchestrator_module.orchestrator.director_agent,
+        "propose",
+        _stub_director_response,
+    )
+
+    client = TestClient(app)
+    user_id = _resolve_user(client, "recall-object-heavy-statue")
+    campaign_id = _create_campaign(
+        user_id=user_id,
+        campaign_id="campaign_recall_object_heavy_statue",
+        state=state,
+    )
+    response = asyncio.run(
+        orchestrator_module.orchestrator.handle_chat(
+            ChatRequest(
+                message="recall object on the statue",
+                campaign_id=campaign_id,
+            ),
+            owner_user_id=user_id,
+        )
+    )
+
+    assert response.campaign_id == campaign_id
+    assert captured_actions[0].action == ActionType.ABILITY_CHECK
+    assert captured_actions[0].parameters == {"ability_id": "recall_object"}
+    assert captured_actions[0].target == "statue"
+    tool_result = captured_tool_results[0]
+    assert tool_result.success is False
+    assert tool_result.state_delta == {}
+    assert tool_result.ability_result is not None
+    assert tool_result.ability_result.error_code == "target_not_portable"
+    narrator_request_text = "\n".join(
+        str(message.get("content", "")) for message in captured_narrator_requests
+    )
+    assert "The attempt produces no discernible effect." in narrator_request_text
+    assert "target_not_portable" not in narrator_request_text
+    assert "The Heavy Statue remains immovable." == response.reply
+
+    with session() as db:
+        persisted_state = _load_campaign_state(db.get_campaign(campaign_id))
+    assert persisted_state == initial_state
+    assert persisted_state["items"]["heavy_statue"]["location"] == "room:entry_hall"
+    assert persisted_state["items"]["heavy_statue"]["portable"] is False
+    assert persisted_state["player"]["inventory"] == initial_state["player"]["inventory"]
 
 
 def test_story_progression_move_into_library_advances_objective_1(monkeypatch) -> None:

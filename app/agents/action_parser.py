@@ -346,6 +346,11 @@ class ActionParserAgent(BaseAgent):
         if any(len(references_by_canonical[reference]) != 1 for reference in grounded_references):
             return self._reject_ability_request(parsed_action, "ambiguous_ability_reference", "ambiguous")
 
+        ability_reference_spans = [
+            span
+            for reference in selected_references
+            for span in self._canonical_phrase_spans(parsed_action.raw_text, reference)
+        ]
         item_references = set(parser_context.accessible_item_references)
         colliding_references = grounded_references & item_references
         if colliding_references and not any(
@@ -359,7 +364,11 @@ class ActionParserAgent(BaseAgent):
         if requires_target and not target:
             return self._reject_ability_request(parsed_action, "required_target_missing")
         if target:
-            grounded_target = self._grounded_player_phrase(parsed_action.raw_text, target)
+            grounded_target = self._grounded_player_phrase(
+                parsed_action.raw_text,
+                target,
+                excluded_spans=ability_reference_spans,
+            )
             if grounded_target is None:
                 return self._reject_ability_request(parsed_action, "target_not_grounded")
             target = grounded_target
@@ -387,43 +396,70 @@ class ActionParserAgent(BaseAgent):
         )
 
     def _canonical_phrase_pattern(self, reference: str) -> re.Pattern[str] | None:
+        expression = self._canonical_phrase_expression(reference)
+        if expression is None:
+            return None
+        return re.compile(r"(?<![a-z0-9])" + expression + r"(?![a-z0-9])", re.IGNORECASE)
+
+    def _canonical_phrase_expression(self, reference: str) -> str | None:
         normalized = normalize_identifier(reference)
         if not normalized:
             return None
         words = normalized.split()
-        pattern = r"[\W_]+".join(re.escape(word) for word in words)
-        return re.compile(r"(?<![a-z0-9])" + pattern + r"(?![a-z0-9])", re.IGNORECASE)
+        return r"[\W_]+".join(re.escape(word) for word in words)
 
     def _contains_canonical_phrase(self, text: str, reference: str) -> bool:
-        pattern = self._canonical_phrase_pattern(reference)
-        return pattern is not None and pattern.search(text) is not None
+        return bool(self._canonical_phrase_spans(text, reference))
 
-    def _grounded_player_phrase(self, text: str, model_phrase: str) -> str | None:
+    def _canonical_phrase_spans(self, text: str, reference: str) -> list[tuple[int, int]]:
+        pattern = self._canonical_phrase_pattern(reference)
+        if pattern is None:
+            return []
+        return [match.span() for match in pattern.finditer(text)]
+
+    def _grounded_player_phrase(
+        self,
+        text: str,
+        model_phrase: str,
+        *,
+        excluded_spans: list[tuple[int, int]] | None = None,
+    ) -> str | None:
         canonical = normalize_identifier(model_phrase)
         if not canonical:
             return None
+        excluded_spans = excluded_spans or []
         tokens = list(re.finditer(r"[a-z0-9]+(?:[_-][a-z0-9]+)*", text, re.IGNORECASE))
         for start in range(len(tokens)):
             for end in range(start, min(len(tokens), start + 8)):
                 candidate = text[tokens[start].start():tokens[end].end()]
-                if len(candidate) <= 80 and normalize_identifier(candidate) == canonical:
+                candidate_span = (tokens[start].start(), tokens[end].end())
+                overlaps_excluded = any(
+                    candidate_span[0] < excluded_end and excluded_start < candidate_span[1]
+                    for excluded_start, excluded_end in excluded_spans
+                )
+                if (
+                    not overlaps_excluded
+                    and len(candidate) <= 80
+                    and normalize_identifier(candidate) == canonical
+                ):
                     return re.sub(r"^(?:the|a|an)\s+", "", candidate, flags=re.IGNORECASE)
         return None
 
     def _has_ability_namespace_qualifier(self, text: str, reference: str) -> bool:
-        pattern = self._canonical_phrase_pattern(reference)
-        if pattern is None:
+        expression = self._canonical_phrase_expression(reference)
+        if expression is None:
             return False
-        ability_matches = list(re.finditer(r"\bability\b", text, re.IGNORECASE))
-        for reference_match in pattern.finditer(text):
-            for ability_match in ability_matches:
-                between = text[
-                    min(reference_match.end(), ability_match.end()):
-                    max(reference_match.start(), ability_match.start())
-                ]
-                if len(re.findall(r"\b[\w'-]+\b", between)) <= 4:
-                    return True
-        return False
+        suffix = re.compile(
+            r"(?<![a-z0-9])" + expression + r"[\W_]+ability(?![a-z0-9])",
+            re.IGNORECASE,
+        )
+        prefix = re.compile(
+            r"(?<![a-z0-9])(?:(?:my|the|a|an)[\W_]+)?ability[\W_]+"
+            + expression
+            + r"(?![a-z0-9])",
+            re.IGNORECASE,
+        )
+        return suffix.search(text) is not None or prefix.search(text) is not None
 
     def _dict_value(self, source: dict[str, Any], key: str | None) -> dict[str, Any]:
         if key is None:

@@ -81,6 +81,34 @@ def test_action_parser_uses_structured_provider_output(monkeypatch: pytest.Monke
     assert result.parse_status == "ok"
 
 
+def test_provider_request_prompt_allows_natural_language_ability_intent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state = _state_with_available_utility()
+    captured_messages = []
+
+    async def capture_generate_structured(*, messages, response_model, **kwargs):
+        captured_messages.extend(messages)
+        assert response_model is ActionParserOutput
+        return _ability_output()
+
+    monkeypatch.setattr(
+        "app.agents.action_parser.model_client.generate_structured",
+        capture_generate_structured,
+    )
+    _parse("recall object on the statue", state)
+
+    developer_prompt = next(
+        message["content"]
+        for message in captured_messages
+        if message.get("role") == "developer"
+    )
+    assert "Interpret natural-language intent" in developer_prompt
+    assert "Do not require a specific invocation verb or sentence pattern" in developer_prompt
+    assert "Ability invocation uses `use`, `using`, `activate`, or `invoke`" not in developer_prompt
+    assert "explicit target clauses use `on`, `toward`, or `at`" not in developer_prompt
+
+
 @pytest.mark.parametrize(
     "message",
     [
@@ -155,6 +183,33 @@ def test_ability_and_target_grounding_use_bounded_canonical_equivalence(
     assert result.target == expected_target
 
 
+@pytest.mark.parametrize(
+    ("message", "model_target", "expected_action", "expected_target"),
+    [
+        ("Recall Object", "object", ActionType.UNKNOWN, None),
+        ("Recall Object", "Recall Object", ActionType.UNKNOWN, None),
+        ("Recall Object on the object", "object", ActionType.ABILITY_CHECK, "object"),
+        ("Recall-Object on (the object)!", "the object", ActionType.ABILITY_CHECK, "object"),
+    ],
+)
+def test_ability_reference_span_cannot_also_ground_target(
+    monkeypatch: pytest.MonkeyPatch,
+    message: str,
+    model_target: str,
+    expected_action: ActionType,
+    expected_target: str | None,
+) -> None:
+    state = _state_with_available_utility()
+    _install_output(monkeypatch, _ability_output(target=model_target))
+
+    result = _parse(message, state)
+
+    assert result.action == expected_action
+    assert result.target == expected_target
+    if expected_action == ActionType.UNKNOWN:
+        assert result.parse_status == "invalid"
+
+
 def test_ambiguous_canonical_ability_reference_is_rejected(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -171,22 +226,53 @@ def test_ambiguous_canonical_ability_reference_is_rejected(
     assert result.parameters == {}
 
 
-def test_item_ability_collision_requires_explicit_ability_namespace(
+@pytest.mark.parametrize(
+    "message",
+    [
+        "use the Brass Key ability on candle",
+        "try my Brass Key ability on candle",
+        "use the ability Brass Key on candle",
+        "use my ability Brass Key on candle",
+    ],
+)
+def test_item_ability_collision_accepts_structurally_qualified_namespace(
     monkeypatch: pytest.MonkeyPatch,
+    message: str,
 ) -> None:
     state = _state_with_available_utility()
     state["player"]["generated_abilities"][1]["display_name"] = "Brass Key"
     state["items"]["brass_key"]["location"] = "room:entry_hall"
     _install_output(monkeypatch, _ability_output(target="candle"))
 
-    ambiguous = _parse("use brass key on candle", state)
-    explicit = _parse("use the Brass Key ability on candle", state)
+    result = _parse(message, state)
 
-    assert ambiguous.action == ActionType.UNKNOWN
-    assert ambiguous.parameters == {}
-    assert explicit.action == ActionType.ABILITY_CHECK
-    assert explicit.parameters == {"ability_id": "recall_object"}
-    assert explicit.target == "candle"
+    assert result.action == ActionType.ABILITY_CHECK
+    assert result.parameters == {"ability_id": "recall_object"}
+    assert result.target == "candle"
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "use brass key on candle",
+        "I lack the ability to use brass key on candle",
+        "my ability failed; use brass key on candle",
+        "I have an ability and use brass key on candle",
+    ],
+)
+def test_item_ability_collision_rejects_unrelated_ability_qualifier(
+    monkeypatch: pytest.MonkeyPatch,
+    message: str,
+) -> None:
+    state = _state_with_available_utility()
+    state["player"]["generated_abilities"][1]["display_name"] = "Brass Key"
+    state["items"]["brass_key"]["location"] = "room:entry_hall"
+    _install_output(monkeypatch, _ability_output(target="candle"))
+
+    result = _parse(message, state)
+
+    assert result.action == ActionType.UNKNOWN
+    assert result.parameters == {}
 
 
 def test_provider_item_action_is_not_converted_to_an_ability(
