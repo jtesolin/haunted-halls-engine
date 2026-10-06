@@ -120,6 +120,22 @@ Ability grounding selects a unique concrete reference occurrence, applying item
 namespace qualification to that occurrence and pairing it with a non-overlapping
 player-supplied target rather than conflating invocation and target vocabulary.
 
+## Preview environment status
+
+- **Shared preview foundation is implemented and live-verified**
+  ([jtesolin/haunted-halls#40](https://github.com/jtesolin/haunted-halls/issues/40)):
+  dedicated preview project/security boundary, isolated foundation/per-PR
+  Terraform state, exact-workflow-ref WIF, and a hardened preview DB/provisioner
+  path on shared Cloud SQL. Direct Cloud Run IAP bootstrap is proven, the
+  preview-only OpenAI secret is populated, and the final live-backed Terraform
+  plan has no planned changes.
+- **Remaining automatic per-PR lifecycle work:**
+  [jtesolin/haunted-halls#41](https://github.com/jtesolin/haunted-halls/issues/41)
+  for frontend PR previews; then
+  [jtesolin/haunted-halls-engine#85](https://github.com/jtesolin/haunted-halls-engine/issues/85)
+  for engine PR previews after frontend previews are proven end-to-end.
+  Neither follow-up is complete.
+
 ## Stable invariants and explicit deferrals
 
 - Story completion, progression rewards, ability ownership, checks, and world
