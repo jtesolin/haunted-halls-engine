@@ -5,6 +5,7 @@ from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
+    # Used only by evals.runner to opt into paid live evaluation runs.
     AI_ENABLED: bool = False
     OPENAI_API_KEY: Optional[str] = None
     # ANTHROPIC_API_KEY: Optional[str] = None

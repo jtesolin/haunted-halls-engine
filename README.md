@@ -12,7 +12,9 @@ Keep this document updated as engine changes affect architecture, behavior, road
 
 - Copy `.env.example` to `.env` and fill in local values; `.env` is git-ignored and excluded from the Docker image.
 - `.env` is read from the host at runtime, including by the sibling `haunted-halls` Docker Compose stack via `env_file`.
-- AI is treated as enabled when `AI_ENABLED` is true or a non-empty `OPENAI_API_KEY` is present; otherwise the engine returns stub narration.
+- Application startup requires a non-empty `OPENAI_API_KEY`. Runtime agents always use the configured provider; a missing key is a configuration error, and startup does not make a provider request.
+- `AI_ENABLED` is reserved for the evaluation runner's explicit live-eval opt-in; it does not select an alternate application runtime.
+- Tests use explicit provider doubles or mocked HTTP and never require a real key or make live OpenAI requests.
 - Under Compose, `DATABASE_URL` and `INTERNAL_ENGINE_SERVICE_TOKEN` are set explicitly by the Compose file and override values from this `.env`.
 
 ## Database Migrations

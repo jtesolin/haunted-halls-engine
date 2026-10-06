@@ -57,12 +57,6 @@ class ParserContext(BaseModel):
     abilities: list[dict[str, str | bool]] = Field(default_factory=list)
 
 
-class ExplicitAbilityRequest(BaseModel):
-    ability_id: str | None = None
-    target: str | None = None
-    parse_status: ParseStatus
-
-
 class ActionParserAgent(BaseAgent):
     @property
     def name(self) -> str:
@@ -112,15 +106,7 @@ class ActionParserAgent(BaseAgent):
         recent_turns: list[dict[str, str]],
         memory_context: list[dict[str, str]] | None = None,
         model: str | None = None,
-        deterministic_only: bool = False,
     ) -> ParsedAction:
-        if deterministic_only:
-            logger.info(
-                "action_parser_deterministic_mode message_length=%s",
-                len(message),
-            )
-            return self._fallback_parse(message, campaign_state)
-
         parser_context = self._build_parser_context(campaign_state)
         messages = self._build_messages(
             message=message,
@@ -241,150 +227,6 @@ class ActionParserAgent(BaseAgent):
         )
         return messages
 
-    def _fallback_parse(self, message: str, campaign_state: str) -> ParsedAction:
-        lower = message.lower()
-        stealth = any(token in lower for token in ("quiet", "quietly", "stealth", "sneak", "silently", "hidden"))
-
-        action = ActionType.OBSERVE
-        target: str | None = None
-        parse_status: ParseStatus = "ambiguous"
-        confidence = 0.45
-        notes = "Deterministic heuristic parser was used."
-
-        requested_ability = self._requested_ability_request(
-            lower, self._build_parser_context(campaign_state)
-        )
-        if requested_ability is not None:
-            if requested_ability.parse_status != "ok":
-                return ParsedAction(
-                    raw_text=message,
-                    action=ActionType.UNKNOWN,
-                    parse_status=requested_ability.parse_status,
-                    parser_notes="The explicit ability request is incomplete or ambiguous.",
-                )
-            return ParsedAction(
-                raw_text=message,
-                action=ActionType.ABILITY_CHECK,
-                target=requested_ability.target,
-                parameters={"ability_id": requested_ability.ability_id},
-                confidence=0.82,
-                parse_status="ok",
-                parser_notes="Explicit ability request recognized deterministically.",
-            )
-        if self._contains_any_phrase(lower, ["climb", "scale"]):
-            action = ActionType.CLIMB
-            parse_status = "ok"
-            confidence = 0.88
-            target = self._target_after_tokens(lower, ["onto", "on", "to", "the"]) or "roof"
-        elif self._contains_any_phrase(lower, ["move", "go", "walk", "run", "enter"]):
-            action = ActionType.MOVE
-            parse_status = "ok"
-            confidence = 0.82
-            target = self._extract_movement_target(lower)
-        elif self._contains_any_phrase(lower, ["take", "grab", "pick up", "collect"]):
-            action = ActionType.TAKE
-            parse_status = "ok"
-            confidence = 0.8
-            target = self._extract_object_target(lower, ["pick up", "take", "grab", "collect"])
-        elif self._contains_any_phrase(lower, ["drop", "remove", "discard"]):
-            action = ActionType.DROP
-            parse_status = "ok"
-            confidence = 0.76
-            target = self._extract_object_target(lower, ["drop", "discard", "remove"])
-        elif self._contains_any_phrase(lower, ["wait", "rest", "pass time"]):
-            action = ActionType.WAIT
-            parse_status = "ok"
-            confidence = 0.7
-        elif self._contains_any_phrase(lower, ["talk", "speak", "ask", "say"]):
-            action = ActionType.TALK
-            parse_status = "ok"
-            confidence = 0.72
-            target = self._extract_talk_target(lower)
-        elif self._contains_any_phrase(lower, ["open", "close", "extinguish", "interact"]):
-            action = ActionType.INTERACT
-            parse_status = "ok"
-            confidence = 0.7
-            target = self._extract_interaction_target(lower)
-            interaction_mode = self._interaction_mode(lower)
-            return self._parsed_interaction(
-                message, action, target, interaction_mode, None, stealth, confidence, parse_status, notes
-            )
-        elif self._contains_any_phrase(lower, ["light", "use"]):
-            action = ActionType.USE
-            parse_status = "ok"
-            confidence = 0.7
-            target, with_item = self._extract_use_items(lower)
-            return self._parsed_interaction(
-                message,
-                action,
-                target,
-                None if re.match(r"^\s*use\b", lower) else self._interaction_mode(lower),
-                with_item,
-                stealth,
-                confidence,
-                parse_status,
-                notes,
-            )
-        elif self._contains_any_phrase(lower, ["attack", "hit", "strike", "fight"]):
-            action = ActionType.ATTACK
-            parse_status = "ok"
-            confidence = 0.7
-            target = self._target_after_tokens(lower, ["the", "a", "an"])
-        elif self._contains_any_phrase(
-            lower,
-            ["look", "observe", "examine", "inspect", "inventory", "carrying", "what do i see", "what's here"],
-        ):
-            action = ActionType.OBSERVE
-            parse_status = "ok"
-            confidence = 0.75
-        elif self._contains_any_phrase(lower, ["spawn", "summon", "record", "record fact", "advance clock"]):
-            action = ActionType.UNKNOWN
-            parse_status = "ambiguous"
-            confidence = 0.2
-            notes = "Requested privileged world manipulation is not a player action."
-
-        return ParsedAction(
-            raw_text=message,
-            action=action,
-            target=target,
-            parameters={},
-            stealth=stealth,
-            confidence=confidence,
-            parse_status=parse_status,
-            parser_notes=notes,
-        )
-
-    def _parsed_interaction(
-        self,
-        message: str,
-        action: ActionType,
-        target: str | None,
-        interaction_mode: str | None,
-        with_item: str | None,
-        stealth: bool,
-        confidence: float,
-        parse_status: ParseStatus,
-        notes: str,
-    ) -> ParsedAction:
-        parameters = {
-            key: value
-            for key, value in {
-                "interaction_mode": interaction_mode,
-                "with_item": with_item,
-            }.items()
-            if value is not None
-        }
-        return ParsedAction(
-            raw_text=message,
-            action=action,
-            target=target,
-            parameters=parameters,
-            stealth=stealth,
-            confidence=confidence,
-            parse_status=parse_status,
-            parser_notes=notes,
-        )
-
     def _build_parser_context(self, campaign_state: str) -> ParserContext:
         if not campaign_state or campaign_state == "No campaign state yet.":
             return ParserContext()
@@ -464,126 +306,124 @@ class ActionParserAgent(BaseAgent):
     def _validate_model_ability_request(
         self, parsed_action: ParsedAction, parser_context: ParserContext
     ) -> ParsedAction:
-        request = self._requested_ability_request(
-            parsed_action.raw_text.casefold(), parser_context
-        )
-        if (
-            parsed_action.parse_status != "ok"
-            or request is None
-            or request.parse_status != "ok"
-            or parsed_action.parameters.get("ability_id") != request.ability_id
-            or (
-                request.target is not None
-                and parsed_action.target is not None
-                and normalize_identifier(parsed_action.target) != normalize_identifier(request.target)
-            )
+        parameters = parsed_action.parameters
+        ability_id = parameters.get("ability_id")
+        abilities = [
+            ability
+            for ability in parser_context.abilities
+            if ability.get("available") is True
+        ]
+        selected = [
+            ability
+            for ability in abilities
+            if ability.get("ability_id") == ability_id
+        ]
+        if parsed_action.parse_status != "ok" or len(selected) != 1:
+            return self._reject_ability_request(parsed_action, "ability_not_available")
+
+        selected_id = selected[0].get("ability_id")
+        selected_name = selected[0].get("name")
+        if not isinstance(selected_id, str) or not isinstance(selected_name, str):
+            return self._reject_ability_request(parsed_action, "ability_not_available")
+
+        references_by_canonical: dict[str, set[str]] = {}
+        for ability in abilities:
+            candidate_id = ability.get("ability_id")
+            candidate_name = ability.get("name")
+            if not isinstance(candidate_id, str) or not isinstance(candidate_name, str):
+                continue
+            for reference in canonical_ability_invocation_references(candidate_id, candidate_name):
+                references_by_canonical.setdefault(reference, set()).add(candidate_id)
+
+        selected_references = canonical_ability_invocation_references(selected_id, selected_name)
+        grounded_references = {
+            reference
+            for reference in selected_references
+            if self._contains_canonical_phrase(parsed_action.raw_text, reference)
+        }
+        if not grounded_references:
+            return self._reject_ability_request(parsed_action, "ability_not_grounded")
+        if any(len(references_by_canonical[reference]) != 1 for reference in grounded_references):
+            return self._reject_ability_request(parsed_action, "ambiguous_ability_reference", "ambiguous")
+
+        item_references = set(parser_context.accessible_item_references)
+        colliding_references = grounded_references & item_references
+        if colliding_references and not any(
+            self._has_ability_namespace_qualifier(parsed_action.raw_text, reference)
+            for reference in colliding_references
         ):
-            logger.warning("action_parser_ability_request_rejected reason=explicit_request_mismatch")
-            return parsed_action.model_copy(update={
+            return self._reject_ability_request(parsed_action, "item_ability_namespace_collision")
+
+        requires_target = selected[0].get("requires_target") is True
+        target = parsed_action.target
+        if requires_target and not target:
+            return self._reject_ability_request(parsed_action, "required_target_missing")
+        if target:
+            grounded_target = self._grounded_player_phrase(parsed_action.raw_text, target)
+            if grounded_target is None:
+                return self._reject_ability_request(parsed_action, "target_not_grounded")
+            target = grounded_target
+
+        return parsed_action.model_copy(
+            update={"target": target, "parameters": {"ability_id": selected_id}}
+        )
+
+    def _reject_ability_request(
+        self,
+        parsed_action: ParsedAction,
+        reason: str,
+        parse_status: ParseStatus = "invalid",
+    ) -> ParsedAction:
+        logger.warning("action_parser_ability_request_rejected reason=%s", reason)
+        return parsed_action.model_copy(
+            update={
                 "action": ActionType.UNKNOWN,
                 "target": None,
                 "parameters": {},
                 "confidence": 0.0,
-                "parse_status": (
-                    request.parse_status if request is not None and request.parse_status != "ok"
-                    else "invalid"
-                ),
-                "parser_notes": "The model ability request does not match one explicit available ability request.",
-            })
-        return parsed_action.model_copy(update={
-            "target": request.target,
-            "parameters": {"ability_id": request.ability_id},
-        })
+                "parse_status": parse_status,
+                "parser_notes": "The model ability request is not grounded in player text and authoritative context.",
+            }
+        )
 
-    def _requested_ability_request(
-        self,
-        lower: str,
-        parser_context: ParserContext,
-    ) -> ExplicitAbilityRequest | None:
-        candidates: list[tuple[int, str, str | None, bool]] = []
-        invocation_starts: set[int] = set()
-        item_references = set(parser_context.accessible_item_references)
-        canonical_abilities: dict[str, set[str]] = {}
-        for ability in parser_context.abilities:
-            ability_id = ability.get("ability_id")
-            name = ability.get("name")
-            if (
-                isinstance(ability_id, str)
-                and isinstance(name, str)
-                and ability.get("available") is True
-            ):
-                for canonical in canonical_ability_invocation_references(ability_id, name):
-                    canonical_abilities.setdefault(canonical, set()).add(ability_id)
-        requires_targets = {
-            ability["ability_id"]: ability.get("requires_target") is True
-            for ability in parser_context.abilities
-            if isinstance(ability.get("ability_id"), str)
-        }
-        for match in re.finditer(
-            r"\b(?:use|using|activate|invoke)\s+"
-            r"(?:my\s+|the\s+|an?\s+)?"
-            r"(?P<qualifier>ability\s+)?",
-            lower,
-        ):
-            segment = lower[match.end():].rstrip().rstrip(".!?").rstrip()
-            qualified = match.group("qualifier") is not None
-            possible_requests: list[tuple[str, str | None]] = [(segment, None)]
-            # Try every bounded target delimiter: a thematic name may itself contain one.
-            for target_match in re.finditer(r"\s+(?:on|toward|at)\s+", segment):
-                target = re.sub(r"^(?:the|a|an)\s+", "", segment[target_match.end():]).strip()
-                if target and len(target) <= 80 and len(target.split()) <= 8:
-                    possible_requests.append((segment[:target_match.start()], target))
-            for raw_reference, target in possible_requests:
-                reference = normalize_identifier(raw_reference)
-                ability_ids = canonical_abilities.get(reference)
-                if not ability_ids:
-                    continue
-                if reference in item_references and not qualified:
-                    continue
-                if target is not None and self._has_ambiguous_common_name_reference(reference, qualified):
-                    continue
-                invocation_starts.add(match.start())
-                candidates.extend(
-                    (len(reference), ability_id, target, requires_targets[ability_id])
-                    for ability_id in ability_ids
-                )
-        if not invocation_starts:
+    def _canonical_phrase_pattern(self, reference: str) -> re.Pattern[str] | None:
+        normalized = normalize_identifier(reference)
+        if not normalized:
             return None
-        if len(invocation_starts) > 1:
-            return ExplicitAbilityRequest(parse_status="ambiguous")
-        if not candidates:
-            return ExplicitAbilityRequest(parse_status="invalid")
-        longest_reference = max(length for length, _, _, _ in candidates)
-        requests = {
-            (ability_id, target, requires_target)
-            for length, ability_id, target, requires_target in candidates
-            if length == longest_reference
-        }
-        if len(requests) != 1:
-            return ExplicitAbilityRequest(parse_status="ambiguous")
-        ability_id, target, requires_target = requests.pop()
-        if target is not None and not requires_target:
-            return ExplicitAbilityRequest(parse_status="invalid")
-        return ExplicitAbilityRequest(ability_id=ability_id, target=target, parse_status="ok")
+        words = normalized.split()
+        pattern = r"[\W_]+".join(re.escape(word) for word in words)
+        return re.compile(r"(?<![a-z0-9])" + pattern + r"(?![a-z0-9])", re.IGNORECASE)
 
-    def _has_ambiguous_common_name_reference(
-        self,
-        reference: str,
-        qualified: bool,
-    ) -> bool:
-        common_item_words = {
-            "close",
-            "drop",
-            "light",
-            "look",
-            "move",
-            "open",
-            "take",
-            "use",
-        }
-        if len(reference.split()) != 1 or reference not in common_item_words:
+    def _contains_canonical_phrase(self, text: str, reference: str) -> bool:
+        pattern = self._canonical_phrase_pattern(reference)
+        return pattern is not None and pattern.search(text) is not None
+
+    def _grounded_player_phrase(self, text: str, model_phrase: str) -> str | None:
+        canonical = normalize_identifier(model_phrase)
+        if not canonical:
+            return None
+        tokens = list(re.finditer(r"[a-z0-9]+(?:[_-][a-z0-9]+)*", text, re.IGNORECASE))
+        for start in range(len(tokens)):
+            for end in range(start, min(len(tokens), start + 8)):
+                candidate = text[tokens[start].start():tokens[end].end()]
+                if len(candidate) <= 80 and normalize_identifier(candidate) == canonical:
+                    return re.sub(r"^(?:the|a|an)\s+", "", candidate, flags=re.IGNORECASE)
+        return None
+
+    def _has_ability_namespace_qualifier(self, text: str, reference: str) -> bool:
+        pattern = self._canonical_phrase_pattern(reference)
+        if pattern is None:
             return False
-        return not qualified
+        ability_matches = list(re.finditer(r"\bability\b", text, re.IGNORECASE))
+        for reference_match in pattern.finditer(text):
+            for ability_match in ability_matches:
+                between = text[
+                    min(reference_match.end(), ability_match.end()):
+                    max(reference_match.start(), ability_match.start())
+                ]
+                if len(re.findall(r"\b[\w'-]+\b", between)) <= 4:
+                    return True
+        return False
 
     def _dict_value(self, source: dict[str, Any], key: str | None) -> dict[str, Any]:
         if key is None:
@@ -597,102 +437,3 @@ class ActionParserAgent(BaseAgent):
             if isinstance(raw_key, str):
                 normalized[raw_key] = raw_value
         return normalized
-
-    def _target_after_tokens(self, text: str, tokens: list[str]) -> str | None:
-        words = text.replace(".", " ").replace(",", " ").split()
-        stop_words = {"the", "a", "an"}
-        for index, word in enumerate(words):
-            if word in tokens and index + 1 < len(words):
-                for candidate_index in range(index + 1, len(words)):
-                    candidate = words[candidate_index].strip()
-                    if not candidate or candidate in stop_words:
-                        continue
-                    return candidate
-        return None
-
-    def _extract_talk_target(self, text: str) -> str | None:
-        for marker in [
-            "talk to",
-            "talk with",
-            "speak to",
-            "speak with",
-            "ask",
-            "say to",
-            "say",
-        ]:
-            if marker not in text:
-                continue
-            suffix = text.split(marker, 1)[1].strip()
-            for filler in [" about ", " for ", " from ", " to ", " with ", " at ", " of "]:
-                if filler in suffix:
-                    suffix = suffix.split(filler, 1)[0].strip()
-                    break
-            suffix = re.sub(r"^(?:the|a|an)\s+", "", suffix)
-            suffix = re.sub(r"\s+", " ", suffix).strip()
-            if suffix:
-                return suffix
-        return self._target_after_tokens(text, ["to", "with", "the"])
-
-    def _extract_movement_target(self, text: str) -> str | None:
-        directional_tokens = ["north", "south", "east", "west", "up", "down", "in", "out"]
-        for token in directional_tokens:
-            pattern = r"\b" + re.escape(token) + r"\b"
-            if re.search(pattern, text):
-                return token
-
-        target = self._target_after_tokens(text, ["to", "into", "toward", "towards", "the"])
-        if target is not None:
-            return target
-
-        return self._target_after_tokens(text, ["go", "move", "walk", "run", "enter", "climb"])
-
-    def _extract_object_target(self, text: str, verbs: list[str]) -> str | None:
-        for verb in verbs:
-            marker = f"{verb} "
-            if marker not in text:
-                continue
-            suffix = text.split(marker, 1)[1]
-            suffix = re.split(r"[.!?]", suffix, maxsplit=1)[0]
-            suffix = re.split(r"\b(with|using|while|then|and)\b", suffix, maxsplit=1)[0]
-            suffix = suffix.strip()
-            for article in ("the ", "a ", "an "):
-                if suffix.startswith(article):
-                    suffix = suffix.removeprefix(article)
-                    break
-            suffix = re.sub(r"\s+", " ", suffix).strip()
-            if suffix:
-                return suffix
-        return self._target_after_tokens(text, ["the", "a", "an"])
-
-    def _interaction_mode(self, text: str) -> str | None:
-        for mode in ("open", "close", "light", "extinguish"):
-            if re.search(r"\b" + mode + r"\b", text):
-                return mode
-        return None
-
-    def _extract_interaction_target(self, text: str) -> str | None:
-        mode = self._interaction_mode(text)
-        if mode is None:
-            return self._extract_object_target(text, ["interact"])
-        return self._extract_object_target(text, [mode])
-
-    def _extract_use_items(self, text: str) -> tuple[str | None, str | None]:
-        if not re.match(r"^\s*use\b", text) and self._interaction_mode(text) == "light":
-            target = self._extract_object_target(text, ["light"])
-            match = re.search(r"\b(?:with|using)\s+(?:the\s+)?(.+?)(?:[.!?]|$)", text)
-            return target, match.group(1).strip() if match else None
-
-        match = re.search(
-            r"\buse\s+(?:the\s+)?(.+?)\s+(?:on|with)\s+(?:the\s+)?(.+?)(?:[.!?]|$)",
-            text,
-        )
-        if match:
-            return match.group(2).strip(), match.group(1).strip()
-        return self._extract_object_target(text, ["use"]), None
-
-    def _contains_any_phrase(self, text: str, phrases: list[str]) -> bool:
-        for phrase in phrases:
-            pattern = r"\b" + re.escape(phrase) + r"\b"
-            if re.search(pattern, text):
-                return True
-        return False

@@ -8,7 +8,6 @@ from app.agents.base import BaseAgent
 from app.ai.model_client import ModelCallResult, model_client
 from app.guardrails.model_policy import ModelPolicy
 from app.guardrails.token_budget import TokenBudget, estimate_tokens
-from app.schemas.character_progression import ProgressionTrackId
 from app.schemas.generated_abilities import (
     AbilityChannel,
     AbilityDetail,
@@ -16,7 +15,6 @@ from app.schemas.generated_abilities import (
     AbilityEffect,
     AbilityObjectMotion,
     AbilityObjectState,
-    AbilitySenseFilter,
     GeneratedAbilityDefinition,
     GeneratedAbilityKind,
     GeneratedAbilityMechanics,
@@ -69,20 +67,17 @@ class StarterAbilityGenerator(BaseAgent):
 
     @overload
     async def generate(
-        self, *, provider_model_enabled: bool, return_usage: Literal[False] = False
+        self, *, return_usage: Literal[False] = False
     ) -> StarterAbilityGeneration: ...
 
     @overload
     async def generate(
-        self, *, provider_model_enabled: bool, return_usage: Literal[True]
+        self, *, return_usage: Literal[True]
     ) -> ModelCallResult[StarterAbilityGeneration]: ...
 
     async def generate(
-        self, *, provider_model_enabled: bool, return_usage: bool = False
+        self, *, return_usage: bool = False
     ) -> StarterAbilityGeneration | ModelCallResult[StarterAbilityGeneration]:
-        if not provider_model_enabled:
-            generation = self._stub_generation()
-            return ModelCallResult(output=generation, usage=None) if return_usage else generation
         result = await model_client.generate_structured(
             messages=self.build_provider_request(),
             response_model=StarterAbilityProviderGeneration,
@@ -175,46 +170,6 @@ class StarterAbilityGenerator(BaseAgent):
                     kind=GeneratedAbilityKind.UTILITY,
                     mechanics=utility_mechanics,
                     track=utility.track,
-                    minimum_points=0,
-                ),
-            ]
-        )
-
-    def _stub_generation(self) -> StarterAbilityGeneration:
-        return StarterAbilityGeneration(
-            abilities=[
-                GeneratedAbilityDefinition(
-                    ability_id="echo_sense",
-                    display_name="Grave Echo",
-                    description="Feel supernatural presence through a faint chill in the air.",
-                    kind=GeneratedAbilityKind.SENSORY,
-                    mechanics=GeneratedAbilityMechanics(
-                        effect=AbilityEffect.SENSE,
-                        domain=AbilityDomain.SURROUNDINGS,
-                        channel=AbilityChannel.SUPERNATURAL,
-                        detail=AbilityDetail.LIMITED,
-                        range=1,
-                        requires=("nearby",),
-                        sense_filter=AbilitySenseFilter.SUPERNATURAL_PRESENCE,
-                    ),
-                    track=ProgressionTrackId.INVESTIGATION,
-                    minimum_points=0,
-                ),
-                GeneratedAbilityDefinition(
-                    ability_id="whispering_touch",
-                    display_name="Whispering Grasp",
-                    description="Draw a small object near with a quiet, unseen pull.",
-                    kind=GeneratedAbilityKind.UTILITY,
-                    mechanics=GeneratedAbilityMechanics(
-                        effect=AbilityEffect.MOVE,
-                        domain=AbilityDomain.OBJECT,
-                        channel=AbilityChannel.SUPERNATURAL,
-                        detail=AbilityDetail.PRACTICAL,
-                        range=0,
-                        requires=("nearby",),
-                        object_motion=AbilityObjectMotion.TOWARD_PLAYER,
-                    ),
-                    track=ProgressionTrackId.OCCULT,
                     minimum_points=0,
                 ),
             ]

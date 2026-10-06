@@ -4,6 +4,7 @@ from typing import Any
 from types import SimpleNamespace
 
 from pydantic import BaseModel
+import pytest
 
 from app.ai.model_client import ModelClient, ModelUsage
 
@@ -207,21 +208,37 @@ def test_generate_text_extracts_text_from_output_chunks(monkeypatch) -> None:
     assert result == "First line\nSecond line"
 
 
-def test_generate_text_uses_fallback_when_client_unavailable(monkeypatch) -> None:
+def test_generate_text_fails_when_client_unavailable(monkeypatch) -> None:
     model_client = ModelClient()
     monkeypatch.setattr(model_client, "_get_client", lambda: None)
 
-    result = asyncio.run(
-        model_client.generate_text(
-            messages=[{"role": "user", "content": "hello"}],
-            reasoning_effort="minimal",
-            model="gpt-test",
-            max_output_tokens=220,
-            timeout=9,
+    with pytest.raises(RuntimeError, match="requires an OpenAI client"):
+        asyncio.run(
+            model_client.generate_text(
+                messages=[{"role": "user", "content": "hello"}],
+                reasoning_effort="minimal",
+                model="gpt-test",
+                max_output_tokens=220,
+                timeout=9,
+            )
         )
-    )
 
-    assert result == "AI narrator replies: hello"
+
+def test_generate_text_fails_when_provider_returns_no_text(monkeypatch) -> None:
+    model_client = ModelClient()
+    fake_client = _FakeClient(_ResponseWithText(""))
+    monkeypatch.setattr(model_client, "_get_client", lambda: fake_client)
+
+    with pytest.raises(RuntimeError, match="returned no text output"):
+        asyncio.run(
+            model_client.generate_text(
+                messages=[{"role": "user", "content": "hello"}],
+                reasoning_effort="minimal",
+                model="gpt-test",
+                max_output_tokens=220,
+                timeout=9,
+            )
+        )
 
 
 def test_extract_usage_preserves_partial_and_zero_values() -> None:

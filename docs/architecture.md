@@ -80,17 +80,23 @@ arbitrary model-authored mutations. Authored narrative actions such as
 rather than model-authored text. Quest and objective completion remains owned
 exclusively by deterministic story progression.
 
-The model-backed Director is integrated into the normal authoritative chat
+The application runtime requires non-whitespace OpenAI provider configuration.
+Model-backed agents interpret natural-language player intent and generate
+bounded proposals; deterministic validation grounds interpreted identifiers
+and targets in player text and authoritative context. Deterministic systems
+retain exclusive authority for game-state validation and mutation. A missing
+provider configuration is a startup error, and provider failures remain
+explicit failures rather than selecting heuristic or stub gameplay.
+
+The model-backed Director is integrated into every normal authoritative chat
 turn, after the player's own result/state plus deterministic story/rule
 progression and authored progression rewards, and before narrator scene
 construction. It proposes at most one currently exposed typed `WorldAction`,
 or no action, from a bounded, non-mutating projection of that authoritative
 post-story/post-reward state. Only `WorldAuthorityExecutor` may execute a
-proposed action; the Director itself never mutates campaign state. Director
-invocation, and any resulting privileged world-state transition, requires the
-same enabled provider model path as other model-backed agents; a disabled
-provider path skips the Director and privileged world execution entirely and
-preserves prior deterministic/stub chat behavior.
+proposed action; the Director itself never mutates campaign state. Tests remain
+provider-free through explicit agent/model doubles and mocked HTTP, including
+the real OpenAI SDK contract tests.
 Executor support for a `WorldAction` does not automatically expose it to the
 model-backed Director: the Director has an independently bounded proposal and
 provider-facing action vocabulary.
@@ -110,7 +116,9 @@ abilities, but the engine validates them against its bounded mechanical
 vocabulary before persisting their definitions and ownership. Those persisted,
 validated definitions are authoritative; their vocabulary and execution
 semantics remain engine-owned. The Action Parser may identify an explicit
-player ability request but cannot choose mechanics, difficulty, or outcome.
+player ability request in natural language only when its ability reference and
+any required target are grounded in player text and authoritative parser
+context; it cannot choose mechanics, difficulty, or outcome.
 Player ability checks execute through the player ToolExecutor, never through
 the Director or WorldAuthorityExecutor. The Narrator receives only the
 authoritative ability definition/result projection and cannot invent an

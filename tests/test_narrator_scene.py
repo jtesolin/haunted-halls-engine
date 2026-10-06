@@ -4,11 +4,11 @@ import json
 
 import pytest
 
-from app.agents.starter_abilities import StarterAbilityGenerator
 from app.game.campaign_state import InvalidCampaignStateError
 from app.game.character_progression import grant_progress, unlock_ability
 from app.game.narrator_scene import build_narrator_scene_context
 from app.schemas.character_progression import ProgressionTrackId
+from tests.factories import starter_ability_generation
 
 
 def _state(**overrides: object) -> str:
@@ -241,7 +241,7 @@ def test_valid_boolean_observable_state_values_still_project() -> None:
 
 def test_generated_owned_abilities_project_persisted_definitions_and_availability() -> None:
     state = json.loads(_state())
-    generated = StarterAbilityGenerator()._stub_generation().abilities
+    generated = starter_ability_generation().abilities
     state["player"]["generated_abilities"] = [
         ability.model_dump(mode="json") for ability in generated
     ]

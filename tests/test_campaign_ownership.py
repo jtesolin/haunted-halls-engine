@@ -1,3 +1,4 @@
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import text
 
@@ -6,6 +7,8 @@ from app.core.config import settings
 from app.db.session import get_engine
 from app.main import app
 from app.schemas.internal_auth import CANONICAL_GOOGLE_ISSUER
+
+pytestmark = pytest.mark.usefixtures("fake_runtime_model_provider")
 
 
 def _user_scoped_headers(client: TestClient, provider_subject: str) -> dict[str, str]:
@@ -38,8 +41,6 @@ def _sqlite_database_path() -> str:
 
 def test_campaign_creation_persists_owner_from_authenticated_user_context() -> None:
     settings.INTERNAL_ENGINE_SERVICE_TOKEN = "test-token"
-    settings.AI_ENABLED = False
-    settings.OPENAI_API_KEY = None
     client = TestClient(app)
     headers = _user_scoped_headers(client, "campaign-owner")
 
@@ -64,8 +65,6 @@ def test_campaign_creation_persists_owner_from_authenticated_user_context() -> N
 
 def test_campaign_creation_uses_current_schema_columns() -> None:
     settings.INTERNAL_ENGINE_SERVICE_TOKEN = "test-token"
-    settings.AI_ENABLED = False
-    settings.OPENAI_API_KEY = None
     client = TestClient(app)
     headers = _user_scoped_headers(client, "campaign-owner-body")
 
