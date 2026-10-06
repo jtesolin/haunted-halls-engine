@@ -116,6 +116,9 @@ interpreted ability IDs and targets against player text and authoritative
 context instead of requiring a second regex command grammar. Missing provider
 configuration and provider failures do not select fallback gameplay. Tests
 remain provider-free through explicit doubles and mocked SDK HTTP transport.
+Ability grounding selects a unique concrete reference occurrence, applying item
+namespace qualification to that occurrence and pairing it with a non-overlapping
+player-supplied target rather than conflating invocation and target vocabulary.
 
 ## Stable invariants and explicit deferrals
 

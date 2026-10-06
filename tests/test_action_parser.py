@@ -189,6 +189,7 @@ def test_ability_and_target_grounding_use_bounded_canonical_equivalence(
         ("Recall Object", "object", ActionType.UNKNOWN, None),
         ("Recall Object", "Recall Object", ActionType.UNKNOWN, None),
         ("Recall Object on the object", "object", ActionType.ABILITY_CHECK, "object"),
+        ("Recall Object on Recall Object", "Recall Object", ActionType.ABILITY_CHECK, "Recall Object"),
         ("Recall-Object on (the object)!", "the object", ActionType.ABILITY_CHECK, "object"),
     ],
 )
@@ -273,6 +274,70 @@ def test_item_ability_collision_rejects_unrelated_ability_qualifier(
 
     assert result.action == ActionType.UNKNOWN
     assert result.parameters == {}
+
+
+@pytest.mark.parametrize("legacy_ambiguity", [False, True])
+def test_unique_ability_id_grounds_invocation_when_display_name_is_target(
+    monkeypatch: pytest.MonkeyPatch,
+    legacy_ambiguity: bool,
+) -> None:
+    state = _state_with_available_utility()
+    state["player"]["generated_abilities"][1]["ability_id"] = "spectral_pull"
+    state["player"]["generated_abilities"][1]["display_name"] = "Brass Key"
+    state["player"]["progression"]["unlocked_abilities"].remove("recall_object")
+    assert unlock_ability(state, "spectral_pull").success
+    if legacy_ambiguity:
+        state["player"]["generated_abilities"][0]["ability_id"] = "brass_key"
+        state["player"]["progression"]["unlocked_abilities"].remove("echo_sense")
+        assert unlock_ability(state, "brass_key").success
+    state["items"]["brass_key"]["location"] = "room:entry_hall"
+    _install_output(monkeypatch, _ability_output("spectral_pull", "brass key"))
+
+    result = _parse("use spectral pull on brass key", state)
+
+    assert result.action == ActionType.ABILITY_CHECK
+    assert result.parse_status == "ok"
+    assert result.parameters == {"ability_id": "spectral_pull"}
+    assert result.target == "brass key"
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "use my Brass Key ability on Brass Key",
+        "use the ability Brass Key on Brass Key",
+        "Brass Key, target my Brass Key ability",
+    ],
+)
+def test_qualified_ability_occurrence_and_same_name_target_are_grounded_independently(
+    monkeypatch: pytest.MonkeyPatch,
+    message: str,
+) -> None:
+    state = _state_with_available_utility()
+    state["player"]["generated_abilities"][1]["display_name"] = "Brass Key"
+    state["items"]["brass_key"]["location"] = "room:entry_hall"
+    _install_output(monkeypatch, _ability_output(target="Brass Key"))
+
+    result = _parse(message, state)
+
+    assert result.action == ActionType.ABILITY_CHECK
+    assert result.parse_status == "ok"
+    assert result.target == "Brass Key"
+
+
+def test_namespace_qualification_cannot_be_borrowed_from_another_occurrence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state = _state_with_available_utility()
+    state["player"]["generated_abilities"][1]["display_name"] = "Brass Key"
+    state["items"]["brass_key"]["location"] = "room:entry_hall"
+    _install_output(monkeypatch, _ability_output(target="my Brass Key ability"))
+
+    result = _parse("use Brass Key on my Brass Key ability", state)
+
+    assert result.action == ActionType.UNKNOWN
+    assert result.parse_status == "invalid"
+    assert result.target is None
 
 
 def test_provider_item_action_is_not_converted_to_an_ability(
