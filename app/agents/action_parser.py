@@ -397,15 +397,13 @@ class ActionParserAgent(BaseAgent):
             return self._reject_ability_request(parsed_action, "item_ability_namespace_collision")
 
         requires_target = selected[0].get("requires_target") is True
+        is_route_ability = selected[0].get("target_kind") == "route"
         target = parsed_action.target
-        if requires_target and not target:
+        # A grounded traversal invocation without a destination still reaches the
+        # executor, which returns a typed non-moving failure for narration.
+        if requires_target and not target and not is_route_ability:
             return self._reject_ability_request(parsed_action, "required_target_missing")
         if target:
-            if (
-                selected[0].get("target_kind") == "route"
-                and normalize_identifier(target) not in parser_context.accessible_route_references
-            ):
-                return self._reject_ability_request(parsed_action, "route_target_not_local")
             grounded_target = next(
                 (
                     grounded

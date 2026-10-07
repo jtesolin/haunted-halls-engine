@@ -29,6 +29,13 @@ move the player. A grounded incompatible request is a typed gameplay failure,
 not a schema/HTTP failure. Destination references matching multiple routes
 require disambiguation by route ID/name.
 
+An explicitly grounded, owned, available traversal invocation with no
+destination (`route_target_missing`) or with a player-worded place that is not
+a nearby route, such as "the ceiling" (`route_unknown`), also reaches the
+executor and is narrated as a non-moving failure. The parser never chooses or
+substitutes a route. A provider target absent from player text, or an
+ungrounded ability reference, remains an invalid parse (HTTP 422).
+
 ## Generation and compatibility
 
 The real Structured Outputs contract has two choice slots, each accepting

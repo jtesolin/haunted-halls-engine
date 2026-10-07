@@ -107,6 +107,10 @@ Stable cross-repository authority and security invariants belong in
   8F2/8F3 saves are not regenerated, rewritten, or backfilled. Rain Court offers
   a reachable demonstration with ordinary alternatives. See
   [traversal.md](traversal.md) for constraints, coverage, and staging checks.
+  Follow-up fix: a grounded owned traversal invocation with a missing or
+  unsupported destination (e.g. "touch the ceiling") is now a typed, narrated,
+  non-moving failure instead of HTTP 422; ungrounded/model-invented targets
+  remain invalid.
 
 ## Current Phase 8 status
 
