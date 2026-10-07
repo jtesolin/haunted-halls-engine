@@ -9,6 +9,8 @@ def resolve_local_route(
     world: World, origin: str, target: str | None
 ) -> tuple[TraversalRoute | None, str | None, str | None]:
     reference = normalize_identifier(target or "")
+    if not reference:
+        return None, "route_target_missing", "This ability needs a specific crossing nearby to carry you over; none was chosen."
     matches = [
         route for route in world.traversal_routes
         if reference and reference in world.route_references(route)
@@ -19,7 +21,7 @@ def resolve_local_route(
     if not local:
         if matches:
             return None, "route_not_local", "That crossing does not start here."
-        return None, "route_unknown", "No authored crossing here matches that reference."
+        return None, "route_unknown", "Nothing here offers a crossing to that place."
     return local[0], None, None
 
 

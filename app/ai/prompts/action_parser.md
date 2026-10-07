@@ -6,6 +6,11 @@ traversal_routes. These are restricted crossings, not ordinary move exits.
 Interpret natural language; do not require a fixed invocation grammar. Never
 decide route eligibility or movement success. An explicitly requested local
 route with an incompatible method still goes to the executor as ability_check.
+When the player clearly invokes an available traversal ability but names no
+destination, or names a place that is not a nearby route (for example a
+ceiling), still return ability_check with that ability_id. Set target to the
+player's own wording for the place, or null if none was named. Never choose,
+substitute, or invent a route the player did not name.
 If an ability reference also names a route/destination or accessible item,
 require an explicit ability namespace qualifier on that invocation occurrence.
 The target must be a separate, non-overlapping player-text occurrence.

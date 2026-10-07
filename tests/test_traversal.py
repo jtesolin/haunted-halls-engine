@@ -14,6 +14,7 @@ from app.game.abilities import (
     generated_ability_definitions,
     generated_mechanical_signature,
     project_owned_abilities,
+    project_narrator_ability_gameplay_result,
     validate_starter_ability_definitions,
 )
 from app.game.campaign_state import build_fresh_campaign_state, load_authoritative_campaign_state
@@ -404,7 +405,7 @@ def test_natural_language_model_grounding_reaches_real_executor(
         ("Gallery Ascent crosses Gallery Ascent", "Gallery Ascent", False),
         ("My ability Gallery Ascent crosses Ivy Wall", "Ivy Wall", True),
         ("Gallery Ascent crosses Ivy Wall", "Ivy Wall", False),
-        ("My ability Gallery Ascent crosses invented path", "invented path", False),
+        ("My ability Gallery Ascent crosses invented path", "invented path", True),
         ("My ability Gallery Ascent crosses Gallery Ascent then Gallery Ascent", "Gallery Ascent", True),
     ],
 )
@@ -454,3 +455,116 @@ def test_ability_reference_inside_route_or_destination_is_not_an_invocation(
         parser._build_parser_context(json.dumps(state)),
     )
     assert (parsed.action == ActionType.ABILITY_CHECK) == accepted
+
+
+SPRINT_MESSAGE = (
+    "i go to the back of the room, start a sprint to get momentum, and use tethered step "
+    "to get some air. can i touch the ceiling before i fall?"
+)
+CEILING_MESSAGE = "i use tethered step to touch the ceiling"
+
+
+def tethered_step_state(location: str) -> dict:
+    state = traversal_state(TraversalMethod.LEVITATION, location)
+    state["player"]["generated_abilities"][0]["display_name"] = "Tethered Step"
+    return state
+
+
+def parse_with_provider(
+    monkeypatch: pytest.MonkeyPatch, state: dict, text: str, output: ActionParserOutput
+) -> ParsedAction:
+    async def provider(**kwargs):
+        return output
+
+    monkeypatch.setattr("app.agents.action_parser.model_client.generate_structured", provider)
+    return asyncio.run(
+        ActionParserAgent().parse(message=text, campaign_state=json.dumps(state), recent_turns=[])
+    )
+
+
+def traversal_output(target: str | None) -> ActionParserOutput:
+    return ActionParserOutput(
+        action=ActionType.ABILITY_CHECK, target=target,
+        parameters=ActionParserParameters(ability_id="silver_step"),
+        parse_status="ok", confidence=0.9,
+    )
+
+
+@pytest.mark.parametrize(
+    ("text", "target", "parsed_target", "error_code"),
+    [
+        (SPRINT_MESSAGE, None, None, "route_target_missing"),
+        (CEILING_MESSAGE, "the ceiling", "ceiling", "route_unknown"),
+    ],
+)
+def test_grounded_traversal_without_supported_destination_fails_without_movement(
+    monkeypatch: pytest.MonkeyPatch,
+    text: str,
+    target: str | None,
+    parsed_target: str | None,
+    error_code: str,
+) -> None:
+    state = tethered_step_state("entry_hall")
+    parsed = parse_with_provider(monkeypatch, state, text, traversal_output(target))
+    assert parsed.parse_status == "ok"
+    assert parsed.action == ActionType.ABILITY_CHECK
+    assert parsed.target == parsed_target
+    assert parsed.parameters == {"ability_id": "silver_step"}
+
+    updated, result = ToolExecutor().execute(parsed_action=parsed, campaign_state=json.dumps(state))
+    assert not result.success and result.error_code == error_code
+    assert result.applied_tools == [] and result.state_delta == {}
+    assert result.resolved_exit is None and updated == state
+    assert derive_story_signal(result) is None
+    assert result.ability_result is not None and result.ability_result.traversal_effect is None
+    narrator_result = project_narrator_ability_gameplay_result(result.ability_result)
+    assert narrator_result.traversal_failure is not None
+    assert "authored" not in narrator_result.traversal_failure.casefold()
+
+
+@pytest.mark.parametrize(
+    ("text", "output"),
+    [
+        (CEILING_MESSAGE, traversal_output("Gallery Ascent")),
+        ("touch the ceiling", traversal_output(None)),
+        ("touch the ceiling", traversal_output("ceiling")),
+    ],
+)
+def test_ungrounded_traversal_invocation_or_target_stays_invalid(
+    monkeypatch: pytest.MonkeyPatch, text: str, output: ActionParserOutput
+) -> None:
+    parsed = parse_with_provider(monkeypatch, tethered_step_state("rain_court"), text, output)
+    assert parsed.parse_status == "invalid"
+    assert parsed.action == ActionType.UNKNOWN and parsed.target is None
+
+
+def test_object_ability_missing_target_stays_invalid() -> None:
+    state = build_fresh_campaign_state()
+    definitions = starter_ability_generation().abilities
+    state["player"]["generated_abilities"] = [d.model_dump(mode="json") for d in definitions]
+    for definition in definitions:
+        unlock_ability(state, definition.ability_id)
+    utility = next(d for d in definitions if d.kind.value == "utility")
+    parser = ActionParserAgent()
+    parsed = parser._validate_model_ability_request(
+        ParsedAction(
+            raw_text=f"I use {utility.display_name}.", action=ActionType.ABILITY_CHECK,
+            parameters={"ability_id": utility.ability_id}, parse_status="ok", confidence=1,
+        ),
+        parser._build_parser_context(json.dumps(state)),
+    )
+    assert parsed.parse_status == "invalid" and parsed.action == ActionType.UNKNOWN
+
+
+def test_tethered_step_gallery_ascent_still_crosses_through_validator(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state = tethered_step_state("rain_court")
+    parsed = parse_with_provider(
+        monkeypatch, state, "I use tethered step to rise up the Gallery Ascent",
+        traversal_output("Gallery Ascent"),
+    )
+    assert parsed.action == ActionType.ABILITY_CHECK and parsed.target == "Gallery Ascent"
+    updated, result = ToolExecutor().execute(parsed_action=parsed, campaign_state=json.dumps(state))
+    assert result.success and updated["player"]["location"] == "upper_gallery"
+    assert derive_story_signal(result) == RoomEnteredSignal(room_id="upper_gallery")

@@ -3,13 +3,16 @@ from __future__ import annotations
 import asyncio
 import copy
 import json
+import re
 
 import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
+from sqlalchemy import text
 
 from app.agents.director import DirectorProviderError
 from app.agents.narrator import NarratorAgentInput
+from app.api.dependencies import INTERNAL_USER_ID_HEADER_NAME
 from app.api.routes import chat as chat_routes
 from app.core.config import settings
 from app.db.session import session
@@ -1618,3 +1621,172 @@ def test_real_tool_executor_executes_full_library_whisper_sequence(monkeypatch) 
         assert state["story"]["quests"]["librarys_whisper"]["objectives"]["enter_library"] == "completed"
         assert state["story"]["quests"]["librarys_whisper"]["objectives"]["speak_to_library_ghost"] == "completed"
         assert state["story"]["quests"]["librarys_whisper"]["objectives"]["acquire_old_book"] == "completed"
+
+
+TETHERED_SPRINT_MESSAGE = (
+    "i go to the back of the room, start a sprint to get momentum, and use tethered step "
+    "to get some air. can i touch the ceiling before i fall?"
+)
+TETHERED_CEILING_MESSAGE = "i use tethered step to touch the ceiling"
+
+
+def _tethered_step_state(location: str) -> dict:
+    state = _story_state()
+    state["player"]["location"] = location
+    definitions = traversal_ability_generation(TraversalMethod.LEVITATION).abilities
+    state["player"]["generated_abilities"] = [definition.model_dump(mode="json") for definition in definitions]
+    state["player"]["generated_abilities"][0]["display_name"] = "Tethered Step"
+    for definition in definitions:
+        unlock_ability(state, definition.ability_id)
+    return state
+
+
+def _api_headers(user_id: str, idempotency_key: str | None = None) -> dict[str, str]:
+    headers = {
+        "Authorization": f"Bearer {settings.INTERNAL_ENGINE_SERVICE_TOKEN}",
+        INTERNAL_USER_ID_HEADER_NAME: user_id,
+    }
+    if idempotency_key is not None:
+        headers["Idempotency-Key"] = idempotency_key
+    return headers
+
+
+def _install_tethered_step_turn(monkeypatch, *, target: str | None, signals: list, narrator_messages: list, director_failures: list) -> None:
+    original_derive = orchestrator_module.derive_story_signal
+
+    async def parser_provider(**kwargs):
+        return ActionParserOutput(
+            action=ActionType.ABILITY_CHECK, target=target,
+            parameters=ActionParserParameters(ability_id="silver_step"),
+            parse_status="ok", confidence=0.9,
+        )
+
+    def capture_signal(result):
+        signal = original_derive(result)
+        signals.append(signal)
+        return signal
+
+    async def director(*, director_input, model=None):
+        if director_failures:
+            director_failures.pop()
+            raise DirectorProviderError("Synthetic failure")
+        return await _stub_director_response(director_input=director_input, model=model)
+
+    async def narrator_provider(*, messages, **kwargs):
+        narrator_messages.extend(messages)
+        return "Tethered Step lifts you briefly, but nothing here offers a crossing to that place. You settle back where you began."
+
+    monkeypatch.setattr("app.agents.action_parser.model_client.generate_structured", parser_provider)
+    monkeypatch.setattr(orchestrator_module, "derive_story_signal", capture_signal)
+    monkeypatch.setattr(orchestrator_module.orchestrator.director_agent, "propose", director)
+    monkeypatch.setattr("app.agents.narrator.model_client.generate_text", narrator_provider)
+
+
+@pytest.mark.parametrize(
+    ("message", "target", "error_code"),
+    [
+        (TETHERED_SPRINT_MESSAGE, None, "route_target_missing"),
+        (TETHERED_CEILING_MESSAGE, "ceiling", "route_unknown"),
+    ],
+)
+def test_observed_tethered_step_requests_are_narrated_without_movement(
+    monkeypatch, message: str, target: str | None, error_code: str
+) -> None:
+    state = _tethered_step_state("entry_hall")
+    signals: list = []
+    narrator_messages: list = []
+    _install_tethered_step_turn(
+        monkeypatch, target=target, signals=signals,
+        narrator_messages=narrator_messages, director_failures=[True],
+    )
+    client = TestClient(app)
+    user_id = _resolve_user(client, f"tethered-{error_code}")
+    campaign_id = _create_campaign(user_id=user_id, campaign_id=f"tethered-{error_code}", state=state)
+    key = "9a1c6a2e-0d5b-4c69-9d1e-6f6c3f7b8a10" if target is None else "5d0f7b38-1d9e-4a4b-8a43-2f4f1b7c9e21"
+    body = {"message": message, "campaign_id": campaign_id}
+
+    failed = client.post("/api/chat", json=body, headers=_api_headers(user_id, key))
+    assert failed.status_code == 502
+    with session() as db:
+        assert _load_campaign_state(db.get_campaign(campaign_id)) == state
+        assert db.list_campaign_events(campaign_id) == []
+        assert db.count_campaign_turns(campaign_id, user_id) == 0
+
+    narrator_messages.clear()
+    response = client.post("/api/chat", json=body, headers=_api_headers(user_id, key))
+    assert response.status_code == 200
+    payload = response.json()
+    assert "settle back where you began" in payload["reply"]
+    assert signals == [None, None]
+    with session() as db:
+        persisted = _load_campaign_state(db.get_campaign(campaign_id))
+        events = db.list_campaign_events(campaign_id)
+        assert db.count_campaign_turns(campaign_id, user_id) == 1
+        parser_requests = db.conn.execute(
+            text(
+                "SELECT success FROM model_requests WHERE campaign_id = :campaign_id "
+                "AND agent_name = 'ActionParser'"
+            ),
+            {"campaign_id": campaign_id},
+        ).scalars().all()
+    assert parser_requests == [True]
+    assert persisted["player"]["location"] == "entry_hall"
+    assert persisted["story"] == state["story"]
+    assert persisted["player"]["generated_abilities"] == state["player"]["generated_abilities"]
+    assert not any(event.type == "action_parse_failed" for event in events)
+    assert sum(event.type == "tool_execution_failed" for event in events) == 1
+    assert not any(event.type in {"tool_executed", "game_state_updated"} for event in events)
+    request_text = "\n".join(str(item.get("content", "")) for item in narrator_messages)
+    assert '"traversal_failure"' in request_text and "You remain where you started." in request_text
+    assert '"traversal_effect"' not in request_text
+    failure_texts = re.findall(r'"traversal_failure": "([^"]+)"', request_text)
+    assert failure_texts and all("authored" not in failure.casefold() for failure in failure_texts)
+
+    replay = client.post("/api/chat", json=body, headers=_api_headers(user_id, key))
+    assert replay.status_code == 200 and replay.json() == payload
+    assert len(signals) == 2
+    with session() as db:
+        assert db.list_campaign_events(campaign_id) == events
+        assert db.count_campaign_turns(campaign_id, user_id) == 1
+
+
+def test_provider_invented_traversal_target_is_still_unprocessable(monkeypatch) -> None:
+    state = _tethered_step_state("rain_court")
+    signals: list = []
+    _install_tethered_step_turn(
+        monkeypatch, target="Gallery Ascent", signals=signals,
+        narrator_messages=[], director_failures=[],
+    )
+    client = TestClient(app)
+    user_id = _resolve_user(client, "tethered-invented")
+    campaign_id = _create_campaign(user_id=user_id, campaign_id="tethered-invented", state=state)
+    response = client.post(
+        "/api/chat",
+        json={"message": TETHERED_CEILING_MESSAGE, "campaign_id": campaign_id},
+        headers=_api_headers(user_id),
+    )
+    assert response.status_code == 422
+    assert signals == []
+    with session() as db:
+        assert _load_campaign_state(db.get_campaign(campaign_id)) == state
+
+
+def test_tethered_step_gallery_ascent_from_rain_court_still_crosses(monkeypatch) -> None:
+    state = _tethered_step_state("rain_court")
+    signals: list = []
+    _install_tethered_step_turn(
+        monkeypatch, target="Gallery Ascent", signals=signals,
+        narrator_messages=[], director_failures=[],
+    )
+    client = TestClient(app)
+    user_id = _resolve_user(client, "tethered-gallery")
+    campaign_id = _create_campaign(user_id=user_id, campaign_id="tethered-gallery", state=state)
+    response = client.post(
+        "/api/chat",
+        json={"message": "I use tethered step to rise up the Gallery Ascent", "campaign_id": campaign_id},
+        headers=_api_headers(user_id),
+    )
+    assert response.status_code == 200
+    assert signals == [RoomEnteredSignal(room_id="upper_gallery")]
+    with session() as db:
+        assert _load_campaign_state(db.get_campaign(campaign_id))["player"]["location"] == "upper_gallery"

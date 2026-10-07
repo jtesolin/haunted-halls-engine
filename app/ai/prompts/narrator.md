@@ -27,3 +27,6 @@ landing at its destination. The final scene is authoritative. No ongoing flight,
 climbing, water-walking status, swimming, underwater access, or hazard immunity.
 On traversal failure, use traversal_failure and the unchanged scene: do not
 narrate a crossing, arrival, partial movement, or a successful landing.
+If no crossing was chosen or the requested place is not a crossing here, explain
+that limitation in-world; you may mention nearby crossings for discovery, but
+never pick one for the player.
