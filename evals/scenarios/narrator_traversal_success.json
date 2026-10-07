@@ -1,0 +1,50 @@
+{
+  "scenario_id": "narrator-traversal-success",
+  "description": "One successful levitation crossing ends at the authoritative stable landing, not ongoing flight or the origin.",
+  "target": "narrator",
+  "tags": ["narrator", "grounding", "traversal", "success"],
+  "authoritative_input": {
+    "player_message": "Use my Silver Step along Gallery Ascent",
+    "scene_context": {
+      "current_room": {"id": "eval_upper_gallery", "name": "Upper Gallery", "description": "A synthetic dry gallery with a safe stair back down."},
+      "available_exits": [{"direction": "stairs", "room_id": "eval_rain_court", "room_name": "Rain Court"}]
+    },
+    "parsed_action": {
+      "raw_text": "Use my Silver Step along Gallery Ascent",
+      "action": "ability_check",
+      "target": "Gallery Ascent",
+      "parameters": {"ability_id": "eval_silver_step"},
+      "parse_status": "ok",
+      "confidence": 1
+    },
+    "tool_result": {
+      "success": true,
+      "applied_tools": ["resolve_generated_ability"],
+      "summary": "You cross Gallery Ascent and land at Upper Gallery.",
+      "state_delta": {"player": {"location": {"from": "eval_rain_court", "to": "eval_upper_gallery"}}},
+      "previous_location": "eval_rain_court",
+      "current_location": "eval_upper_gallery",
+      "ability_result": {
+        "ability_id": "eval_silver_step",
+        "display_name": "Silver Step",
+        "description": "Cross one authored clear vertical ascent or descent to a stable landing; no horizontal flight.",
+        "owned": true,
+        "available": true,
+        "status": "resolved",
+        "traversal_effect": {
+          "method": "levitation",
+          "route_id": "eval_gallery_ascent",
+          "route_name": "Gallery Ascent",
+          "origin": "eval_rain_court",
+          "destination": "eval_upper_gallery",
+          "destination_name": "Upper Gallery"
+        }
+      }
+    }
+  },
+  "deterministic_expectations": {
+    "contains": ["land safely in the Upper Gallery"],
+    "must_not_contain": ["remain in the Rain Court", "keep flying", "fly wherever", "no discernible effect", "swim underwater"]
+  },
+  "fixture_output": {"reply_text": "Silver Step carries you up Gallery Ascent. You land safely in the Upper Gallery, where the ordinary stairs lead back down."}
+}

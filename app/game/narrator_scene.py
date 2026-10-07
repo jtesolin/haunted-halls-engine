@@ -55,6 +55,7 @@ def build_narrator_scene_context(
     return NarratorSceneContext(
         current_room=NarratorRoom(id=room.id, name=room.name, description=room.description),
         available_exits=world.available_exits(room.id),
+        traversal_routes=world.local_traversal_routes(room.id),
         nearby_items=nearby_narrator_items_for_room(items, room.id),
         inventory_items=inventory_narrator_items(items),
         nearby_npcs=nearby_npcs_for_room(npcs, room.id),

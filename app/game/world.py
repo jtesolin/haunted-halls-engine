@@ -4,6 +4,8 @@ from dataclasses import dataclass, field
 import re
 from typing import Any
 
+from app.schemas.traversal import LocalTraversalRoute, RouteKind, TraversalRoute
+
 
 def normalize_identifier(value: str) -> str:
     normalized = value.strip().casefold()
@@ -28,6 +30,39 @@ class Room:
 @dataclass(frozen=True)
 class World:
     rooms: dict[str, Room]
+    traversal_routes: tuple[TraversalRoute, ...] = ()
+
+    def __post_init__(self) -> None:
+        seen: set[str] = set()
+        counts: dict[str, int] = {}
+        for route in self.traversal_routes:
+            if route.route_id in seen:
+                raise ValueError("Authored traversal route ids must be unique.")
+            if route.origin not in self.rooms or route.destination not in self.rooms:
+                raise ValueError("Authored traversal endpoints must exist in this world.")
+            seen.add(route.route_id)
+            counts[route.origin] = counts.get(route.origin, 0) + 1
+            if counts[route.origin] > 6:
+                raise ValueError("At most six discoverable traversal routes per room are supported.")
+
+    def route_references(self, route: TraversalRoute) -> frozenset[str]:
+        return frozenset(
+            normalize_identifier(value)
+            for value in (
+                route.route_id, route.name, route.destination,
+                self.rooms[route.destination].name,
+            )
+        )
+
+    def local_traversal_routes(self, room_id: str) -> list[LocalTraversalRoute]:
+        return [
+            LocalTraversalRoute(
+                **route.model_dump(exclude={"origin"}),
+                destination_name=self.rooms[route.destination].name,
+            )
+            for route in sorted(self.traversal_routes, key=lambda route: route.route_id)
+            if route.origin == room_id
+        ]
 
     def get_room(self, room_id: str) -> Room | None:
         return self.rooms.get(room_id)
@@ -125,6 +160,7 @@ def build_development_world() -> World:
             description="A long table sits under a cracked chandelier, set for a feast that never came.",
             exits={
                 "east": "grand_corridor",
+                "south": "rain_court",
             },
         ),
         "staircase": Room(
@@ -144,8 +180,60 @@ def build_development_world() -> World:
                 "south": "staircase",
             },
         ),
+        "rain_court": Room(
+            id="rain_court",
+            name="Rain Court",
+            description="An open court beside a flooded channel. A stair and covered bridge offer ordinary access to both landings.",
+            exits={"north": "dining_room", "stairs": "upper_gallery", "bridge": "far_bank"},
+        ),
+        "upper_gallery": Room(
+            id="upper_gallery",
+            name="Upper Gallery",
+            description="A dry stone gallery above the court, with a safe stair back down.",
+            exits={"stairs": "rain_court"},
+        ),
+        "far_bank": Room(
+            id="far_bank",
+            name="Far Bank",
+            description="A stable landing beyond the channel. The covered bridge leads back to the court.",
+            exits={"bridge": "rain_court"},
+        ),
     }
-    return World(rooms=rooms)
+    routes = (
+        TraversalRoute(
+            route_id="gallery_ascent", name="Gallery Ascent", origin="rain_court",
+            destination="upper_gallery", kind=RouteKind.VERTICAL, distance_metres=2,
+            clear_vertical_path=True, continuous_support=True,
+            valid_takeoff=True, valid_landing=True,
+            description="A clear two-metre vertical ascent to a stable gallery landing, beside a continuous stone wall. Not a walking exit.",
+        ),
+        TraversalRoute(
+            route_id="ivy_wall", name="Ivy Wall", origin="rain_court",
+            destination="upper_gallery", kind=RouteKind.SURFACE, distance_metres=5,
+            continuous_support=True,
+            valid_takeoff=True, valid_landing=True,
+            description="A five-metre winding continuous supporting wall reaches the gallery. It is not a clear vertical path or a jumping gap.",
+        ),
+        TraversalRoute(
+            route_id="channel_gap", name="Channel Gap", origin="rain_court",
+            destination="far_bank", kind=RouteKind.GAP, distance_metres=3,
+            valid_takeoff=True, valid_landing=True,
+            description="A three-metre gap between stable takeoff and landing stones. No continuous climb support or vertical path.",
+        ),
+        TraversalRoute(
+            route_id="water_crossing", name="Water Crossing", origin="rain_court",
+            destination="far_bank", kind=RouteKind.WATER, distance_metres=6, water_surface=True,
+            valid_takeoff=True, valid_landing=True,
+            description="A six-metre water-surface crossing between dry stable landings. No underwater access or hazard immunity.",
+        ),
+        TraversalRoute(
+            route_id="wide_gap", name="Wide Gap", origin="rain_court",
+            destination="far_bank", kind=RouteKind.GAP, distance_metres=5,
+            valid_takeoff=True, valid_landing=True,
+            description="A five-metre gap between stable stones: beyond a supernatural jump's three-metre reach. Use the ordinary bridge instead.",
+        ),
+    )
+    return World(rooms=rooms, traversal_routes=routes)
 
 
 DEFAULT_WORLD = build_development_world()

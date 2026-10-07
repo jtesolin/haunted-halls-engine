@@ -218,6 +218,11 @@ class NarratorAgent(BaseAgent):
                         summary = f"The {effect.item_name} is lit."
                     else:
                         summary = f"The {effect.item_name} is extinguished."
+                elif ability_result.traversal_effect is not None:
+                    effect = ability_result.traversal_effect
+                    summary = f"You cross {effect.route_name} and land at {effect.destination_name}."
+                elif ability_result.traversal_failure is not None:
+                    summary = f"{ability_result.traversal_failure} You remain where you started."
                 elif not ability_result.owned:
                     summary = "You do not possess that ability."
                 elif not ability_result.available:

@@ -15,7 +15,7 @@ from app.core.config import settings
 from app.db.session import session
 from app.game.campaign_state import build_fresh_campaign_state
 from app.game.character_progression import ensure_character_progression_state, unlock_ability
-from app.game.world import DEFAULT_WORLD
+from app.game.world import DEFAULT_WORLD, World
 from app.main import app
 from app.orchestration import orchestrator as orchestrator_module
 from app.orchestration.orchestrator import ChatOrchestrator
@@ -28,10 +28,13 @@ from app.schemas.chat import (
     ToolExecutionResult,
 )
 from app.schemas.character_progression import ProgressionTrackId
+from app.schemas.campaign import CampaignCreateRequest
 from app.schemas.director import DirectorInput, NoActionProposal
-from app.schemas.generated_abilities import AbilityObjectEffectOperation
-from app.schemas.story import ItemAcquiredSignal, NpcSpokenToSignal, StorySignal
-from tests.factories import starter_ability_generation
+from app.schemas.generated_abilities import AbilityObjectEffectOperation, TraversalMethod
+from app.schemas.story import ItemAcquiredSignal, NpcSpokenToSignal, RoomEnteredSignal, StorySignal
+from app.schemas.traversal import RouteKind, TraversalRoute
+from app.services.tool_executor import ToolExecutor
+from tests.factories import starter_ability_generation, traversal_ability_generation
 
 pytestmark = pytest.mark.usefixtures("fake_runtime_model_provider")
 
@@ -128,6 +131,264 @@ async def _stub_director_response(*, director_input, model=None):
         usage = None
 
     return _DirectorResult()
+
+
+def _traversal_story_state(method: TraversalMethod) -> dict:
+    state = _story_state()
+    state["player"]["location"] = "grand_corridor"
+    definitions = traversal_ability_generation(method).abilities
+    state["player"]["generated_abilities"] = [definition.model_dump(mode="json") for definition in definitions]
+    for definition in definitions:
+        unlock_ability(state, definition.ability_id)
+    return state
+
+
+def _install_traversal_story_world(monkeypatch, method: TraversalMethod) -> None:
+    """Authored test route into Library, using the same validator as demo content."""
+    kind = {
+        TraversalMethod.LEVITATION: "vertical",
+        TraversalMethod.SPIDER_CLIMB: "surface",
+        TraversalMethod.SUPERNATURAL_JUMP: "gap",
+        TraversalMethod.WATER_WALKING: "water",
+    }[method]
+    route = TraversalRoute(
+        route_id="library_crossing", name="Library Crossing",
+        description="An authored crossing between stable landings.",
+        origin="grand_corridor", destination="library",
+        kind=RouteKind(kind), distance_metres=2,
+        clear_vertical_path=kind == "vertical",
+        continuous_support=kind == "surface",
+        water_surface=kind == "water",
+        valid_takeoff=True, valid_landing=True,
+    )
+    world = World(DEFAULT_WORLD.rooms, (route,))
+    monkeypatch.setattr("app.agents.action_parser.DEFAULT_WORLD", world)
+    orchestrator_module.orchestrator.tool_executor = ToolExecutor(world=world)
+
+
+@pytest.mark.parametrize("method", list(TraversalMethod))
+def test_real_traversal_turn_persists_story_final_context_and_replays_once(monkeypatch, method) -> None:
+    _install_traversal_story_world(monkeypatch, method)
+    state = _traversal_story_state(method)
+    captured_signals = []
+    captured_director = []
+    captured_payloads = []
+    narrator_messages = []
+    original_derive = orchestrator_module.derive_story_signal
+    original_generate = orchestrator_module.orchestrator.narrator_agent.generate
+
+    async def parser_provider(**kwargs):
+        return ActionParserOutput(
+            action=ActionType.ABILITY_CHECK, target="Library Crossing",
+            parameters=ActionParserParameters(ability_id="silver_step"),
+            confidence=1, parse_status="ok",
+        )
+
+    def capture_signal(result):
+        signal = original_derive(result)
+        captured_signals.append(signal)
+        assert result.success and result.current_location == "library"
+        assert result.state_delta == {"player": {"location": {"from": "grand_corridor", "to": "library"}}}
+        return signal
+
+    async def director(*, director_input, model=None):
+        captured_director.append(director_input)
+        assert director_input.current_player_room_id == "library"
+        quest = director_input.story.quests[0]
+        assert quest.completed_objective_ids == ["enter_library"]
+        assert quest.active_objective is not None
+        return await _stub_director_response(director_input=director_input, model=model)
+
+    async def narrator(*, payload, model=None):
+        captured_payloads.append(payload)
+        assert payload.scene_context.current_room.id == "library"
+        return await original_generate(payload=payload, model=model)
+
+    async def narrator_provider(*, messages, **kwargs):
+        narrator_messages.extend(messages)
+        return "You cross Library Crossing and land safely in the Library."
+
+    monkeypatch.setattr("app.agents.action_parser.model_client.generate_structured", parser_provider)
+    monkeypatch.setattr(orchestrator_module, "derive_story_signal", capture_signal)
+    monkeypatch.setattr(orchestrator_module.orchestrator.director_agent, "propose", director)
+    monkeypatch.setattr(orchestrator_module.orchestrator.narrator_agent, "generate", narrator)
+    monkeypatch.setattr("app.agents.narrator.model_client.generate_text", narrator_provider)
+    user_id = _resolve_user(TestClient(app), f"traversal-story-{method.value}")
+    campaign_id = _create_campaign(user_id=user_id, campaign_id=f"traversal-{method.value}", state=state)
+    chat_request = ChatRequest(message="Could my Silver Step carry me along Library Crossing?", campaign_id=campaign_id)
+    first = asyncio.run(orchestrator_module.orchestrator.handle_chat(
+        chat_request, owner_user_id=user_id, idempotency_key="traversal-once",
+    ))
+    with session() as db:
+        persisted = _load_campaign_state(db.get_campaign(campaign_id))
+        persisted_events = db.list_campaign_events(campaign_id)
+        assert db.count_campaign_turns(campaign_id, user_id) == 1
+    assert sum(event.type == "tool_executed" for event in persisted_events) == 1
+    assert sum(event.type == "game_state_updated" for event in persisted_events) == 1
+    assert persisted["player"]["location"] == "library"
+    assert persisted["story"]["quests"]["librarys_whisper"]["objectives"]["enter_library"] == "completed"
+    assert persisted["player"]["generated_abilities"] == state["player"]["generated_abilities"]
+    assert captured_signals == [RoomEnteredSignal(room_id="library")]
+    request_text = "\n".join(str(message.get("content", "")) for message in narrator_messages)
+    assert '"traversal_effect"' in request_text
+    assert "You cross Library Crossing and land at Library." in request_text
+    assert '"summary": "The attempt produces no discernible effect."' not in request_text
+    replay = asyncio.run(orchestrator_module.orchestrator.handle_chat(
+        chat_request, owner_user_id=user_id, idempotency_key="traversal-once",
+    ))
+    assert replay == first
+    assert len(captured_signals) == len(captured_director) == len(captured_payloads) == 1
+    with session() as db:
+        assert _load_campaign_state(db.get_campaign(campaign_id)) == persisted
+        assert db.list_campaign_events(campaign_id) == persisted_events
+        assert db.count_campaign_turns(campaign_id, user_id) == 1
+
+
+def test_real_incompatible_traversal_turn_is_narrated_without_story_or_movement(monkeypatch) -> None:
+    _install_traversal_story_world(monkeypatch, TraversalMethod.WATER_WALKING)
+    state = _traversal_story_state(TraversalMethod.LEVITATION)
+    signals = []
+    messages_seen = []
+    original_derive = orchestrator_module.derive_story_signal
+
+    async def parser_provider(**kwargs):
+        return ActionParserOutput(
+            action=ActionType.ABILITY_CHECK, target="Library Crossing",
+            parameters=ActionParserParameters(ability_id="silver_step"),
+            parse_status="ok", confidence=1,
+        )
+
+    def capture_signal(result):
+        assert result.error_code == "route_incompatible" and not result.success
+        signal = original_derive(result)
+        signals.append(signal)
+        return signal
+
+    async def director(*, director_input, model=None):
+        assert director_input.current_player_room_id == "grand_corridor"
+        assert director_input.story.quests[0].completed_objective_ids == []
+        return await _stub_director_response(director_input=director_input, model=model)
+
+    async def narrator_provider(*, messages, **kwargs):
+        messages_seen.extend(messages)
+        return "Silver Step cannot cross that water. You remain in the Grand Corridor."
+
+    monkeypatch.setattr("app.agents.action_parser.model_client.generate_structured", parser_provider)
+    monkeypatch.setattr(orchestrator_module, "derive_story_signal", capture_signal)
+    monkeypatch.setattr(orchestrator_module.orchestrator.director_agent, "propose", director)
+    monkeypatch.setattr("app.agents.narrator.model_client.generate_text", narrator_provider)
+    user_id = _resolve_user(TestClient(app), "traversal-incompatible")
+    campaign_id = _create_campaign(user_id=user_id, campaign_id="traversal-incompatible", state=state)
+    response = asyncio.run(orchestrator_module.orchestrator.handle_chat(
+        ChatRequest(message="Use my Silver Step on Library Crossing", campaign_id=campaign_id),
+        owner_user_id=user_id,
+    ))
+    assert "remain" in response.reply
+    assert signals == [None]
+    with session() as db:
+        assert _load_campaign_state(db.get_campaign(campaign_id)) == state
+        events = db.list_campaign_events(campaign_id)
+        assert sum(event.type == "tool_execution_failed" for event in events) == 1
+        assert not any(event.type == "game_state_updated" for event in events)
+    text = "\n".join(str(message.get("content", "")) for message in messages_seen)
+    assert '"traversal_failure"' in text and "You remain where you started." in text
+    assert '"traversal_effect"' not in text
+
+
+@pytest.mark.parametrize("failure_stage", ["director", "narrator"])
+def test_real_traversal_rollback_and_same_key_retry(monkeypatch, failure_stage) -> None:
+    _install_traversal_story_world(monkeypatch, TraversalMethod.LEVITATION)
+    state = _traversal_story_state(TraversalMethod.LEVITATION)
+    original_derive = orchestrator_module.derive_story_signal
+    signals = []
+    failing = True
+
+    async def parser_provider(**kwargs):
+        return ActionParserOutput(
+            action=ActionType.ABILITY_CHECK, target="Library Crossing",
+            parameters=ActionParserParameters(ability_id="silver_step"),
+            parse_status="ok", confidence=1,
+        )
+
+    def capture_signal(result):
+        signal = original_derive(result)
+        signals.append(signal)
+        return signal
+
+    async def director(*, director_input, model=None):
+        assert director_input.current_player_room_id == "library"
+        assert director_input.story.quests[0].completed_objective_ids == ["enter_library"]
+        if failing and failure_stage == "director":
+            raise DirectorProviderError("Synthetic failure")
+        return await _stub_director_response(director_input=director_input, model=model)
+
+    async def narrator_provider(**kwargs):
+        if failing and failure_stage == "narrator":
+            raise RuntimeError("Synthetic narrator failure")
+        return "You land safely in the Library."
+
+    monkeypatch.setattr("app.agents.action_parser.model_client.generate_structured", parser_provider)
+    monkeypatch.setattr(orchestrator_module, "derive_story_signal", capture_signal)
+    monkeypatch.setattr(orchestrator_module.orchestrator.director_agent, "propose", director)
+    monkeypatch.setattr("app.agents.narrator.model_client.generate_text", narrator_provider)
+    user_id = _resolve_user(TestClient(app), f"traversal-rollback-{failure_stage}")
+    campaign_id = _create_campaign(user_id=user_id, campaign_id=f"traversal-rollback-{failure_stage}", state=state)
+    chat_request = ChatRequest(message="Use Silver Step on Library Crossing", campaign_id=campaign_id)
+    with pytest.raises(HTTPException):
+        asyncio.run(orchestrator_module.orchestrator.handle_chat(
+            chat_request, owner_user_id=user_id, idempotency_key="retry-crossing",
+        ))
+    with session() as db:
+        assert _load_campaign_state(db.get_campaign(campaign_id)) == state
+        assert db.list_campaign_events(campaign_id) == []
+        assert db.count_campaign_turns(campaign_id, user_id) == 0
+    assert signals == [RoomEnteredSignal(room_id="library")]
+    failing = False
+    first = asyncio.run(orchestrator_module.orchestrator.handle_chat(
+        chat_request, owner_user_id=user_id, idempotency_key="retry-crossing",
+    ))
+    with session() as db:
+        after = _load_campaign_state(db.get_campaign(campaign_id))
+        after_events = db.list_campaign_events(campaign_id)
+        assert db.count_campaign_turns(campaign_id, user_id) == 1
+    assert after["player"]["location"] == "library"
+    assert after["story"]["quests"]["librarys_whisper"]["objectives"]["enter_library"] == "completed"
+    replay = asyncio.run(orchestrator_module.orchestrator.handle_chat(
+        chat_request, owner_user_id=user_id, idempotency_key="retry-crossing",
+    ))
+    assert replay == first and len(signals) == 2
+    with session() as db:
+        assert _load_campaign_state(db.get_campaign(campaign_id)) == after
+        assert db.list_campaign_events(campaign_id) == after_events
+        assert db.count_campaign_turns(campaign_id, user_id) == 1
+
+
+@pytest.mark.parametrize("method", list(TraversalMethod))
+def test_new_campaign_traversal_generation_persists_without_later_regeneration(monkeypatch, method) -> None:
+    calls = []
+    definitions = traversal_ability_generation(method)
+
+    async def generation(*, return_usage=False):
+        calls.append(method)
+        if return_usage:
+            from app.ai.model_client import ModelCallResult
+            return ModelCallResult(output=definitions)
+        return definitions
+
+    monkeypatch.setattr(orchestrator_module.orchestrator.starter_ability_generator, "generate", generation)
+    user_id = _resolve_user(TestClient(app), f"traversal-new-{method.value}")
+    campaign = asyncio.run(orchestrator_module.orchestrator.create_campaign(
+        CampaignCreateRequest(), owner_user_id=user_id,
+    ))
+    with session() as db:
+        saved = _load_campaign_state(db.get_campaign(campaign.campaign_id))
+    assert saved["player"]["generated_abilities"] == definitions.model_dump(mode="json")["abilities"]
+    assert len(saved["player"]["progression"]["unlocked_abilities"]) == 2
+    assert calls == [method]
+    asyncio.run(orchestrator_module.orchestrator.handle_chat(
+        ChatRequest(message="look around", campaign_id=campaign.campaign_id), owner_user_id=user_id,
+    ))
+    assert calls == [method]
 
 
 def test_recall_object_on_heavy_statue_reaches_gameplay_and_safe_narration(

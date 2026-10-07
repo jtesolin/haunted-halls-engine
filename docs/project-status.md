@@ -94,15 +94,25 @@ Stable cross-repository authority and security invariants belong in
   Successful typed generated retrievals emit the existing item-acquisition story
   signal, preserving same-turn quest completion and authored reward processing.
 - **Starter provider contract hardening:** Provider-facing generation uses
-  separate sensory and utility slots with only bounded operation choices;
+  bounded operation choices (originally separate sensory and utility slots);
   deterministic conversion builds the engine-owned mechanics, leaving persisted
   definitions and existing campaigns unchanged. CI exercises the real OpenAI
   Structured Outputs SDK boundary with mocked HTTP and no network or token spend.
+- **Phase 8F4:** Generated levitation, spider climb, supernatural jump, and
+  water walking perform one deterministic authored-route crossing to a stable
+  landing through the player ToolExecutor. Local route/destination grounding,
+  persisted movement, room-entry progression, final-scene narration, rollback,
+  and replay use normal turns. New campaigns choose exactly two mechanically
+  distinct starters from the combined sensing/object/traversal pool; legacy
+  8F2/8F3 saves are not regenerated, rewritten, or backfilled. Rain Court offers
+  a reachable demonstration with ordinary alternatives. See
+  [traversal.md](traversal.md) for constraints, coverage, and staging checks.
 
 ## Current Phase 8 status
 
-**8F3 is implemented.** `keen_eye` remains the authored deterministic Library
-check at difficulty 2.
+**8F4 is implemented; Phase 8 and #52 remain open.** `keen_eye` remains the
+authored deterministic Library check at difficulty 2. Crafting/alchemy is
+explicitly deferred to a later phase, not part of this traversal slice.
 
 The future character-details frontend may expose owned built-in/generated
 abilities alongside inventory and player-facing mechanical summaries. It
@@ -116,7 +126,7 @@ interpreted ability IDs and targets against player text and authoritative
 context instead of requiring a second regex command grammar. Missing provider
 configuration and provider failures do not select fallback gameplay. Tests
 remain provider-free through explicit doubles and mocked SDK HTTP transport.
-Ability grounding selects a unique concrete reference occurrence, applying item
+Ability grounding selects a unique concrete reference occurrence, applying item/route
 namespace qualification to that occurrence and pairing it with a non-overlapping
 player-supplied target rather than conflating invocation and target vocabulary.
 

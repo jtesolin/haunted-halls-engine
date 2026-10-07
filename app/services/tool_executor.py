@@ -136,8 +136,12 @@ class ToolExecutor:
                     )
                 elif ability_result.object_effect is not None:
                     summary = "The targeted object is affected."
+                elif ability_result.traversal_effect is not None:
+                    summary = f"You cross {ability_result.traversal_effect.route_name} and land at {ability_result.traversal_effect.destination_name}."
                 else:
                     summary = ability_result.reason or "The ability cannot be used here."
+                current_room = self.world.get_current_room(state)
+                previous_room = self.world.get_current_room(previous_state)
                 result = ToolExecutionResult(
                     success=succeeded,
                     applied_tools=(
@@ -146,16 +150,42 @@ class ToolExecutor:
                         and (
                             ability_result.presence_effect is not None
                             or ability_result.object_effect is not None
+                            or ability_result.traversal_effect is not None
                         )
                         else ["resolve_ability_check"]
                         if resolved
                         else []
                     ),
                     summary=summary,
-                    state_delta=self._ability_state_delta(
-                        previous_state,
-                        state,
-                        ability_result.object_effect,
+                    state_delta=(
+                        {
+                            "player": {
+                                "location": {
+                                    "from": ability_result.traversal_effect.origin,
+                                    "to": ability_result.traversal_effect.destination,
+                                }
+                            }
+                        }
+                        if ability_result.traversal_effect is not None
+                        else self._ability_state_delta(
+                            previous_state,
+                            state,
+                            ability_result.object_effect,
+                        )
+                    ),
+                    previous_location=(
+                        ability_result.traversal_effect.origin
+                        if ability_result.traversal_effect is not None else None
+                    ),
+                    current_location=state.get("player", {}).get("location"),
+                    previous_room_name=previous_room.name if previous_room else None,
+                    current_room_name=current_room.name if current_room else None,
+                    current_room_description=current_room.description if current_room else None,
+                    available_exits=self.world.available_exits(current_room.id) if current_room else [],
+                    requested_target=target,
+                    resolved_exit=(
+                        ability_result.traversal_effect.destination
+                        if ability_result.traversal_effect is not None else None
                     ),
                     error_code=ability_result.error_code,
                     ability_result=ability_result,

@@ -354,6 +354,8 @@ def derive_story_signal(tool_result: ToolExecutionResult) -> StorySignal | None:
         return None
 
     ability_result = tool_result.ability_result
+    if ability_result is not None and ability_result.traversal_effect is not None:
+        return RoomEnteredSignal(room_id=ability_result.traversal_effect.destination)
     object_effect = ability_result.object_effect if ability_result is not None else None
     if (
         object_effect is not None

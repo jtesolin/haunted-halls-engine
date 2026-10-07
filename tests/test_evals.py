@@ -187,7 +187,7 @@ def test_runner_sets_passed_and_score() -> None:
 
 def test_checked_in_corpus_has_director_and_narrator_cases() -> None:
     scenarios = load_scenarios()
-    assert len(scenarios) == 9
+    assert len(scenarios) == 11
     assert {scenario.target for scenario in scenarios} == {
         ScenarioTarget.DIRECTOR,
         ScenarioTarget.NARRATOR,
@@ -430,6 +430,23 @@ def test_observable_item_scenario_rejects_unlit_contradiction() -> None:
     scenario.actual_output = {"reply_text": "The evaluation lantern is unlit."}
     results = grade_scenario(scenario)
     assert any(result.name == "expected_content" and result.passed is False for result in results)
+
+
+@pytest.mark.parametrize(
+    ("scenario_id", "reply"),
+    [
+        ("narrator-traversal-success", "You land safely in the Upper Gallery and keep flying."),
+        ("narrator-traversal-success", "You remain in the Rain Court; there is no discernible effect."),
+        ("narrator-traversal-success", "You land safely in the Upper Gallery, then fly wherever you want."),
+        ("narrator-traversal-failure", "You remain in the Rain Court, then cross the water and land on the Far Bank."),
+        ("narrator-traversal-failure", "You remain in the Rain Court while you float halfway across."),
+        ("narrator-traversal-failure", "You land on the Far Bank."),
+    ],
+)
+def test_traversal_eval_rejects_representative_contradictions(scenario_id: str, reply: str) -> None:
+    scenario = next(scenario for scenario in load_scenarios() if scenario.scenario_id == scenario_id)
+    scenario.actual_output = {"reply_text": reply}
+    assert any(not result.passed for result in grade_scenario(scenario))
 
 
 def test_narrator_output_rejects_empty_and_whitespace_only_text() -> None:
@@ -702,7 +719,7 @@ def test_offline_runner_uses_fixtures_without_provider_calls(monkeypatch) -> Non
     monkeypatch.setattr("app.ai.model_client.model_client.generate_structured", fail_provider)
     results = run_scenarios(load_scenarios())
     assert all(result.passed for result in results)
-    assert len(results) == 9
+    assert len(results) == 11
 
 
 def test_runner_does_not_mutate_authoritative_fixture() -> None:
@@ -1684,7 +1701,7 @@ def test_offline_eval_execution_does_not_mutate_campaign_or_telemetry_persistenc
     _seed_persistence_rows()
     before = _persistence_row_snapshot()
     results = run_scenarios(load_scenarios())
-    assert len(results) == 9
+    assert len(results) == 11
     after = _persistence_row_snapshot()
     assert after == before
 
