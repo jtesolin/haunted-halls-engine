@@ -1,0 +1,43 @@
+{
+  "scenario_id": "narrator-traversal-failure",
+  "description": "A grounded but incompatible levitation request over water fails without crossing or partial movement.",
+  "target": "narrator",
+  "tags": ["narrator", "grounding", "traversal", "failure"],
+  "authoritative_input": {
+    "player_message": "Use my Silver Step along Water Crossing",
+    "scene_context": {
+      "current_room": {"id": "eval_rain_court", "name": "Rain Court", "description": "A synthetic court beside a flooded channel. An ordinary bridge offers access to the far bank."},
+      "available_exits": [{"direction": "bridge", "room_id": "eval_far_bank", "room_name": "Far Bank"}]
+    },
+    "parsed_action": {
+      "raw_text": "Use my Silver Step along Water Crossing",
+      "action": "ability_check",
+      "target": "Water Crossing",
+      "parameters": {"ability_id": "eval_silver_step"},
+      "parse_status": "ok",
+      "confidence": 1
+    },
+    "tool_result": {
+      "success": false,
+      "summary": "This ability cannot cross that obstacle using its authored constraints.",
+      "state_delta": {},
+      "current_location": "eval_rain_court",
+      "error_code": "route_incompatible",
+      "ability_result": {
+        "ability_id": "eval_silver_step",
+        "display_name": "Silver Step",
+        "description": "Cross one authored clear vertical ascent or descent to a stable landing; no horizontal flight.",
+        "owned": true,
+        "available": true,
+        "status": "ineligible_context",
+        "error_code": "route_incompatible",
+        "reason": "This ability cannot cross that obstacle using its authored constraints."
+      }
+    }
+  },
+  "deterministic_expectations": {
+    "contains": ["remain in the Rain Court"],
+    "must_not_contain": ["land on the Far Bank", "cross the water", "float halfway", "swim underwater", "keep flying"]
+  },
+  "fixture_output": {"reply_text": "Silver Step cannot carry you along that water surface. You remain in the Rain Court; the ordinary bridge is still available."}
+}

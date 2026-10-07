@@ -8,7 +8,9 @@ from app.schemas.character_progression import ProgressionTrackId
 from app.schemas.generated_abilities import (
     AbilityGameplayResult,
     AbilityPresenceEffect,
+    AbilityTraversalEffect,
 )
+from app.schemas.traversal import LocalTraversalRoute
 
 
 class ChatRequest(BaseModel):
@@ -169,6 +171,8 @@ class NarratorAbilityGameplayResult(BaseModel):
     check_result: NarratorAbilityCheckResult | None = None
     presence_effect: AbilityPresenceEffect | None = None
     object_effect: NarratorAbilityObjectEffect | None = None
+    traversal_effect: AbilityTraversalEffect | None = None
+    traversal_failure: str | None = None
 
 
 class NarratorToolExecutionResult(BaseModel):
@@ -184,6 +188,7 @@ class NarratorSceneContext(BaseModel):
 
     current_room: NarratorRoom = Field(default_factory=NarratorRoom)
     available_exits: list[dict[str, str]] = Field(default_factory=list)
+    traversal_routes: list[LocalTraversalRoute] = Field(default_factory=list, max_length=6)
     nearby_items: list[NarratorItem] = Field(default_factory=list)
     inventory_items: list[NarratorItem] = Field(default_factory=list)
     nearby_npcs: list[NearbyNPC] = Field(default_factory=list)

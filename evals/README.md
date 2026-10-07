@@ -119,6 +119,15 @@ Narrator checks are intentionally fixture-specific `contains` and
 `must_not_contain` assertions. They are transparent regression checks, not a
 general semantic-groundedness or narrative-quality metric.
 
+The focused `narrator-traversal-success` and `narrator-traversal-failure`
+fixtures cover a completed stable landing and an incompatible request with
+unchanged location. Regression negatives include arrival after failure,
+partial crossing, remaining at the origin after success, and unrestricted or
+ongoing flight. These substring checks only reject the declared representative
+phrases; they cannot prove arbitrary paraphrases truthful, evaluate negation
+semantically, or establish live model quality. Executor/orchestrator tests,
+not text grading, prove authoritative movement and rollback.
+
 `SubjectiveGrader` is the explicit future model-judge boundary. A later
 milestone may add a separate, live-only grading call with its own result type;
 it must never be silently mixed into deterministic pass/fail assertions.

@@ -156,3 +156,23 @@ Player ability checks execute through the player ToolExecutor, never through
 the Director or WorldAuthorityExecutor. The Narrator receives only the
 authoritative ability definition/result projection and cannot invent an
 unexecuted generated-ability effect.
+
+Generated traversal uses a finite engine-owned method vocabulary (levitation,
+spider climb, supernatural jump, water walking) and a shared deterministic
+authored-route validator. Each player invocation is one atomic crossing between
+valid authored rooms ending at a stable landing, not a persistent effect or
+physics simulation. Jump reach is fixed at three metres of authored crossing
+length; names and flavor cannot alter constraints. Special routes are separate
+from ordinary exits and do not grant walking, NPC/Director movement, or sensing
+adjacency. Parser/Narrator projections expose only bounded local routes.
+Successful traversal emits exactly one ordinary room-entry story signal before
+Director processing; failures leave location unchanged and emit no such signal.
+Normal transactional persistence and completed-request replay remain the
+authority for movement, story changes, and final-scene narration.
+
+New generated starter pairs are exactly two mechanically distinct choices from
+the supported pool, without a sensory/utility pairing requirement. Their
+deterministic signature ignores cosmetic fields and progression-track labels.
+Stricter new-generation validation is separate from compatible persisted-state
+loading: existing definitions are never regenerated, backfilled, or assigned
+guessed traversal semantics.

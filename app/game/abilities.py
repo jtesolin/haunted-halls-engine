@@ -19,6 +19,7 @@ from app.game.items import (
 )
 from app.game.npcs import SUPERNATURAL_NPC_TAGS
 from app.game.world import DEFAULT_WORLD, World, normalize_identifier
+from app.game.traversal import resolve_local_route, validate_route_capability
 from app.schemas.abilities import (
     AbilityAvailabilityResult,
     AbilityAvailabilityStatus,
@@ -40,6 +41,8 @@ from app.schemas.generated_abilities import (
     AbilityEffect,
     GeneratedAbilityDefinition,
     GeneratedAbilityKind,
+    AbilityTraversalEffect,
+    TraversalMethod,
 )
 from app.schemas.chat import (
     NarratorAbilityCheckResult,
@@ -126,6 +129,9 @@ def validate_generated_ability_definition(definition: GeneratedAbilityDefinition
             or definition.mechanics.domain != AbilityDomain.OBJECT
         ):
             raise ValueError("Utility abilities must use a supported object mechanic.")
+    elif definition.kind == GeneratedAbilityKind.TRAVERSAL:
+        if definition.mechanics.effect != AbilityEffect.TRAVERSE or definition.mechanics.domain != AbilityDomain.ROUTE:
+            raise ValueError("Traversal abilities must use the authored route mechanic.")
     if definition.mechanics.detail not in {AbilityDetail.LIMITED, AbilityDetail.PRACTICAL}:
         raise ValueError("Generated ability detail is not supported.")
     if len(definition.mechanics.requires) > 2:
@@ -172,7 +178,7 @@ def validate_starter_ability_definitions(
             ability.ability_id, ability.display_name
         )
     }
-    kinds: set[GeneratedAbilityKind] = set()
+    signatures: set[str] = set()
     for definition in definitions:
         validate_generated_ability_definition(definition)
         if not allow_legacy_generic and _is_legacy_generic_mechanic(definition):
@@ -197,10 +203,17 @@ def validate_starter_ability_definitions(
             seen_references.update(references)
         seen_ids.add(definition.ability_id)
         seen_names.add(normalized_name)
-        kinds.add(definition.kind)
-    if kinds != {GeneratedAbilityKind.SENSORY, GeneratedAbilityKind.UTILITY}:
-        raise ValueError("Starter abilities require one sensory and one utility definition.")
+        if not allow_legacy_generic:
+            signature = generated_mechanical_signature(definition)
+            if signature in signatures:
+                raise ValueError("Starter abilities must be mechanically distinct.")
+            signatures.add(signature)
     return (definitions[0], definitions[1])
+
+
+def generated_mechanical_signature(definition: GeneratedAbilityDefinition) -> str:
+    """Ignore names, IDs, flavor, and progression tracks; only effect semantics count."""
+    return definition.mechanics.model_dump_json()
 
 
 def ability_invocation_references(ability_id: str, display_name: str) -> frozenset[str]:
@@ -456,6 +469,14 @@ def _generated_ability_player_facing_summary(
     definition: GeneratedAbilityDefinition,
 ) -> str:
     """Describe only the bounded meaning of a validated generated mechanic."""
+    if definition.mechanics.effect == AbilityEffect.TRAVERSE:
+        assert definition.mechanics.traversal_method is not None
+        return {
+            TraversalMethod.LEVITATION: "Cross one authored clear vertical ascent or descent to a stable landing; no horizontal flight.",
+            TraversalMethod.SPIDER_CLIMB: "Cross one authored route along a suitable continuous supporting surface to a stable landing.",
+            TraversalMethod.SUPERNATURAL_JUMP: "Jump one authored gap or elevation crossing up to three metres between stable takeoff and landing.",
+            TraversalMethod.WATER_WALKING: "Cross one authored water surface between stable landings; no swimming, underwater access, or hazard immunity.",
+        }[definition.mechanics.traversal_method]
     if (
         definition.kind == GeneratedAbilityKind.SENSORY
         and definition.mechanics.effect == AbilityEffect.SENSE
@@ -514,6 +535,10 @@ def project_narrator_ability_gameplay_result(
         check_id=result.check_id,
         check_result=check_projection,
         presence_effect=result.presence_effect,
+        traversal_effect=result.traversal_effect,
+        traversal_failure=(
+            result.reason if result.error_code and result.error_code.startswith("route_") else None
+        ),
         object_effect=(
             NarratorAbilityObjectEffect(
                 outcome=_narrator_object_outcome(result.object_effect),
@@ -824,6 +849,29 @@ def _resolve_generated_ability_effect(
             **common,
             status=AbilityGameplayStatus.RESOLVED,
             presence_effect=presence_effect,
+        )
+
+    if mechanics.effect == AbilityEffect.TRAVERSE:
+        route, error_code, reason = resolve_local_route(world, room.id, target)
+        if route is not None:
+            error_code, reason = validate_route_capability(route, mechanics)
+        if error_code is not None:
+            return AbilityGameplayResult(
+                **common, status=AbilityGameplayStatus.INELIGIBLE_CONTEXT,
+                error_code=error_code, reason=reason,
+            )
+        assert route is not None and mechanics.traversal_method is not None
+        assert isinstance(player, dict)
+        destination = world.rooms[route.destination]
+        player["location"] = destination.id
+        return AbilityGameplayResult(
+            **common,
+            status=AbilityGameplayStatus.RESOLVED,
+            traversal_effect=AbilityTraversalEffect(
+                method=mechanics.traversal_method,
+                route_id=route.route_id, route_name=route.name, origin=room.id,
+                destination=destination.id, destination_name=destination.name,
+            ),
         )
 
     if not isinstance(target, str) or not target.strip():

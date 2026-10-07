@@ -19,6 +19,7 @@ from app.schemas.generated_abilities import (
     AbilityEffect,
     AbilityObjectState,
     AbilitySenseFilter,
+    TraversalMethod,
 )
 from app.schemas.starter_ability_provider import StarterUtilityOperation
 
@@ -115,7 +116,7 @@ def _provider_output(
     }
     display_name, description = utility_names[operation]
     return {
-        "sensory_ability": {
+        "first_ability": {
             "ability_id": "grave_echo",
             "display_name": "Grave Echo",
             "description": "Sense nearby presence as a faint chill.",
@@ -123,7 +124,7 @@ def _provider_output(
             "sense_filter": sense_filter.value,
             "range": sensory_range,
         },
-        "utility_ability": {
+        "second_ability": {
             "ability_id": f"starter_{operation.value}",
             "display_name": display_name,
             "description": description,
@@ -180,11 +181,15 @@ def _assert_provider_schema_is_minimal_and_closed(
     assert _find_schema_keywords(schema, unsupported_keywords) == set()
     assert schema["type"] == "object"
     assert schema["additionalProperties"] is False
-    assert set(schema["properties"]) == {"sensory_ability", "utility_ability"}
-    assert set(schema["required"]) == {"sensory_ability", "utility_ability"}
-
-    sensory = _resolve_schema_reference(schema["properties"]["sensory_ability"], schema)
-    utility = _resolve_schema_reference(schema["properties"]["utility_ability"], schema)
+    assert set(schema["properties"]) == {"first_ability", "second_ability"}
+    assert set(schema["required"]) == {"first_ability", "second_ability"}
+    variants = [
+        _resolve_schema_reference(variant, schema)
+        for variant in schema["properties"]["first_ability"]["anyOf"]
+    ]
+    assert schema["properties"]["first_ability"]["anyOf"] == schema["properties"]["second_ability"]["anyOf"]
+    assert len(variants) == 3
+    sensory, utility, traversal = variants
     sensory_fields = {
         "ability_id",
         "display_name",
@@ -206,6 +211,11 @@ def _assert_provider_schema_is_minimal_and_closed(
     assert set(sensory["required"]) == sensory_fields
     assert set(utility["properties"]) == utility_fields
     assert set(utility["required"]) == utility_fields
+    traversal_fields = {"ability_id", "display_name", "description", "track", "traversal_method"}
+    assert traversal["additionalProperties"] is False
+    assert set(traversal["properties"]) == set(traversal["required"]) == traversal_fields
+    method_schema = _resolve_schema_reference(traversal["properties"]["traversal_method"], schema)
+    assert set(method_schema["enum"]) == {method.value for method in TraversalMethod}
 
     operation_schema = _resolve_schema_reference(
         utility["properties"]["operation"], schema
@@ -321,3 +331,30 @@ def test_real_openai_sdk_contract_converts_all_supported_operations(
     request = mocked_openai_sdk.requests[0]
     assert isinstance(request["model"], str)
     _assert_provider_schema_is_minimal_and_closed(request)
+
+
+@pytest.mark.parametrize("method", list(TraversalMethod))
+@pytest.mark.parametrize("slot", ["first_ability", "second_ability"])
+def test_real_sdk_traversal_variants(
+    mocked_openai_sdk: MockedOpenAISDK, method: TraversalMethod, slot: str
+) -> None:
+    output = _provider_output(StarterUtilityOperation.RETRIEVE, AbilitySenseFilter.PRESENCE, 0)
+    output[slot] = {
+        "ability_id": "silver_step",
+        "display_name": "Silver Step",
+        "description": "Flavor cannot confer unrestricted movement.",
+        "track": "occult",
+        "traversal_method": method.value,
+    }
+    mocked_openai_sdk.responses.append(_raw_responses_api_json(output))
+    result = asyncio.run(StarterAbilityGenerator().generate(return_usage=True))
+    assert isinstance(result, ModelCallResult) and result.output is not None
+    definitions = validate_starter_ability_definitions(result.output.abilities)
+    traversal = definitions[0 if slot == "first_ability" else 1]
+    mechanics = traversal.mechanics
+    assert traversal.kind.value == "traversal"
+    assert mechanics.traversal_method == method
+    assert mechanics.jump_reach_metres == (3 if method == TraversalMethod.SUPERNATURAL_JUMP else None)
+    assert mechanics.effect == AbilityEffect.TRAVERSE
+    assert mechanics.range == 0 and mechanics.requires == ("nearby",)
+    _assert_provider_schema_is_minimal_and_closed(mocked_openai_sdk.requests[0])

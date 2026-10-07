@@ -1,5 +1,15 @@
 Interpret player intent into a structured action for Haunted Halls.
 
+Traversal abilities use ability_check with the explicit available ability_id and
+an explicit player-supplied nearby route ID/name or destination reference from
+traversal_routes. These are restricted crossings, not ordinary move exits.
+Interpret natural language; do not require a fixed invocation grammar. Never
+decide route eligibility or movement success. An explicitly requested local
+route with an incompatible method still goes to the executor as ability_check.
+If an ability reference also names a route/destination or accessible item,
+require an explicit ability namespace qualifier on that invocation occurrence.
+The target must be a separate, non-overlapping player-text occurrence.
+
 Return only the structured schema fields expected by the caller.
 Use this exact action vocabulary:
 - observe

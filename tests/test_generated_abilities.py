@@ -261,7 +261,7 @@ def test_domain_generated_ability_schema_has_closed_bounded_fields() -> None:
         "bypasses",
     }
     effect_values = set(definitions["AbilityEffect"]["enum"])
-    assert effect_values == {"sense", "minor_utility", "move", "toggle"}
+    assert effect_values == {"sense", "minor_utility", "move", "toggle", "traverse"}
     assert schema["properties"]["abilities"]["type"] == "array"
     assert "prefixItems" not in schema["properties"]["abilities"]
 
@@ -290,7 +290,7 @@ def test_test_owned_starter_factory_provides_valid_deterministic_fixture() -> No
 def test_starter_generation_uses_dedicated_bounded_reasoning_policy(monkeypatch) -> None:
     monkeypatch.setattr(StarterAbilityGenerator, "generate", _STARTER_GENERATE)
     provider_generation = StarterAbilityProviderGeneration(
-        sensory_ability=StarterAbilitySensoryProviderOutput(
+        first_ability=StarterAbilitySensoryProviderOutput(
             ability_id="grave_echo",
             display_name="Grave Echo",
             description="Feel supernatural presence through a faint chill in the air.",
@@ -298,7 +298,7 @@ def test_starter_generation_uses_dedicated_bounded_reasoning_policy(monkeypatch)
             sense_filter=AbilitySenseFilter.SUPERNATURAL_PRESENCE,
             range=1,
         ),
-        utility_ability=StarterAbilityUtilityProviderOutput(
+        second_ability=StarterAbilityUtilityProviderOutput(
             ability_id="whispering_touch",
             display_name="Whispering Grasp",
             description="Draw a small object near with a quiet, unseen pull.",
@@ -351,7 +351,7 @@ def test_starter_generation_prompt_bounds_names_and_descriptions() -> None:
     for requirement in (
         "thematic, evocative name",
         "one to three short words",
-        "sense_filter",
+        "mechanically distinct",
         "retrieve",
         "toggle_open",
         "toggle_lit",

@@ -1,6 +1,7 @@
 """Bounded persisted contracts for campaign-specific generated abilities."""
 
 from enum import StrEnum
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -11,6 +12,7 @@ from app.schemas.character_progression import ProgressionTrackId
 class GeneratedAbilityKind(StrEnum):
     SENSORY = "sensory"
     UTILITY = "utility"
+    TRAVERSAL = "traversal"
 
 
 class AbilityEffect(StrEnum):
@@ -18,11 +20,31 @@ class AbilityEffect(StrEnum):
     MINOR_UTILITY = "minor_utility"
     MOVE = "move"
     TOGGLE = "toggle"
+    TRAVERSE = "traverse"
 
 
 class AbilityDomain(StrEnum):
     SURROUNDINGS = "surroundings"
     OBJECT = "object"
+    ROUTE = "route"
+
+
+class TraversalMethod(StrEnum):
+    LEVITATION = "levitation"
+    SPIDER_CLIMB = "spider_climb"
+    SUPERNATURAL_JUMP = "supernatural_jump"
+    WATER_WALKING = "water_walking"
+
+
+class AbilityTraversalEffect(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    method: TraversalMethod
+    route_id: str
+    route_name: str
+    origin: str
+    destination: str
+    destination_name: str
 
 
 class AbilityChannel(StrEnum):
@@ -94,6 +116,8 @@ class GeneratedAbilityMechanics(BaseModel):
     sense_filter: AbilitySenseFilter | None = None
     object_motion: AbilityObjectMotion | None = None
     object_state: AbilityObjectState | None = None
+    traversal_method: TraversalMethod | None = None
+    jump_reach_metres: Literal[3] | None = None
 
     @field_validator("requires", "bypasses")
     @classmethod
@@ -104,6 +128,26 @@ class GeneratedAbilityMechanics(BaseModel):
 
     @model_validator(mode="after")
     def validate_primitive_combinations(self) -> "GeneratedAbilityMechanics":
+        if self.effect == AbilityEffect.TRAVERSE:
+            valid = (
+                self.domain == AbilityDomain.ROUTE
+                and self.detail == AbilityDetail.PRACTICAL
+                and self.range == 0
+                and self.requires == ("nearby",)
+                and not self.bypasses
+                and self.sense_filter is None
+                and self.object_motion is None
+                and self.object_state is None
+                and self.traversal_method is not None
+                and self.jump_reach_metres == (
+                    3 if self.traversal_method == TraversalMethod.SUPERNATURAL_JUMP else None
+                )
+            )
+            if not valid:
+                raise ValueError("Generated traversal primitives are contradictory.")
+            return self
+        if self.traversal_method is not None or self.jump_reach_metres is not None:
+            raise ValueError("Only traversal mechanics may specify a traversal method or reach.")
         if self.effect == AbilityEffect.SENSE:
             valid_detail = (
                 self.sense_filter is None
@@ -186,5 +230,6 @@ class AbilityGameplayResult(BaseModel):
     check_result: AbilityCheckResult | None = None
     presence_effect: AbilityPresenceEffect | None = None
     object_effect: AbilityObjectEffect | None = None
+    traversal_effect: AbilityTraversalEffect | None = None
     error_code: str | None = None
     reason: str | None = None

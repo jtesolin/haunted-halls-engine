@@ -6,6 +6,7 @@ from openai.types.chat import ChatCompletionMessageParam
 
 from app.agents.base import BaseAgent
 from app.ai.model_client import ModelCallResult, model_client
+from app.game.abilities import validate_starter_ability_definitions
 from app.guardrails.model_policy import ModelPolicy
 from app.guardrails.token_budget import TokenBudget, estimate_tokens
 from app.schemas.generated_abilities import (
@@ -19,9 +20,13 @@ from app.schemas.generated_abilities import (
     GeneratedAbilityKind,
     GeneratedAbilityMechanics,
     StarterAbilityGeneration,
+    TraversalMethod,
 )
 from app.schemas.starter_ability_provider import (
     StarterAbilityProviderGeneration,
+    StarterAbilitySensoryProviderOutput,
+    StarterAbilityUtilityProviderOutput,
+    StarterAbilityTraversalProviderOutput,
     StarterUtilityOperation,
 )
 
@@ -37,9 +42,12 @@ class StarterAbilityGenerator(BaseAgent):
                 "role": "developer",
                 "content": (
                     "Generate exactly two modest non-combat Haunted Halls starter abilities using "
-                    "the schema's sensory_ability and utility_ability fields. Choose a bounded "
-                    "sense_filter and range for the sensory ability, and exactly one supported "
-                    "utility operation: retrieve, toggle_open, or toggle_lit. The engine determines "
+                    "the schema's first_ability and second_ability fields. Choose two mechanically "
+                    "distinct choices from the whole pool: presence or supernatural presence sensing "
+                    "(range 0 or 1), retrieve, toggle_open, toggle_lit, levitation, spider_climb, "
+                    "supernatural_jump, water_walking. Do not require one sensory plus one utility. "
+                    "Names or flavor differences alone do not make two abilities distinct. "
+                    "The engine determines "
                     "all mechanics from these choices; do not add or imply other operations. "
                     "Sensory range may be 0 (current room) or 1 (current and directly adjacent "
                     "rooms). Both abilities are available immediately. Do not use keen_eye or any "
@@ -52,8 +60,14 @@ class StarterAbilityGenerator(BaseAgent):
                     "not identity or biography. Pull only a small portable ordinary item from the "
                     "current room. Toggle only the existing state of a canonically openable or "
                     "lightable nearby item. Do not imply perfect knowledge, read minds, see remotely, "
-                    "bypass darkness or invisibility, unlock objects, move entities, damage or attack, "
-                    "or change quest or world state."
+                    "bypass darkness or invisibility, unlock objects, move entities other than the "
+                    "player on an authored traversal route, damage or attack, "
+                    "or arbitrarily change quest or world state. Traversal performs one crossing on a nearby "
+                    "authored route and ends at a stable landing: levitation only clear vertical "
+                    "ascent/descent; spider climb only continuous supporting surfaces; jump only "
+                    "authored gaps/elevations within three metres; water walking only authored "
+                    "water surfaces between landings. No free flight, ongoing effects, swimming, "
+                    "underwater access, hazard immunity, teleportation, or phasing."
                 ),
             }
         ]
@@ -117,10 +131,49 @@ class StarterAbilityGenerator(BaseAgent):
     def _to_domain_generation(
         self, provider_output: StarterAbilityProviderGeneration
     ) -> StarterAbilityGeneration:
-        sensory = provider_output.sensory_ability
-        utility = provider_output.utility_ability
-        if utility.operation == StarterUtilityOperation.RETRIEVE:
-            utility_mechanics = GeneratedAbilityMechanics(
+        abilities = [
+            self._to_domain_ability(choice)
+            for choice in (provider_output.first_ability, provider_output.second_ability)
+        ]
+        validate_starter_ability_definitions(abilities)
+        return StarterAbilityGeneration(abilities=abilities)
+
+    def _to_domain_ability(
+        self,
+        choice: (
+            StarterAbilitySensoryProviderOutput
+            | StarterAbilityUtilityProviderOutput
+            | StarterAbilityTraversalProviderOutput
+        ),
+    ) -> GeneratedAbilityDefinition:
+        if isinstance(choice, StarterAbilitySensoryProviderOutput):
+            kind = GeneratedAbilityKind.SENSORY
+            mechanics = GeneratedAbilityMechanics(
+                effect=AbilityEffect.SENSE,
+                domain=AbilityDomain.SURROUNDINGS,
+                channel=AbilityChannel.SUPERNATURAL,
+                detail=AbilityDetail.LIMITED,
+                range=choice.range,
+                requires=("nearby",),
+                sense_filter=choice.sense_filter,
+            )
+        elif isinstance(choice, StarterAbilityTraversalProviderOutput):
+            kind = GeneratedAbilityKind.TRAVERSAL
+            mechanics = GeneratedAbilityMechanics(
+                effect=AbilityEffect.TRAVERSE,
+                domain=AbilityDomain.ROUTE,
+                channel=AbilityChannel.SUPERNATURAL,
+                detail=AbilityDetail.PRACTICAL,
+                range=0,
+                requires=("nearby",),
+                traversal_method=choice.traversal_method,
+                jump_reach_metres=(
+                    3 if choice.traversal_method == TraversalMethod.SUPERNATURAL_JUMP else None
+                ),
+            )
+        elif choice.operation == StarterUtilityOperation.RETRIEVE:
+            kind = GeneratedAbilityKind.UTILITY
+            mechanics = GeneratedAbilityMechanics(
                 effect=AbilityEffect.MOVE,
                 domain=AbilityDomain.OBJECT,
                 channel=AbilityChannel.SUPERNATURAL,
@@ -130,12 +183,13 @@ class StarterAbilityGenerator(BaseAgent):
                 object_motion=AbilityObjectMotion.TOWARD_PLAYER,
             )
         else:
+            kind = GeneratedAbilityKind.UTILITY
             object_state = (
                 AbilityObjectState.OPEN
-                if utility.operation == StarterUtilityOperation.TOGGLE_OPEN
+                if choice.operation == StarterUtilityOperation.TOGGLE_OPEN
                 else AbilityObjectState.LIT
             )
-            utility_mechanics = GeneratedAbilityMechanics(
+            mechanics = GeneratedAbilityMechanics(
                 effect=AbilityEffect.TOGGLE,
                 domain=AbilityDomain.OBJECT,
                 channel=AbilityChannel.SUPERNATURAL,
@@ -144,33 +198,12 @@ class StarterAbilityGenerator(BaseAgent):
                 requires=("nearby",),
                 object_state=object_state,
             )
-        return StarterAbilityGeneration(
-            abilities=[
-                GeneratedAbilityDefinition(
-                    ability_id=sensory.ability_id,
-                    display_name=sensory.display_name,
-                    description=sensory.description,
-                    kind=GeneratedAbilityKind.SENSORY,
-                    mechanics=GeneratedAbilityMechanics(
-                        effect=AbilityEffect.SENSE,
-                        domain=AbilityDomain.SURROUNDINGS,
-                        channel=AbilityChannel.SUPERNATURAL,
-                        detail=AbilityDetail.LIMITED,
-                        range=sensory.range,
-                        requires=("nearby",),
-                        sense_filter=sensory.sense_filter,
-                    ),
-                    track=sensory.track,
-                    minimum_points=0,
-                ),
-                GeneratedAbilityDefinition(
-                    ability_id=utility.ability_id,
-                    display_name=utility.display_name,
-                    description=utility.description,
-                    kind=GeneratedAbilityKind.UTILITY,
-                    mechanics=utility_mechanics,
-                    track=utility.track,
-                    minimum_points=0,
-                ),
-            ]
+        return GeneratedAbilityDefinition(
+            ability_id=choice.ability_id,
+            display_name=choice.display_name,
+            description=choice.description,
+            kind=kind,
+            mechanics=mechanics,
+            track=choice.track,
+            minimum_points=0,
         )

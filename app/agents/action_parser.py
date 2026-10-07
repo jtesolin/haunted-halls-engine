@@ -28,6 +28,7 @@ from app.game.world import DEFAULT_WORLD, normalize_identifier
 from app.guardrails.model_policy import ModelPolicy
 from app.guardrails.token_budget import TokenBudget, estimate_tokens
 from app.schemas.chat import ActionParserOutput, ActionType, ParsedAction
+from app.schemas.traversal import LocalTraversalRoute
 
 
 logger = logging.getLogger(__name__)
@@ -60,6 +61,8 @@ class ParserContext(BaseModel):
     nearby_objects: list[str] = Field(default_factory=list)
     inventory: list[str] = Field(default_factory=list)
     accessible_item_references: list[str] = Field(default_factory=list)
+    traversal_routes: list[LocalTraversalRoute] = Field(default_factory=list, max_length=6)
+    accessible_route_references: list[str] = Field(default_factory=list)
     nearby_npcs: list[dict[str, Any]] = Field(default_factory=list)
     status_flags: dict[str, Any] = Field(default_factory=dict)
     abilities: list[dict[str, str | bool]] = Field(default_factory=list)
@@ -291,7 +294,13 @@ class ActionParserAgent(BaseAgent):
                 "available": True,
                 "requires_target": (
                     ability.ability_id in generated_by_id
-                    and generated_by_id[ability.ability_id].kind.value == "utility"
+                    and generated_by_id[ability.ability_id].kind.value in {"utility", "traversal"}
+                ),
+                "target_kind": (
+                    "route"
+                    if ability.ability_id in generated_by_id
+                    and generated_by_id[ability.ability_id].kind.value == "traversal"
+                    else "object"
                 ),
             }
             for ability in project_owned_abilities(state)
@@ -306,6 +315,13 @@ class ActionParserAgent(BaseAgent):
             nearby_objects=nearby_objects,
             inventory=inventory,
             accessible_item_references=sorted(item_references),
+            traversal_routes=DEFAULT_WORLD.local_traversal_routes(current_room_id or ""),
+            accessible_route_references=sorted({
+                reference
+                for route in DEFAULT_WORLD.traversal_routes
+                if route.origin == current_room_id
+                for reference in DEFAULT_WORLD.route_references(route)
+            }),
             nearby_npcs=nearby_npcs,
             status_flags=status_flags,
             abilities=abilities,
@@ -360,10 +376,21 @@ class ActionParserAgent(BaseAgent):
             return self._reject_ability_request(parsed_action, "ambiguous_ability_reference", "ambiguous")
 
         item_references = set(parser_context.accessible_item_references)
+        route_spans = [
+            (start, end)
+            for reference in parser_context.accessible_route_references
+            for start, end in self._canonical_phrase_spans(parsed_action.raw_text, reference)
+        ]
         eligible_occurrences = [
             occurrence
             for occurrence in unique_occurrences
-            if occurrence.canonical_reference not in item_references
+            if (
+                occurrence.canonical_reference not in item_references
+                and not any(
+                    start < occurrence.end and occurrence.start < end
+                    for start, end in route_spans
+                )
+            )
             or self._has_ability_namespace_qualifier(parsed_action.raw_text, occurrence)
         ]
         if not eligible_occurrences:
@@ -374,6 +401,11 @@ class ActionParserAgent(BaseAgent):
         if requires_target and not target:
             return self._reject_ability_request(parsed_action, "required_target_missing")
         if target:
+            if (
+                selected[0].get("target_kind") == "route"
+                and normalize_identifier(target) not in parser_context.accessible_route_references
+            ):
+                return self._reject_ability_request(parsed_action, "route_target_not_local")
             grounded_target = next(
                 (
                     grounded

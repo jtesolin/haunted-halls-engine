@@ -15,7 +15,35 @@ from app.schemas.generated_abilities import (
     GeneratedAbilityKind,
     GeneratedAbilityMechanics,
     StarterAbilityGeneration,
+    TraversalMethod,
 )
+from app.agents.starter_abilities import StarterAbilityGenerator
+from app.schemas.starter_ability_provider import (
+    StarterAbilityProviderGeneration,
+    StarterAbilityTraversalProviderOutput,
+)
+
+
+def traversal_ability_generation(method: TraversalMethod) -> StarterAbilityGeneration:
+    """Exercise deterministic provider conversion without a provider call."""
+    other = (
+        TraversalMethod.WATER_WALKING
+        if method != TraversalMethod.WATER_WALKING else TraversalMethod.LEVITATION
+    )
+    return StarterAbilityGenerator()._to_domain_generation(
+        StarterAbilityProviderGeneration(
+            first_ability=StarterAbilityTraversalProviderOutput(
+                ability_id="silver_step", display_name="Silver Step",
+                description="Purely cosmetic silver shimmer.", track=ProgressionTrackId.OCCULT,
+                traversal_method=method,
+            ),
+            second_ability=StarterAbilityTraversalProviderOutput(
+                ability_id="mist_stride", display_name="Mist Stride",
+                description="Purely cosmetic mist.", track=ProgressionTrackId.OCCULT,
+                traversal_method=other,
+            ),
+        )
+    )
 
 
 def starter_ability_generation() -> StarterAbilityGeneration:

@@ -6,7 +6,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.schemas.character_progression import ProgressionTrackId
-from app.schemas.generated_abilities import AbilitySenseFilter
+from app.schemas.generated_abilities import AbilitySenseFilter, TraversalMethod
 
 
 class StarterUtilityOperation(StrEnum):
@@ -36,10 +36,28 @@ class StarterAbilityUtilityProviderOutput(BaseModel):
     operation: StarterUtilityOperation
 
 
+class StarterAbilityTraversalProviderOutput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    ability_id: str = Field(pattern=r"^[a-z][a-z0-9_]*$")
+    display_name: str
+    description: str
+    track: ProgressionTrackId
+    traversal_method: TraversalMethod
+
+
 class StarterAbilityProviderGeneration(BaseModel):
     """The model's bounded choices, without engine-owned mechanics."""
 
     model_config = ConfigDict(extra="forbid")
 
-    sensory_ability: StarterAbilitySensoryProviderOutput
-    utility_ability: StarterAbilityUtilityProviderOutput
+    first_ability: (
+        StarterAbilitySensoryProviderOutput
+        | StarterAbilityUtilityProviderOutput
+        | StarterAbilityTraversalProviderOutput
+    )
+    second_ability: (
+        StarterAbilitySensoryProviderOutput
+        | StarterAbilityUtilityProviderOutput
+        | StarterAbilityTraversalProviderOutput
+    )
