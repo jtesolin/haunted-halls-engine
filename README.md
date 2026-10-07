@@ -17,6 +17,33 @@ Keep this document updated as engine changes affect architecture, behavior, road
 - Tests use explicit provider doubles or mocked HTTP and never require a real key or make live OpenAI requests.
 - Under Compose, `DATABASE_URL` and `INTERNAL_ENGINE_SERVICE_TOKEN` are set explicitly by the Compose file and override values from this `.env`.
 
+### Usage Limits
+
+The engine defaults to these testing-budget limits (#101):
+
+| Setting | Default |
+| --- | ---: |
+| `MAX_DAILY_PLAYER_TOKENS` | 300,000 |
+| `MAX_DAILY_PLAYER_REQUESTS` | 100 |
+| `MAX_DAILY_PROJECT_TOKENS` | 1,000,000 |
+| `MAX_DAILY_PROJECT_REQUESTS` | 1,000 |
+| `MAX_TURNS_PER_CAMPAIGN` | 20 |
+
+Daily counters reset at midnight UTC. Player requests count user turns; project
+requests count model requests. Token limits use the existing counted model usage
+and pending-call budget checks; accounting and HTTP 429 error contracts are unchanged.
+Environment variables (or local `.env` values) can override these defaults.
+
+Production/staging Cloud Run services and the canonical deployment workflows and
+Terraform configuration in `jtesolin/haunted-halls` were checked for quota overrides:
+none were found. The per-PR preview Terraform configuration also has no quota
+overrides; no preview services were deployed at the time of verification.
+The new defaults take effect when the updated engine image is deployed/promoted.
+Project counters are scoped to each environment's database, so isolated preview
+databases each have their own allowance, not a shared preview-wide budget.
+The token allowance is a testing-budget approximation, not a hard dollar cap.
+Quota-accounting redesign (#102) and campaign title generation (#103) are out of scope.
+
 ## Database Migrations
 
 SQLAlchemy Core is the engine persistence layer. SQLite remains the default lightweight local database for direct development and testing. PostgreSQL is now a supported backend and is the database used by the Docker Compose stack.

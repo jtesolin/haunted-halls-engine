@@ -130,6 +130,23 @@ Ability grounding selects a unique concrete reference occurrence, applying item/
 namespace qualification to that occurrence and pairing it with a non-overlapping
 player-supplied target rather than conflating invocation and target vocabulary.
 
+## Daily usage testing budget
+
+Issue #101 raises the defaults to 300,000 counted model tokens and 100 player
+requests per user per UTC day, and 1,000,000 counted model tokens per environment
+per UTC day. Project requests remain capped at 1,000/day and campaigns at 20 turns.
+UTC reset semantics, model-usage accounting, pending-call checks, and quota error
+contracts are unchanged.
+
+No quota overrides were found in the deployed production/staging Cloud Run
+services or canonical deployment workflows and Terraform in `jtesolin/haunted-halls`.
+Preview Terraform also uses the defaults; no preview services were deployed when
+checked. The limits become effective with the updated engine image deployment
+and production promotion. Isolated preview databases retain separate project
+counters; this is not an aggregate preview-wide or hard dollar budget.
+Quota-accounting redesign (#102) and campaign title generation (#103) remain
+separate follow-ups.
+
 ## Preview environment status
 
 - **Shared preview foundation is implemented and live-verified**
