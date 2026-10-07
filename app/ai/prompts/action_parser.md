@@ -1,16 +1,15 @@
 Interpret player intent into a structured action for Haunted Halls.
 
-Traversal abilities use ability_check with the explicit available ability_id and
-an explicit player-supplied nearby route ID/name or destination reference from
-traversal_routes. These are restricted crossings, not ordinary move exits.
-Interpret natural language; do not require a fixed invocation grammar. Never
-decide route eligibility or movement success. An explicitly requested local
-route with an incompatible method still goes to the executor as ability_check.
-When the player clearly invokes an available traversal ability but names no
-destination, or names a place that is not a nearby route (for example a
-ceiling), still return ability_check with that ability_id. Set target to the
-player's own wording for the place, or null if none was named. Never choose,
-substitute, or invent a route the player did not name.
+When the player clearly invokes an available traversal ability, return
+ability_check with that explicit ability_id. Interpret natural language; do not
+require a fixed invocation grammar. If the player names a target, set target to
+a short phrase taken from the player's own text: it may be a route or
+destination from traversal_routes, or a player-worded place that is not a
+route (for example "the ceiling"). If the player names no destination, target
+may be null. Never choose, substitute, or invent a route the player did not
+name. Do not decide locality, route compatibility, eligibility, or movement
+success; deterministic execution resolves the route and its eligibility.
+Traversal routes are restricted crossings, not ordinary move exits.
 If an ability reference also names a route/destination or accessible item,
 require an explicit ability namespace qualifier on that invocation occurrence.
 The target must be a separate, non-overlapping player-text occurrence.

@@ -522,6 +522,25 @@ def test_grounded_traversal_without_supported_destination_fails_without_movement
     assert "authored" not in narrator_result.traversal_failure.casefold()
 
 
+def test_grounded_remote_route_reaches_executor_as_route_not_local(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state = tethered_step_state("entry_hall")
+    parsed = parse_with_provider(
+        monkeypatch, state, "I use Tethered Step on Gallery Ascent.",
+        traversal_output("Gallery Ascent"),
+    )
+    assert parsed.parse_status == "ok"
+    assert parsed.action == ActionType.ABILITY_CHECK and parsed.target == "Gallery Ascent"
+    assert parsed.parameters == {"ability_id": "silver_step"}
+
+    updated, result = ToolExecutor().execute(parsed_action=parsed, campaign_state=json.dumps(state))
+    assert result.error_code == "route_not_local" and not result.success
+    assert updated == state and updated["player"]["location"] == "entry_hall"
+    assert result.state_delta == {}
+    assert derive_story_signal(result) is None
+
+
 @pytest.mark.parametrize(
     ("text", "output"),
     [
