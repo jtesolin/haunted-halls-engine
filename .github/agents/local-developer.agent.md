@@ -113,7 +113,7 @@ When implementing a new issue or requested change:
    - important design decisions
    - validation performed
    - intentionally deferred or out-of-scope work
-15. Create exactly one PR with the GitHub CLI (`gh pr create`). Do not use the GitHub MCP `create_pull_request` tool for PR creation. Use non-interactive flags such as `--base`, `--head`, `--title`, and `--body` or `--body-file` so PR creation does not open an interactive prompt or MCP form.
+15. If no PR already exists for the current branch, create exactly one PR with the GitHub CLI (`gh pr create`). Otherwise, do not create another PR. Do not use the GitHub MCP `create_pull_request` tool for PR creation. Use non-interactive flags such as `--base`, `--head`, `--title`, and `--body` or `--body-file` so PR creation does not open an interactive prompt or MCP form.
 16. Stop after the PR has been created.
 
 Do not merge.
