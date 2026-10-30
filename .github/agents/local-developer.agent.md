@@ -107,13 +107,13 @@ When implementing a new issue or requested change:
     ```
 
 13. Push the current branch only after the final ancestry verification succeeds.
-14. If no PR already exists for that branch, create exactly one PR using GitHub MCP.
-15. Write a detailed PR description based on the actual implementation, including:
+14. If no PR already exists for that branch, prepare a detailed PR title and description based on the actual implementation, including:
    - purpose
    - implementation summary
    - important design decisions
    - validation performed
    - intentionally deferred or out-of-scope work
+15. Create exactly one PR with the GitHub CLI (`gh pr create`). Do not use the GitHub MCP `create_pull_request` tool for PR creation. Use non-interactive flags such as `--base`, `--head`, `--title`, and `--body` or `--body-file` so PR creation does not open an interactive prompt or MCP form.
 16. Stop after the PR has been created.
 
 Do not merge.
