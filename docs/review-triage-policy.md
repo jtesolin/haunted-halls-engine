@@ -21,7 +21,7 @@ Evaluate review and planning decisions using this precedence:
    as supporting history when needed.
 
 When durable sources conflict, do not silently reconcile them. Surface the
-current code and explicit current issue intent for human escalation.
+current code and explicit current scope contract for human escalation.
 
 ## Dispositions
 
@@ -30,7 +30,7 @@ Every substantive finding receives exactly one of these four dispositions:
 ### `FIX IN THIS PR`
 
 Use when the finding is valid, materially relevant to the current change,
-within the linked issue's coherent scope, and does not require unresolved
+within the current durable scope contract, and does not require unresolved
 architectural or product judgment.
 
 Examples include correctness bugs introduced or exposed by the PR, CI or test
