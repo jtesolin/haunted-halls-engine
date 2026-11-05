@@ -10,14 +10,18 @@ The main Claude Code session is the implementation owner. Keep implementation co
 ## 1. Establish authoritative scope
 
 - Read `CLAUDE.md` / `AGENTS.md` and relevant repository instructions.
-- Read the linked GitHub issue/specification and current code/tests.
+- Read the linked GitHub issue/specification when one exists, plus the current code/tests.
+- For work on an existing PR with no linked issue, use the PR description together with the current base-to-head diff as the durable scope contract.
+- For new feature work, require an explicit issue/specification or equivalent user-authorized scope before implementation.
 - For engine architecture, status, and review policy, use the canonical engine docs referenced by `AGENTS.md`.
+- In the frontend repository, if the canonical engine architecture/status/review-policy documents are not available locally, gather the relevant durable text and pass it to the director instead of omitting that context.
 - If durable sources conflict or required product/architecture intent is undocumented, stop with an escalation instead of guessing.
 
 ## 2. Prepare isolated implementation work
 
-- Use a dedicated branch/worktree for the feature.
-- Follow the repository's existing branch-freshness, commit-message, scope, validation, and initial-PR safeguards.
+- For new explicitly authorized feature work, use a dedicated branch/worktree and follow the repository's existing branch-freshness safeguards.
+- For work on an existing PR, stay on that PR's existing branch/worktree. Do not create a replacement branch or worktree merely to remediate review findings.
+- Follow the repository's existing commit-message, scope, validation, and initial-PR safeguards.
 - Never create a second PR for the same branch.
 - Never merge autonomously.
 
@@ -34,9 +38,9 @@ The main Claude Code session is the implementation owner. Keep implementation co
 
 After the initial PR exists, and after every remediation push:
 
-1. Gather the current PR number, head SHA, linked issue/specification, changed-file list, and current CI state when available.
+1. Gather the current PR number, base and head SHAs, linked issue/specification when present, PR description, current base-to-head diff or scoped patch (including deletions and before/after hunks), changed-file list, and current CI state when available.
 2. Invoke the `haunted-halls-reviewer` subagent with fresh context.
-3. Supply only durable scope/context plus the current change identity; do not pass implementation-conversation rationale as authority.
+3. Supply the durable scope contract, current change identity, and actual diff/scoped patch. Do not pass implementation-conversation rationale as authority.
 4. If the reviewer reports `No substantive review findings.`, proceed to the stop-condition check.
 
 ## 5. Director disposition
@@ -44,7 +48,7 @@ After the initial PR exists, and after every remediation push:
 When candidate findings exist:
 
 1. Invoke the `haunted-halls-director` subagent.
-2. Provide the current PR/head, linked issue/specification, CI state, and complete reviewer findings.
+2. Provide the current PR/base/head, linked issue/specification when present, PR description, current diff/scoped patch, CI state, complete reviewer findings, and any relevant canonical engine architecture/status/review-policy text that is not locally available to the director.
 3. The director independently validates and classifies every substantive finding as:
    - `FIX IN THIS PR`
    - `DEFER`
@@ -69,7 +73,7 @@ Declare `READY FOR HUMAN VALIDATION` only when all are true:
 - the latest head has no `FIX IN THIS PR` findings;
 - there are no unresolved `ESCALATE` findings;
 - required validation is green;
-- the PR is still scoped to its linked issue;
+- the PR is still scoped to its linked issue/specification, or to its PR-description-plus-diff scope contract when no linked issue exists;
 - no merge has occurred.
 
 Report the PR number/head, validation status, review/remediation rounds, any deferred findings, and anything the human should specifically validate.
