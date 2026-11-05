@@ -7,6 +7,12 @@ description: Run the Haunted Halls implementation, independent review, director 
 
 The main Claude Code session is the implementation owner. Keep implementation context in this session. Use isolated subagents for independent review and director judgment.
 
+At the start, determine the workflow mode:
+- **new feature:** explicitly authorized new work with an issue/specification or equivalent user-authorized scope;
+- **existing PR:** review or remediation of an already-published PR.
+
+Do not silently switch modes.
+
 ## 1. Establish authoritative scope
 
 - Read `CLAUDE.md` / `AGENTS.md` and relevant repository instructions.
@@ -27,12 +33,13 @@ The main Claude Code session is the implementation owner. Keep implementation co
 
 ## 3. Implement and validate
 
-- Make the smallest coherent implementation satisfying the issue.
+- Make the smallest coherent implementation satisfying the current scope contract.
 - Run the narrowest relevant validation first, then broader validation as appropriate.
 - Review the final diff for scope creep.
 - Commit validated work.
-- Before the first push/PR, reconcile the unpublished branch with freshly fetched `origin/main` according to the repository workflow.
-- Push and create exactly one PR with non-interactive `gh pr create` if the branch does not already have one.
+- For new feature work only, before the first push/PR, reconcile the unpublished branch with freshly fetched `origin/main` according to the repository workflow.
+- For new feature work only, push and create exactly one PR with non-interactive `gh pr create` if the branch does not already have one.
+- For an existing PR, do not perform the unpublished-branch reconciliation step, do not create another PR, and keep all remediation on the existing published branch/worktree.
 
 ## 4. Independent review
 
