@@ -62,24 +62,46 @@ After the initial PR exists, and after every remediation push:
 4. If the PR changes `.claude/agents/haunted-halls-reviewer.md`, `.claude/agents/haunted-halls-director.md`, or `.claude/skills/haunted-halls-dev-loop/SKILL.md`, do not let the head versions review or direct their own changes. Stop with `ESCALATE` unless the reviewer/director can be instantiated from a trusted-base copy outside the changed PR.
 5. Invoke the `haunted-halls-reviewer` subagent with fresh context only after the trusted boundary is established.
 6. Supply the durable scope contract, current change identity, actual diff/scoped patch, and trusted-base instruction/policy context. Do not pass implementation-conversation rationale as authority.
-7. If the reviewer reports `No substantive review findings.`, proceed to the stop-condition check.
+7. Preserve the reviewer's complete concise output, including its `Review coverage` summary and candidate findings, for the director. A clean reviewer result never skips the director.
 
-## 5. Director disposition
+## 5. Director coverage check and disposition
 
-When candidate findings exist:
+Invoke the `haunted-halls-director` after **every** reviewer result, including a clean review.
 
-1. Invoke the `haunted-halls-director` subagent from the trusted configuration established above.
-2. Provide the current PR/base/head, linked issue/specification when present, PR description, current diff/scoped patch, CI state, complete reviewer findings, trusted-base repository instructions, and relevant trusted-base engine architecture/status/review-policy context.
-3. The director independently validates and classifies every substantive finding as:
+1. Provide the current PR/base/head, linked issue/specification when present, PR description, current diff/scoped patch, CI state, the complete reviewer coverage summary and candidate findings, trusted-base repository instructions, and relevant trusted-base engine architecture/status/review-policy context.
+2. The director first evaluates whether review coverage is sufficient for the material risks in the change.
+3. If the director returns `Review coverage: targeted re-review required`:
+   - invoke the reviewer once more for this head with the director's exact narrow `Targeted re-review instruction`;
+   - provide the same trusted context and current diff;
+   - then invoke the director again with the original review plus targeted follow-up result;
+   - do not allow more than one director-requested targeted re-review for the same PR head. If coverage is still insufficient, stop with `ESCALATE` rather than looping.
+4. When coverage is sufficient, the director validates and classifies every substantive finding as:
    - `FIX IN THIS PR`
    - `DEFER`
    - `REJECT`
    - `ESCALATE`
-4. The implementation session must not override the director's disposition.
-5. If the director returns no `FIX IN THIS PR` items and no `ESCALATE` items, skip remediation, commit, push, and re-review; proceed directly to the stop-condition check.
-6. During this foundation phase, keep the disposition in the Claude session and report it clearly. A later automation phase will persist the same contract as a top-level GitHub PR comment.
+5. The implementation session must not override the director's coverage decision or disposition.
+6. A clean reviewer result with sufficient coverage must still produce a director disposition that explicitly states that no remediation is required.
 
-## 6. Remediate
+## 6. Persist disposition and show the audit trail
+
+The reviewer and director remain read-only. The **main implementation session** owns the GitHub artifact after the director returns a sufficient-coverage disposition.
+
+- Post or update a top-level PR comment headed exactly `## Review disposition` using the director's output.
+- Maintain one authoritative Claude-loop disposition for the current PR head. If a Claude-loop disposition already exists for that same head, update it instead of creating a duplicate. A new head may receive a new/updated disposition; the most recent disposition is authoritative.
+- Do not post implementation rationale as review authority and do not resolve inline review threads.
+- If the disposition cannot be persisted because GitHub access/permissions fail, stop and surface the operational failure rather than declaring the loop ready.
+- After each completed reviewer/director round, print a concise session audit containing:
+  - PR number and head SHA;
+  - reviewer result: `clean` or finding count;
+  - director review-coverage decision;
+  - disposition counts or `no remediation required`;
+  - CI state;
+  - next action: `remediate`, `escalate`, or `human validation`.
+
+Do not dump hidden reasoning or long agent transcripts into the audit trail.
+
+## 7. Remediate
 
 Enter this phase only when at least one finding is `FIX IN THIS PR`.
 
@@ -90,16 +112,20 @@ Enter this phase only when at least one finding is `FIX IN THIS PR`.
 - Commit and push remediation to the existing PR branch without rebasing or rewriting published history unless explicitly directed.
 - Return to independent review.
 
-## 7. Stop condition
+If the director returns no `FIX IN THIS PR` items and no `ESCALATE` items, skip remediation, commit, push, and re-review; proceed directly to the stop-condition check.
+
+## 8. Stop condition
 
 Declare `READY FOR HUMAN VALIDATION` only when all are true:
 
 - the latest head has no `FIX IN THIS PR` findings;
 - there are no unresolved `ESCALATE` findings;
+- director review coverage is `sufficient` for the latest head;
+- the latest director disposition has been persisted as the authoritative top-level `## Review disposition` PR comment;
 - required validation is green;
 - the PR is still scoped to its linked issue/specification, or to its PR-description-plus-diff scope contract when no linked issue exists;
 - no merge has occurred.
 
-Report the PR number/head, validation status, review/remediation rounds, any deferred findings, and anything the human should specifically validate.
+Report the PR number/head, validation status, review/remediation rounds, any targeted re-review, any deferred findings, and anything the human should specifically validate.
 
 Never merge.
