@@ -115,9 +115,12 @@ calls a model.
   projection as `project_owned_abilities`). Empty list when none.
 - A campaign with no persisted state yields empty lists; malformed persisted
   state (invalid JSON, or valid JSON with structurally invalid `items`,
-  item fields, `player`, or progression) returns 500 with a generic detail and
+  item fields, `player`, or progression such as out-of-range track points or a
+  malformed, blank, untrimmed, or duplicate unlocked-ability list) returns 500 with a generic detail and
   no payload content. This read path validates strictly and never repairs or
-  defaults state, unlike the normalizing loader used for gameplay.
+  defaults state, unlike the normalizing loader used for gameplay. Missing
+  optional namespaces (`items`, `player`, `progression`) read as empty, and
+  unknown progression track keys or unknown unlocked ability IDs are ignored.
 
 `GET /api/characters` remains the lightweight `{character_id, name}` list.
 

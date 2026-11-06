@@ -163,6 +163,7 @@ def test_character_detail_malformed_state_does_not_leak_payload() -> None:
     response = client.get("/api/character/char-malformed", headers=headers)
 
     assert response.status_code == 500
+    assert response.json() == {"detail": "Character state is unavailable"}
     assert "secret-marker" not in response.text
 
 
@@ -207,6 +208,54 @@ def _state_player_not_object(state: dict) -> None:
     state["player"] = "secret-marker"
 
 
+def _state_quantity_bool(state: dict) -> None:
+    next(iter(state["items"].values()))["quantity"] = True
+
+
+def _state_missing_description(state: dict) -> None:
+    del next(iter(state["items"].values()))["description"]
+
+
+def _state_progression_null(state: dict) -> None:
+    state["player"]["progression"] = None
+
+
+def _state_progression_not_object(state: dict) -> None:
+    state["player"]["progression"] = ["secret-marker"]
+
+
+def _state_tracks_not_dict(state: dict) -> None:
+    state["player"]["progression"] = {"tracks": ["secret-marker"], "unlocked_abilities": []}
+
+
+def _state_track_out_of_range(state: dict) -> None:
+    state["player"]["progression"] = {"tracks": {"investigation": 99}, "unlocked_abilities": []}
+
+
+def _state_track_string(state: dict) -> None:
+    state["player"]["progression"] = {"tracks": {"occult": "secret-marker"}, "unlocked_abilities": []}
+
+
+def _state_track_bool(state: dict) -> None:
+    state["player"]["progression"] = {"tracks": {"occult": True}, "unlocked_abilities": []}
+
+
+def _state_abilities_duplicate(state: dict) -> None:
+    state["player"]["progression"] = {"tracks": {}, "unlocked_abilities": ["keen_eye", "keen_eye"]}
+
+
+def _state_abilities_blank(state: dict) -> None:
+    state["player"]["progression"] = {"tracks": {}, "unlocked_abilities": [" "]}
+
+
+def _state_abilities_untrimmed(state: dict) -> None:
+    state["player"]["progression"] = {"tracks": {}, "unlocked_abilities": [" keen_eye"]}
+
+
+def _state_generated_abilities_invalid(state: dict) -> None:
+    state["player"]["generated_abilities"] = [{"ability_id": "secret-marker"}]
+
+
 def _state_abilities_not_list(state: dict) -> None:
     state["player"]["progression"] = {"unlocked_abilities": "secret-marker", "tracks": {}}
 
@@ -221,6 +270,18 @@ def _state_abilities_not_list(state: dict) -> None:
         _state_missing_name,
         _state_player_not_object,
         _state_abilities_not_list,
+        _state_quantity_bool,
+        _state_missing_description,
+        _state_progression_null,
+        _state_progression_not_object,
+        _state_tracks_not_dict,
+        _state_track_out_of_range,
+        _state_track_string,
+        _state_track_bool,
+        _state_abilities_duplicate,
+        _state_abilities_blank,
+        _state_abilities_untrimmed,
+        _state_generated_abilities_invalid,
     ],
 )
 def test_character_detail_rejects_structurally_invalid_state(corrupt) -> None:
@@ -235,4 +296,58 @@ def test_character_detail_rejects_structurally_invalid_state(corrupt) -> None:
     response = client.get(f"/api/character/{character_id}", headers=headers)
 
     assert response.status_code == 500
+    assert response.json() == {"detail": "Character state is unavailable"}
     assert "secret-marker" not in response.text
+
+
+@pytest.mark.parametrize("raw", ["null", "[]", "42", "not json secret-marker"])
+def test_character_detail_rejects_non_object_state_text(raw: str) -> None:
+    client = _client()
+    headers = _headers(client, f"detail-raw-{abs(hash(raw))}")
+    character_id = f"char-raw-{abs(hash(raw))}"
+    campaign_id = _campaign_with_character(client, headers, character_id)
+    _set_state(campaign_id, raw)
+
+    response = client.get(f"/api/character/{character_id}", headers=headers)
+
+    assert response.status_code == 500
+    assert response.json() == {"detail": "Character state is unavailable"}
+
+
+@pytest.mark.parametrize("raw", ["", "No campaign state yet."])
+def test_character_detail_empty_or_sentinel_state_is_empty(raw: str) -> None:
+    client = _client()
+    headers = _headers(client, f"detail-sentinel-{len(raw)}")
+    character_id = f"char-sentinel-{len(raw)}"
+    campaign_id = _campaign_with_character(client, headers, character_id)
+    _set_state(campaign_id, raw)
+
+    response = client.get(f"/api/character/{character_id}", headers=headers)
+
+    assert response.status_code == 200
+    assert response.json()["inventory"] == []
+    assert response.json()["abilities"] == []
+
+
+def test_character_detail_empty_object_state_is_empty() -> None:
+    client = _client()
+    headers = _headers(client, "detail-emptyobj")
+    campaign_id = _campaign_with_character(client, headers, "char-emptyobj")
+    _set_state(campaign_id, "{}")
+
+    response = client.get("/api/character/char-emptyobj", headers=headers)
+
+    assert response.status_code == 200
+    assert response.json()["inventory"] == []
+    assert response.json()["abilities"] == []
+
+
+def test_strict_loader_rejects_empty_and_sentinel_text() -> None:
+    from app.game.campaign_state import (
+        InvalidCampaignStateError,
+        load_strict_campaign_state_for_read,
+    )
+
+    for raw in ("", "No campaign state yet."):
+        with pytest.raises(InvalidCampaignStateError):
+            load_strict_campaign_state_for_read(raw)
