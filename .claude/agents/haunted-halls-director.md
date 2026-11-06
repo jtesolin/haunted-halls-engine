@@ -62,6 +62,7 @@ Review evaluated: `Claude independent review for <sha>`
 CI: `green | failed | pending | not found`
 Review coverage: sufficient
 Reviewer result: `clean | <N> substantive finding(s)`
+Targeted re-review: `used | not used` for `<sha>`
 
 ### FIX IN THIS PR
 - <finding id + concise rationale>
@@ -80,7 +81,7 @@ Implement only items under `FIX IN THIS PR`. Do not implement `DEFER`,
 `REJECT`, or `ESCALATE` items without explicit user direction.
 ```
 
-Omit empty disposition sections. If there are no actionable findings and no escalation, include the heading, evaluated head/review/CI fields, `Review coverage: sufficient`, `Reviewer result: clean`, and an implementation instruction stating that no remediation is required.
+Omit empty disposition sections. Always echo whether the targeted re-review was `used` or `not used` for the evaluated head so the main session can persist restart-safe per-head retry state. If there are no actionable findings and no escalation, include the heading, evaluated head/review/CI fields, `Review coverage: sufficient`, `Reviewer result: clean`, the targeted-re-review state, and an implementation instruction stating that no remediation is required.
 
 When review coverage is insufficient and the targeted re-review has **not** yet been consumed for this head, return only:
 
