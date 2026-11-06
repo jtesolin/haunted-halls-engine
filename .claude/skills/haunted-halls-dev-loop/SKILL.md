@@ -13,6 +13,18 @@ At the start, determine the workflow mode:
 
 Do not silently switch modes.
 
+### Loop continuity across follow-up messages
+
+Once this skill is activated for a PR, the main implementation session remains inside that same dev loop across subsequent user messages until one of these happens:
+
+- the user explicitly pauses, cancels, or ends the loop;
+- the loop reaches `READY FOR HUMAN VALIDATION`;
+- the loop stops on an `ESCALATE` or an operational failure that requires human input.
+
+Treat approved remediation or implementation instructions received while the loop is active as part of the existing loop, not as a standalone task. After every remediation push, automatically resume the independent reviewer -> director -> remediation/stop sequence without waiting for another user prompt.
+
+A user message that narrows or clarifies the current remediation does not disable the loop unless it explicitly says to stop, pause, or only perform a bounded action and return without continuing.
+
 ### Existing-PR session provenance
 
 Before entering **existing PR** mode, establish that the Claude session itself is trusted:
