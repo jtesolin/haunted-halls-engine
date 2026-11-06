@@ -100,6 +100,24 @@ silently create or repair schema or authoritative state. Persisted corruption
 or invalid authoritative state must fail explicitly rather than silently
 regenerating replacement state.
 
+### Character detail API contract
+
+`GET /api/character/{character_id}` (authenticated, owner-scoped; unknown or
+foreign characters return 404) returns `character_id`, `name`, `inventory`, and
+`abilities`. Inventory and abilities are read-only projections of the owning
+campaign's persisted authoritative state; the endpoint never mutates state or
+calls a model.
+
+- `inventory`: list of `{id, name, description, quantity}` for items located in
+  the player's inventory. Empty list when none.
+- `abilities`: list of `{ability_id, display_name, description, available,
+  availability_reason}` for owned built-in and generated abilities (same
+  projection as `project_owned_abilities`). Empty list when none.
+- A campaign with no persisted state yields empty lists; malformed persisted
+  state returns 500 with a generic detail and no payload content.
+
+`GET /api/characters` remains the lightweight `{character_id, name}` list.
+
 ## World-authority boundary
 
 Player `ParsedAction` values and the player `ToolExecutor` remain limited to

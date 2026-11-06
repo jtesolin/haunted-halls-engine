@@ -12,7 +12,19 @@ from app.schemas.campaign import (
     CampaignSummary,
     CampaignTurn,
 )
-from app.schemas.character import CharacterInfo, CharacterList
+from app.game.abilities import project_owned_abilities
+from app.game.campaign_state import (
+    InvalidCampaignStateError,
+    load_authoritative_campaign_state,
+)
+from app.game.items import inventory_item_ids
+from app.schemas.character import (
+    CharacterAbility,
+    CharacterDetail,
+    CharacterInfo,
+    CharacterInventoryItem,
+    CharacterList,
+)
 
 router = APIRouter(prefix="/api", tags=["campaign"])
 
@@ -102,19 +114,59 @@ async def list_campaigns(
     return summaries
 
 
-@router.get("/character/{character_id}", response_model=CharacterInfo)
+@router.get("/character/{character_id}", response_model=CharacterDetail)
 async def get_character(
     character_id: str,
     _user_context: AuthenticatedUserContext = Depends(
         require_authenticated_user_context
     ),
-) -> CharacterInfo:
+) -> CharacterDetail:
     owner_user_id = _user_context.internal_user_id
     with session() as db:
         character = db.get_character_for_owner(character_id, owner_user_id)
-    if character is None:
+        if character is None:
+            raise HTTPException(status_code=404, detail="Character not found")
+        campaign = db.get_campaign_for_owner(character.campaign_id, owner_user_id)
+    if campaign is None:
         raise HTTPException(status_code=404, detail="Character not found")
-    return CharacterInfo(character_id=character.character_id, name=character.name)
+
+    inventory: list[CharacterInventoryItem] = []
+    abilities: list[CharacterAbility] = []
+    # A campaign with no persisted state has no inventory or abilities yet;
+    # do not synthesize a fresh starting state for a read-only endpoint.
+    if campaign.state and campaign.state != "No campaign state yet.":
+        try:
+            state = load_authoritative_campaign_state(campaign.state)
+            items = state["items"]
+            inventory = [
+                CharacterInventoryItem(
+                    id=item_id,
+                    name=items[item_id]["name"],
+                    description=items[item_id]["description"],
+                    quantity=items[item_id]["quantity"],
+                )
+                for item_id in inventory_item_ids(items)
+            ]
+            abilities = [
+                CharacterAbility(
+                    ability_id=ability.ability_id,
+                    display_name=ability.display_name,
+                    description=ability.description,
+                    available=ability.available,
+                    availability_reason=ability.availability_reason,
+                )
+                for ability in project_owned_abilities(state)
+            ]
+        except InvalidCampaignStateError:
+            raise HTTPException(
+                status_code=500, detail="Character state is unavailable"
+            ) from None
+    return CharacterDetail(
+        character_id=character.character_id,
+        name=character.name,
+        inventory=inventory,
+        abilities=abilities,
+    )
 
 
 @router.get("/characters", response_model=CharacterList)
