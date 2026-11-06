@@ -33,6 +33,7 @@ Return exactly one coverage decision:
 - `Review coverage: sufficient`
 - `Review coverage: targeted re-review required`
 - `Review coverage: insufficient after targeted re-review`
+- `Review coverage: indeterminate due to targeted re-review launch state`
 
 Use `targeted re-review required` only when material coverage is missing **and** the caller reports state `not used` for this exact head SHA. Provide a narrow `Targeted re-review instruction` naming the missing invariant/helper/boundary to inspect. Do not ask for a generic second review.
 
