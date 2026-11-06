@@ -10,7 +10,11 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from app.game.character_progression import MAX_TRACK_POINTS, MIN_TRACK_POINTS
+from app.game.character_progression import (
+    MAX_TRACK_POINTS,
+    MIN_TRACK_POINTS,
+    PROGRESSION_TRACK_IDS,
+)
 from app.game.items import (
     default_items_state,
     ensure_items_state,
@@ -84,7 +88,10 @@ def _validate_progression_for_read(progression: Any) -> None:
     abilities = progression.get("unlocked_abilities", [])
     if not isinstance(tracks, dict) or not isinstance(abilities, list):
         raise InvalidCampaignStateError("Persisted progression state is malformed.")
-    for points in tracks.values():
+    for track_id in PROGRESSION_TRACK_IDS:
+        if track_id not in tracks:
+            continue
+        points = tracks[track_id]
         if (
             isinstance(points, bool)
             or not isinstance(points, int)

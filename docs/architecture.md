@@ -120,7 +120,8 @@ calls a model.
   no payload content. This read path validates strictly and never repairs or
   defaults state, unlike the normalizing loader used for gameplay. Missing
   optional namespaces (`items`, `player`, `progression`) read as empty, and
-  unknown progression track keys or unknown unlocked ability IDs are ignored.
+  unknown progression track keys (their values are not validated) and
+  well-formed but unknown unlocked ability IDs are ignored and omitted.
 
 `GET /api/characters` remains the lightweight `{character_id, name}` list.
 

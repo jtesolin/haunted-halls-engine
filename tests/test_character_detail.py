@@ -351,3 +351,23 @@ def test_strict_loader_rejects_empty_and_sentinel_text() -> None:
     for raw in ("", "No campaign state yet."):
         with pytest.raises(InvalidCampaignStateError):
             load_strict_campaign_state_for_read(raw)
+
+
+def test_character_detail_ignores_unknown_track_keys_and_ability_ids() -> None:
+    client = _client()
+    headers = _headers(client, "detail-unknown-keys")
+    campaign_id = _campaign_with_character(client, headers, "char-unknown-keys")
+    state = _valid_state()
+    state["player"]["progression"] = {
+        "tracks": {"investigation": 2, "mystery_track": 999, "x": "bad"},
+        "unlocked_abilities": ["keen_eye", "ghost_ability"],
+    }
+    _set_state(campaign_id, json.dumps(state))
+
+    response = client.get("/api/character/char-unknown-keys", headers=headers)
+
+    assert response.status_code == 200
+    abilities = response.json()["abilities"]
+    assert [a["ability_id"] for a in abilities] == ["keen_eye"]
+    assert abilities[0]["available"] is True
+    assert abilities[0]["availability_reason"] is None
