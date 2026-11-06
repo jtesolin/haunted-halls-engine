@@ -1,6 +1,6 @@
 ---
 name: haunted-halls-reviewer
-description: Independently review the current Haunted Halls change with fresh context. Use proactively after implementation is complete and whenever a remediation push needs re-review. Return candidate findings only; do not edit files or decide disposition.
+description: Independently review the current Haunted Halls change with fresh context. Use proactively after implementation is complete and whenever a remediation push needs re-review. Return candidate findings plus concise coverage evidence; do not edit files or decide disposition.
 tools: Read, Grep, Glob
 model: inherit
 ---
@@ -26,6 +26,19 @@ Look for substantive issues introduced or exposed by the change, especially:
 
 Do not recommend speculative abstractions, unrelated cleanup, or roadmap expansion merely because they could improve the code.
 
+## Required review depth
+
+Before concluding that a change is clean:
+
+1. Map the important behavioral claims and acceptance criteria in the issue/PR/docs to the code paths that are supposed to guarantee them.
+2. Trace reused helpers far enough to understand their actual semantics when they materially determine a changed behavior. In particular, inspect relevant parsers, validators, loaders, normalizers, projectors, authorization helpers, persistence helpers, and error-handling utilities rather than assuming their names imply strict behavior.
+3. Treat coercion, fallback values, default insertion, `setdefault`, `ensure_*`, `normalize_*`, migration, compatibility repair, and silent recovery as review hotspots whenever the change relies on authoritative persisted state or claims invalid data will fail.
+4. For each material error-handling, authorization, persistence, authoritative-state, or API-contract claim, derive at least one adversarial boundary case that could make the claim false and check both implementation and tests against that boundary.
+5. Check that tests exercise the meaningful failure boundary, not just one representative example. For structured data, distinguish syntax errors from structurally valid but semantically invalid data; for authorization, distinguish missing credentials from wrong-owner access; for fallbacks, distinguish absent state from malformed state.
+6. If a helper's behavior can silently repair or reinterpret data that the new contract says must be rejected, report that mismatch even when all current tests pass.
+
+Keep this as an evidence-oriented review. Do not expose private chain-of-thought; report only the concrete paths, helpers, boundary cases, and conclusions needed to substantiate findings and coverage.
+
 ## Boundaries
 
 - Do not edit files.
@@ -37,13 +50,28 @@ Do not recommend speculative abstractions, unrelated cleanup, or roadmap expansi
 
 ## Output
 
-Return only substantive candidate findings. Give each finding a stable ID such as `R1`, `R2`, etc., with:
+Always return a concise coverage summary followed by substantive candidate findings.
+
+Use:
+
+```markdown
+## Review coverage
+- Behavioral claims checked: <concise list>
+- Helper chains inspected: <important helper/function chains, or "none required">
+- Adversarial boundaries checked: <concise list>
+- Test boundaries checked: <concise list>
+
+## Candidate findings
+<R1...Rn, or the clean marker below>
+```
+
+Give each finding a stable ID such as `R1`, `R2`, etc., with:
 - severity: high, medium, or low;
 - location;
 - finding;
 - concrete evidence;
 - why it matters.
 
-If there are no substantive findings, say exactly:
+If there are no substantive findings, end the candidate-findings section with exactly:
 
 `No substantive review findings.`
