@@ -10,6 +10,11 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from app.game.character_progression import (
+    MAX_TRACK_POINTS,
+    MIN_TRACK_POINTS,
+    PROGRESSION_TRACK_IDS,
+)
 from app.game.items import (
     default_items_state,
     ensure_items_state,
@@ -73,6 +78,72 @@ def load_authoritative_campaign_state(campaign_state: str) -> dict[str, Any]:
     value: dict[str, Any] = json.loads(campaign_state)
     ensure_items_state(value)
     ensure_npcs_state(value)
+    return value
+
+
+def _validate_progression_for_read(progression: Any) -> None:
+    if not isinstance(progression, dict):
+        raise InvalidCampaignStateError("Persisted progression state is malformed.")
+    tracks = progression.get("tracks", {})
+    abilities = progression.get("unlocked_abilities", [])
+    if not isinstance(tracks, dict) or not isinstance(abilities, list):
+        raise InvalidCampaignStateError("Persisted progression state is malformed.")
+    for track_id in PROGRESSION_TRACK_IDS:
+        if track_id not in tracks:
+            continue
+        points = tracks[track_id]
+        if (
+            isinstance(points, bool)
+            or not isinstance(points, int)
+            or not MIN_TRACK_POINTS <= points <= MAX_TRACK_POINTS
+        ):
+            raise InvalidCampaignStateError("Persisted progression state is malformed.")
+    if (
+        not all(
+            isinstance(a, str) and a and a.strip() == a for a in abilities
+        )
+        or len(set(abilities)) != len(abilities)
+    ):
+        raise InvalidCampaignStateError("Persisted progression state is malformed.")
+
+
+def load_strict_campaign_state_for_read(campaign_state: str) -> dict[str, Any]:
+    """Decode persisted state for read-only projections without repairing it.
+
+    Unlike `load_authoritative_campaign_state()`, this never normalizes or
+    defaults item/progression state. Syntactically valid but structurally
+    invalid state raises `InvalidCampaignStateError` (without echoing payload
+    content). Missing optional namespaces are treated as empty; a present
+    namespace must be well-formed. Unknown progression track keys and unknown
+    unlocked ability IDs are ignored, not rejected. Empty/sentinel text is not
+    state and raises; callers decide how to treat "no persisted state".
+    """
+    if not campaign_state or campaign_state == "No campaign state yet.":
+        raise InvalidCampaignStateError("No persisted campaign state to read.")
+    validate_persisted_campaign_state_json(campaign_state)
+    value: dict[str, Any] = json.loads(campaign_state)
+
+    items = value.get("items", {})
+    if not isinstance(items, dict):
+        raise InvalidCampaignStateError("Persisted items state is not an object.")
+    for item_id, item in items.items():
+        if (
+            not isinstance(item, dict)
+            or not isinstance(item.get("name"), str)
+            or not item["name"]
+            or not isinstance(item.get("description"), str)
+            or not isinstance(item.get("location"), str)
+            or isinstance(item.get("quantity"), bool)
+            or not isinstance(item.get("quantity"), int)
+            or item["quantity"] < 1
+        ):
+            raise InvalidCampaignStateError("Persisted item state is malformed.")
+
+    player = value.get("player", {})
+    if not isinstance(player, dict):
+        raise InvalidCampaignStateError("Persisted player state is not an object.")
+    if "progression" in player:
+        _validate_progression_for_read(player["progression"])
     return value
 
 

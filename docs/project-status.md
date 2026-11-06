@@ -118,9 +118,12 @@ Stable cross-repository authority and security invariants belong in
 authored deterministic Library check at difficulty 2. Crafting/alchemy is
 explicitly deferred to a later phase, not part of this traversal slice.
 
-The future character-details frontend may expose owned built-in/generated
-abilities alongside inventory and player-facing mechanical summaries. It
-remains out of scope for this engine slice.
+The engine character-detail API (`GET /api/character/{character_id}`,
+[#108](https://github.com/jtesolin/haunted-halls-engine/issues/108)) now
+exposes the character's persisted inventory and owned built-in/generated
+abilities with player-facing mechanical summaries as a read-only projection.
+Frontend presentation/UI of those character details remains out of scope for
+this engine slice.
 
 ## Runtime provider and Action Parser contract
 
