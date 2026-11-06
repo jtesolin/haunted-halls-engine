@@ -3,6 +3,7 @@
 ## Claude Code role separation
 
 - The main Claude Code session is the implementation owner for the current issue/PR/worktree.
+- Once the `haunted-halls-dev-loop` is active for a PR, keep that loop active across follow-up user messages and remediation pushes until the user explicitly pauses/cancels it, the loop escalates, or it reaches `READY FOR HUMAN VALIDATION`.
 - Use the `haunted-halls-dev-loop` skill for the implementation -> independent review -> director disposition -> remediation workflow.
 - Use the `haunted-halls-reviewer` subagent for independent code review. It must start from fresh context, inspect material helper semantics and adversarial boundaries, and must not edit files.
 - Use the `haunted-halls-director` subagent after every reviewer result, including a clean review, to classify findings and verify that material review coverage is sufficient. It must not edit files or implement fixes.
