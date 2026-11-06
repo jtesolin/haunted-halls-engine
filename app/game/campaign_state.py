@@ -76,6 +76,49 @@ def load_authoritative_campaign_state(campaign_state: str) -> dict[str, Any]:
     return value
 
 
+def load_strict_campaign_state_for_read(campaign_state: str) -> dict[str, Any]:
+    """Decode persisted state for read-only projections without repairing it.
+
+    Unlike `load_authoritative_campaign_state()`, this never normalizes or
+    defaults item/progression state. Syntactically valid but structurally
+    invalid state raises `InvalidCampaignStateError` (without echoing payload
+    content). Missing optional namespaces are treated as empty.
+    """
+    validate_persisted_campaign_state_json(campaign_state)
+    value: dict[str, Any] = json.loads(campaign_state)
+
+    items = value.get("items", {})
+    if not isinstance(items, dict):
+        raise InvalidCampaignStateError("Persisted items state is not an object.")
+    for item_id, item in items.items():
+        if (
+            not isinstance(item, dict)
+            or not isinstance(item.get("name"), str)
+            or not item["name"]
+            or not isinstance(item.get("description"), str)
+            or not isinstance(item.get("location"), str)
+            or isinstance(item.get("quantity"), bool)
+            or not isinstance(item.get("quantity"), int)
+            or item["quantity"] < 1
+        ):
+            raise InvalidCampaignStateError("Persisted item state is malformed.")
+
+    player = value.get("player", {})
+    if not isinstance(player, dict):
+        raise InvalidCampaignStateError("Persisted player state is not an object.")
+    progression = player.get("progression")
+    if progression is not None:
+        abilities = progression.get("unlocked_abilities", []) if isinstance(progression, dict) else None
+        tracks = progression.get("tracks", {}) if isinstance(progression, dict) else None
+        if (
+            not isinstance(abilities, list)
+            or not all(isinstance(a, str) for a in abilities)
+            or not isinstance(tracks, dict)
+        ):
+            raise InvalidCampaignStateError("Persisted progression state is malformed.")
+    return value
+
+
 def build_fresh_campaign_state() -> dict[str, Any]:
     """Build the authoritative starting state for a brand new campaign."""
     state: dict[str, Any] = {

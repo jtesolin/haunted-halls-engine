@@ -177,3 +177,62 @@ def test_characters_list_remains_lightweight() -> None:
     assert response.json() == {
         "characters": [{"character_id": "char-list", "name": "Investigator"}]
     }
+
+
+def _valid_state() -> dict:
+    return build_fresh_campaign_state()
+
+
+def _state_items_not_object(state: dict) -> None:
+    state["items"] = ["secret-marker"]
+
+
+def _state_item_not_object(state: dict) -> None:
+    state["items"]["secret-marker"] = "oops"
+
+
+def _state_quantity_string(state: dict) -> None:
+    next(iter(state["items"].values()))["quantity"] = "secret-marker"
+
+
+def _state_quantity_zero(state: dict) -> None:
+    next(iter(state["items"].values()))["quantity"] = 0
+
+
+def _state_missing_name(state: dict) -> None:
+    del next(iter(state["items"].values()))["name"]
+
+
+def _state_player_not_object(state: dict) -> None:
+    state["player"] = "secret-marker"
+
+
+def _state_abilities_not_list(state: dict) -> None:
+    state["player"]["progression"] = {"unlocked_abilities": "secret-marker", "tracks": {}}
+
+
+@pytest.mark.parametrize(
+    "corrupt",
+    [
+        _state_items_not_object,
+        _state_item_not_object,
+        _state_quantity_string,
+        _state_quantity_zero,
+        _state_missing_name,
+        _state_player_not_object,
+        _state_abilities_not_list,
+    ],
+)
+def test_character_detail_rejects_structurally_invalid_state(corrupt) -> None:
+    client = _client()
+    headers = _headers(client, f"detail-struct-{corrupt.__name__}")
+    character_id = f"char-struct-{corrupt.__name__}"
+    campaign_id = _campaign_with_character(client, headers, character_id)
+    state = _valid_state()
+    corrupt(state)
+    _set_state(campaign_id, json.dumps(state))
+
+    response = client.get(f"/api/character/{character_id}", headers=headers)
+
+    assert response.status_code == 500
+    assert "secret-marker" not in response.text

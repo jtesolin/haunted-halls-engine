@@ -114,7 +114,10 @@ calls a model.
   availability_reason}` for owned built-in and generated abilities (same
   projection as `project_owned_abilities`). Empty list when none.
 - A campaign with no persisted state yields empty lists; malformed persisted
-  state returns 500 with a generic detail and no payload content.
+  state (invalid JSON, or valid JSON with structurally invalid `items`,
+  item fields, `player`, or progression) returns 500 with a generic detail and
+  no payload content. This read path validates strictly and never repairs or
+  defaults state, unlike the normalizing loader used for gameplay.
 
 `GET /api/characters` remains the lightweight `{character_id, name}` list.
 

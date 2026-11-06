@@ -15,7 +15,7 @@ from app.schemas.campaign import (
 from app.game.abilities import project_owned_abilities
 from app.game.campaign_state import (
     InvalidCampaignStateError,
-    load_authoritative_campaign_state,
+    load_strict_campaign_state_for_read,
 )
 from app.game.items import inventory_item_ids
 from app.schemas.character import (
@@ -136,8 +136,8 @@ async def get_character(
     # do not synthesize a fresh starting state for a read-only endpoint.
     if campaign.state and campaign.state != "No campaign state yet.":
         try:
-            state = load_authoritative_campaign_state(campaign.state)
-            items = state["items"]
+            state = load_strict_campaign_state_for_read(campaign.state)
+            items = state.get("items", {})
             inventory = [
                 CharacterInventoryItem(
                     id=item_id,
