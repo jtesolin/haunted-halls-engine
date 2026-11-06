@@ -80,27 +80,37 @@ After the initial PR exists, and after every remediation push:
 
 Invoke the `haunted-halls-director` after **every** reviewer result, including a clean review.
 
-1. Provide the current PR/base/head, linked issue/specification when present, PR description, current diff/scoped patch, CI state, the complete reviewer coverage summary and candidate findings, trusted-base repository instructions, and relevant trusted-base engine architecture/status/review-policy context.
-2. The director first evaluates whether review coverage is sufficient for the material risks in the change.
-3. If the director returns `Review coverage: targeted re-review required`:
+1. Before invoking the director, inspect top-level PR comments for the stable marker `<!-- haunted-halls-claude-review-disposition -->`.
+   - If exactly one marked comment exists, treat it as the authoritative Claude-loop disposition artifact and recover its per-head targeted-re-review state.
+   - If no marked comment exists, there is no prior Claude-loop retry state.
+   - If more than one marked comment exists, stop with `ESCALATE` because disposition identity is ambiguous.
+2. Determine whether the one targeted re-review has already been consumed for the **current exact head SHA**. A persisted line `Targeted re-review: used for \`<current-head>\`` means consumed. A marker for another head does not consume the allowance for this head.
+3. Provide the current PR/base/head, linked issue/specification when present, PR description, current diff/scoped patch, CI state, the complete reviewer coverage summary and candidate findings, the recovered targeted-re-review state for this head, trusted-base repository instructions, and relevant trusted-base engine architecture/status/review-policy context.
+4. The director first evaluates whether review coverage is sufficient for the material risks in the change.
+5. If the director returns `Review coverage: targeted re-review required`:
+   - verify that the targeted re-review is not already consumed for this head;
+   - **before launching the reviewer**, create or update the single marked authoritative disposition comment so it records `Targeted re-review: used for \`<current-head>\``, the director's targeted instruction, current CI state, and `Review coverage: targeted re-review required`;
    - invoke the reviewer once more for this head with the director's exact narrow `Targeted re-review instruction`;
    - provide the same trusted context and current diff;
-   - then invoke the director again with the original review plus targeted follow-up result;
-   - do not allow more than one director-requested targeted re-review for the same PR head. If coverage is still insufficient, stop with `ESCALATE` rather than looping.
-4. When coverage is sufficient, the director validates and classifies every substantive finding as:
+   - then invoke the director again with the original review plus targeted follow-up result and explicitly report that the retry is already consumed for this head;
+   - do not allow more than one director-requested targeted re-review for the same PR head. If coverage is still insufficient, the director must return the terminal `Review coverage: insufficient after targeted re-review` disposition with `ESCALATE`; never request another targeted review for that head.
+6. When coverage is sufficient, the director validates and classifies every substantive finding as:
    - `FIX IN THIS PR`
    - `DEFER`
    - `REJECT`
    - `ESCALATE`
-5. The implementation session must not override the director's coverage decision or disposition.
-6. A clean reviewer result with sufficient coverage must still produce a director disposition that explicitly states that no remediation is required.
+7. The implementation session must not override the director's coverage decision or disposition.
+8. A clean reviewer result with sufficient coverage must still produce a director disposition that explicitly states that no remediation is required.
 
 ## 6. Persist disposition and show the audit trail
 
 The reviewer and director remain read-only. The **main implementation session** owns the GitHub artifact after the director returns a sufficient-coverage disposition.
 
-- Post or update a top-level PR comment headed exactly `## Review disposition` using the director's output.
-- Maintain one authoritative Claude-loop disposition for the current PR head. If a Claude-loop disposition already exists for that same head, update it instead of creating a duplicate. A new head may receive a new/updated disposition; the most recent disposition is authoritative.
+- The authoritative Claude-loop comment has the exact hidden marker `<!-- haunted-halls-claude-review-disposition -->` followed by the heading `## Review disposition`.
+- Search the PR's top-level comments for that marker before every persistence step. If exactly one exists, **always update that same comment in place**, including after remediation creates a new head. If none exists, create it once. If more than one exists, stop with `ESCALATE` rather than choosing one.
+- Never create a second Claude-loop disposition merely because the head changed. The single marked comment is the stable artifact for the entire PR.
+- Persist the director's output in that comment and include the exact per-head line `Targeted re-review: used for \`<sha>\`` or `Targeted re-review: not used for \`<sha>\``. When a new head is pushed, its retry allowance starts unused unless a targeted re-review is later recorded for that new SHA.
+- When the director requests a targeted re-review, persist the `used for <sha>` marker and targeted instruction **before** launching the retry so a restarted session can recover that the allowance was consumed.
 - Do not post implementation rationale as review authority and do not resolve inline review threads.
 - If the disposition cannot be persisted because GitHub access/permissions fail, stop and surface the operational failure rather than declaring the loop ready.
 - After each completed reviewer/director round, print a concise session audit containing:
@@ -109,7 +119,7 @@ The reviewer and director remain read-only. The **main implementation session** 
   - director review-coverage decision;
   - disposition counts or `no remediation required`;
   - CI state;
-  - next action: `remediate`, `escalate`, or `human validation`.
+  - next action: `targeted re-review`, `remediate`, `escalate`, or `human validation`.
 
 Do not dump hidden reasoning or long agent transcripts into the audit trail.
 
@@ -133,7 +143,7 @@ Declare `READY FOR HUMAN VALIDATION` only when all are true:
 - the latest head has no `FIX IN THIS PR` findings;
 - there are no unresolved `ESCALATE` findings;
 - director review coverage is `sufficient` for the latest head;
-- the latest director disposition has been persisted as the authoritative top-level `## Review disposition` PR comment;
+- the latest director disposition has been persisted in the single stable top-level comment marked `<!-- haunted-halls-claude-review-disposition -->`;
 - required validation is green;
 - the PR is still scoped to its linked issue/specification, or to its PR-description-plus-diff scope contract when no linked issue exists;
 - no merge has occurred.
