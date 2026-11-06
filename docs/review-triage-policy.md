@@ -75,8 +75,12 @@ The director/disposition step must run after every independent-review result,
 including a clean review. The director performs a review-coverage sanity check,
 not a duplicate full code review. It may request one narrow targeted re-review
 per PR head when a material invariant/helper/boundary was not actually
-inspected. If that follow-up still does not establish adequate coverage,
-escalate instead of looping.
+inspected. Consumption of that retry must be persisted against the exact head
+SHA in the single authoritative review-disposition comment before the targeted
+review starts, so a restarted session can recover the state. A new head gets a
+new one-retry allowance. If coverage remains insufficient after the retry has
+been consumed for that head, the director must return a terminal `ESCALATE`
+disposition instead of requesting another retry.
 
 ## Dispositions
 
@@ -138,22 +142,30 @@ agent must:
    as evidence rather than authority.
 6. Check current CI status without waiting for or polling pending CI; report
    pending status when applicable.
-7. Run the director/disposition step for every review result, including a clean
-   review. If material coverage is missing, request at most one narrow targeted
-   re-review for that head; escalate if coverage remains insufficient.
-8. When coverage is sufficient, classify every substantive finding with one of
+7. Before the director/disposition step, locate the single top-level comment
+   marked `<!-- haunted-halls-claude-review-disposition -->` and recover
+   whether the targeted re-review has already been used for the exact current
+   head SHA. Multiple marked comments are an escalation condition.
+8. Run the director/disposition step for every review result, including a clean
+   review. If material coverage is missing and the retry is unused for that
+   head, persist `Targeted re-review: used for <sha>` plus the narrow targeted
+   instruction in the marked comment before launching the retry. If coverage
+   remains insufficient after that consumed retry, return a terminal
+   `ESCALATE` disposition instead of another retry request.
+9. When coverage is sufficient, classify every substantive finding with one of
    the four dispositions, or explicitly state that no remediation is required
    for a clean review.
-9. Post or update exactly one top-level PR comment headed
-   `## Review disposition` for the current head.
-10. Treat duplicate, suppressed, or repeated review findings as one
+10. Maintain exactly one top-level Claude-loop disposition comment for the PR,
+    identified by the hidden marker. Create it only when none exists and always
+    update that same comment in place across remediation rounds and head changes.
+11. Treat duplicate, suppressed, or repeated review findings as one
     substantive finding.
-11. Do not edit code, create branches/PRs/forks, delegate coding work, merge, or
+12. Do not edit code, create branches/PRs/forks, delegate coding work, merge, or
     resolve inline review threads.
-12. Do not automatically create deferred GitHub issues during the initial
+13. Do not automatically create deferred GitHub issues during the initial
     rollout. Describe the follow-up in the disposition and leave issue
     creation for human or ChatGPT confirmation.
-13. Stop after posting or updating the disposition. One review/disposition
+14. Stop after posting or updating the disposition. One review/disposition
     cycle produces one focused triage result.
 
 Use context efficiently: do not resynchronize the whole project or read
@@ -162,10 +174,14 @@ relevant durable documentation are sufficient.
 
 ## `Review disposition` comment contract
 
-Use this stable human- and machine-readable format. Empty disposition sections
-may be omitted, but the heading and exact disposition names must remain stable.
+Use one stable human- and machine-readable comment for the entire PR. The
+comment must begin with the exact hidden marker below; later review/remediation
+rounds and new head SHAs update this same comment in place rather than creating
+another Claude-loop disposition. Empty disposition sections may be omitted, but
+the marker, heading, and exact disposition names must remain stable.
 
 ```markdown
+<!-- haunted-halls-claude-review-disposition -->
 ## Review disposition
 
 PR head evaluated: `<sha>`
@@ -173,6 +189,7 @@ Review evaluated: `<source + review id/timestamp if available>`
 CI: `green | failed | pending | not found`
 Review coverage: `sufficient`
 Reviewer result: `clean | <N> substantive finding(s)`
+Targeted re-review: `used | not used` for `<sha>`
 
 ### FIX IN THIS PR
 - <finding + concise rationale>
@@ -191,6 +208,18 @@ Implement only items under `FIX IN THIS PR`. Do not implement `DEFER`,
 `REJECT`, or `ESCALATE` items without explicit user direction.
 ```
 
-When a reliable triage-owned disposition comment already exists, a later triage
-pass should update it. Otherwise it may create a new top-level disposition;
-the most recent `Review disposition` remains authoritative for remediation.
+When the director requests the one targeted re-review for a head, update the
+same marked comment *before* launching the retry so it records:
+
+- `Review coverage: targeted re-review required`;
+- `Targeted re-review: used for <sha>`; and
+- the narrow targeted re-review instruction.
+
+That persisted marker is the restart-safe record that the per-head retry was
+consumed. If the targeted review still leaves coverage insufficient, update the
+same comment with `Review coverage: insufficient after targeted re-review`
+and an `ESCALATE` disposition; do not request another retry for that head.
+
+If no marked comment exists, create it once. If exactly one exists, always
+update it in place across head changes. If multiple marked comments exist,
+escalate rather than guessing which is authoritative.
