@@ -79,12 +79,21 @@ inspected.
 
 The targeted-re-review lifecycle for an exact head SHA is `not used -> reserved
 -> used`. Persist `reserved` before launching the targeted reviewer, then
-transition to `used` only after the reviewer invocation succeeds. A restarted
-session that recovers `reserved` must fail closed with escalation because it
-cannot prove whether launch completed. A new head gets a fresh `not used`
-allowance. If coverage remains insufficient after state `used`, the director
-must return a terminal `ESCALATE` disposition instead of requesting another
-retry.
+transition to `used` only after the reviewer invocation succeeds and returns a
+task/handle. If invocation fails before a task/handle is returned, leave the
+retry durably `reserved`, obtain and persist the Director's terminal
+retry-state `ESCALATE` disposition, and stop; do not silently reset or retry.
+A restarted session that recovers `reserved` must also fail closed with
+escalation because it cannot prove whether launch completed. A new head gets a
+fresh `not used` allowance. If coverage remains insufficient after state
+`used`, the director must return a terminal `ESCALATE` disposition instead
+of requesting another retry.
+
+Every durable retry/disposition write is also head-bound. Immediately before
+writing `reserved`, `used`, or a complete Director disposition, re-fetch the
+PR head and require an exact match with the head the state/result evaluates. If
+the head changed while review work was running, do not persist the stale result;
+restart review on the new head.
 
 ### Claude-loop single-writer invariant
 
@@ -190,21 +199,37 @@ durable Claude disposition artifact is expected.
    or `used`, and provide that exact state to the director on every handoff.
 6. Run the director/disposition step for every Claude review result, including
    a clean review.
-7. If material coverage is missing and state is `not used`, persist
-   `Targeted re-review: reserved for <sha>` plus the narrow targeted instruction
-   before launch. After the reviewer invocation succeeds, immediately transition
-   the same comment to `Targeted re-review: used for <sha>`.
-8. A recovered `reserved` state is ambiguous and must terminate with the
-   director's retry-state `ESCALATE` disposition rather than launching another
-   retry.
-9. When coverage is sufficient, classify every substantive finding with one of
-   the four dispositions, or explicitly state that no remediation is required
-   for a clean review.
-10. If coverage remains insufficient after state `used`, persist the director's
-    terminal `ESCALATE` disposition before stopping.
-11. Maintain exactly one trusted Claude-loop disposition comment for the PR and
+7. If material coverage is missing and state is `not used`, re-fetch the PR
+   head and require it to still match the reviewed head before persisting
+   `Targeted re-review: reserved for <sha>` plus the narrow targeted
+   instruction.
+8. Re-fetch the head again immediately before targeted-review launch. If it
+   changed, do not launch the stale retry; restart review on the new head.
+9. After reviewer invocation succeeds and returns a task/handle, re-fetch the PR
+   head before transitioning the same comment to
+   `Targeted re-review: used for <sha>`. If the head changed, do not write stale
+   retry state or use that targeted review as current-head evidence; restart
+   review on the new head.
+10. If reviewer invocation fails before returning a task/handle, retain
+    `reserved`, obtain the Director's terminal retry-state `ESCALATE`
+    disposition using the explicit launch-failure fact, revalidate that the head
+    is still the same, persist that terminal result, and stop. Do not silently
+    reset the retry or attempt another launch.
+11. A recovered `reserved` state is ambiguous and must terminate with the
+    director's retry-state `ESCALATE` disposition rather than launching another
+    retry.
+12. Before persisting any complete Director disposition, re-fetch the PR head
+    and require it to equal the head that disposition evaluates. If it changed,
+    do not persist the stale result; restart review on the new head.
+13. When coverage is sufficient, classify every substantive finding with one of
+    the four dispositions, or explicitly state that no remediation is required
+    for a clean review.
+14. If coverage remains insufficient after state `used`, persist the director's
+    terminal `ESCALATE` disposition before stopping, subject to the same head
+    revalidation.
+15. Maintain exactly one trusted Claude-loop disposition comment for the PR and
     update it in place across remediation rounds and head changes.
-12. Immediately after the active Claude loop pushes a remediation commit, the
+16. Immediately after the active Claude loop pushes a remediation commit, the
     trusted comment may still name the prior head until the mandatory fresh
     reviewer/Director round completes. During this narrow transition, the stale
     disposition must not authorize implementation work, but the active loop must
@@ -299,9 +324,13 @@ same trusted marked comment *before* launching the retry so it records:
 - `Targeted re-review: reserved for <sha>`; and
 - the narrow targeted re-review instruction.
 
-After the reviewer invocation succeeds, immediately update that same comment to
-`Targeted re-review: used for <sha>`. If the session restarts while the
-persisted state is still `reserved`, update the same comment with
+After the reviewer invocation succeeds and returns a task/handle, re-fetch the
+PR head. Only when it still equals the reviewed head may the same comment be
+updated to `Targeted re-review: used for <sha>`. If the invocation itself fails
+before returning a task/handle, keep `reserved`, obtain the Director's terminal
+retry-state `ESCALATE` disposition, revalidate the same head, persist that
+terminal result, and stop. If the session restarts while the persisted state is
+still `reserved`, update the same comment with
 `Review coverage: indeterminate due to targeted re-review launch state` and a
 terminal `ESCALATE` disposition; do not launch another retry without explicit
 human/external recovery.
@@ -322,7 +351,10 @@ A stale `PR head evaluated` value is expected only during the already-active
 Claude loop's immediate post-remediation transition. In that case, do not use
 the stale disposition as a work queue; run the required fresh review on the new
 head and replace the same comment contents with the new-head disposition.
-Standalone consumers must stop rather than acting on a stale-head disposition.
+Separately, if the PR head changes while reviewer/Director work is in flight,
+that completed work is stale evidence and must not be persisted as the current
+disposition. Standalone consumers must stop rather than acting on a stale-head
+disposition.
 
 
 ## Non-Claude `Review disposition` comment contract
