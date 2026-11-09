@@ -440,8 +440,21 @@ class Repository:
             .correlate(campaigns)
             .scalar_subquery()
         )
+        character_id = (
+            select(characters.c.character_id)
+            .where(characters.c.campaign_id == campaigns.c.campaign_id)
+            .order_by(characters.c.created_at.asc(), characters.c.id.asc())
+            .limit(1)
+            .correlate(campaigns)
+            .scalar_subquery()
+        )
         rows = self.conn.execute(
-            select(campaigns.c.campaign_id, campaigns.c.name, last_message.label("last_message"))
+            select(
+                campaigns.c.campaign_id,
+                campaigns.c.name,
+                last_message.label("last_message"),
+                character_id.label("character_id"),
+            )
             .where(campaigns.c.owner_user_id == owner_user_id)
             .order_by(campaigns.c.created_at.desc())
         ).mappings().all()
@@ -450,9 +463,23 @@ class Repository:
                 "campaign_id": row["campaign_id"],
                 "name": row["name"],
                 "last_message": row["last_message"],
+                "character_id": row["character_id"],
             }
             for row in rows
         ]
+
+    def get_campaign_character_id(self, campaign_id: str) -> Optional[str]:
+        """Return the persisted character ID for a campaign, or None.
+
+        The schema does not enforce one character per campaign, so the earliest
+        created row is chosen deterministically.
+        """
+        return self.conn.execute(
+            select(characters.c.character_id)
+            .where(characters.c.campaign_id == campaign_id)
+            .order_by(characters.c.created_at.asc(), characters.c.id.asc())
+            .limit(1)
+        ).scalar_one_or_none()
 
     def get_campaign_for_owner(
         self, campaign_id: str, owner_user_id: str

@@ -23,9 +23,14 @@ class CampaignDetail(BaseModel):
     description: Optional[str] = None
     messages: List[CampaignTurn]
     truncated: bool
+    # Persisted campaign->character association; null when the campaign has no
+    # character row. Use with GET /api/character/{character_id}.
+    character_id: Optional[str] = None
 
 
 class CampaignSummary(BaseModel):
     campaign_id: str
     name: str
     last_message: Optional[str] = None
+    # Persisted campaign->character association; null when none exists.
+    character_id: Optional[str] = None
