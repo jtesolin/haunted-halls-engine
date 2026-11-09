@@ -25,6 +25,16 @@ Treat approved remediation or implementation instructions received while the loo
 
 A user message that narrows or clarifies the current remediation does not disable the loop unless it explicitly says to stop, pause, or only perform a bounded action and return without continuing.
 
+### Single-writer ownership
+
+The Claude dev loop is a **single-writer protocol per PR**, not a distributed lock:
+
+- Exactly one Claude implementation session may own an active dev loop for a PR at a time.
+- Do not intentionally start or continue a second Claude implementation session against the same PR while another session owns its loop.
+- The durable disposition comment and `not used -> reserved -> used` retry lifecycle assume this single-writer invariant. Under that invariant, the loop permits at most one director-requested targeted re-review per head.
+- If concurrent Claude implementation ownership is known or reasonably suspected—for example, two sessions are both attempting review-state transitions or GitHub writes for the same PR—stop with `ESCALATE`. Do not try to resolve ownership by last-write-wins behavior, overwrite the other session's state, or launch a targeted re-review.
+- Reviewer and Director subagents spawned by the owning implementation session are part of that one loop and do not count as additional implementation owners.
+
 ### Existing-PR session provenance
 
 Before entering **existing PR** mode, establish that the Claude session itself is trusted:
