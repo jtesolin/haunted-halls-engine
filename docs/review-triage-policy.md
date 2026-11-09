@@ -86,6 +86,24 @@ allowance. If coverage remains insufficient after state `used`, the director
 must return a terminal `ESCALATE` disposition instead of requesting another
 retry.
 
+### Claude-loop single-writer invariant
+
+The Claude dev loop uses the PR comment as durable workflow state, but that
+comment is **not** a distributed lock. The protocol therefore requires exactly
+one active Claude implementation session to own a PR loop at a time.
+
+- The at-most-one-targeted-re-review-per-head guarantee is conditional on this
+  single-writer invariant.
+- Reviewer and Director subagents spawned by the owning implementation session
+  are part of that one loop and are not additional implementation owners.
+- Do not intentionally run two Claude implementation sessions against the same
+  PR concurrently.
+- If concurrent implementation ownership is known or reasonably suspected,
+  stop with `ESCALATE` before performing another review-state transition,
+  GitHub disposition write, or targeted-review launch.
+- Do not resolve concurrent ownership through last-write-wins behavior or by
+  overwriting another session's durable state.
+
 ## Dispositions
 
 Every substantive finding receives exactly one of these four dispositions:
