@@ -125,6 +125,16 @@ abilities with player-facing mechanical summaries as a read-only projection.
 Frontend presentation/UI of those character details remains out of scope for
 this engine slice.
 
+The authenticated campaign detail and list responses
+(`GET /api/campaign/{campaign_id}`, `GET /api/campaigns`,
+[#111](https://github.com/jtesolin/haunted-halls-engine/issues/111)) now expose
+a nullable `character_id` read from the persisted campaign-to-character
+association, so the frontend can identify the campaign's character and call the
+character-detail API. It is `null` when no character row exists; if several
+exist, the earliest-created one is returned deterministically. Owner scoping and
+other campaign fields are unchanged. See the contract in
+[architecture.md](architecture.md).
+
 ## Runtime provider and Action Parser contract
 
 Application startup requires configured OpenAI provider access. Model-backed
