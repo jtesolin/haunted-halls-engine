@@ -42,6 +42,13 @@ from app.memory.retriever import (
 from app.schemas.events import GameEventPayload, GameEventType
 
 
+STARTER_CHARACTER_NAME = "Investigator"
+
+
+def starter_character_id(campaign_id: str) -> str:
+    return f"character_{campaign_id}"
+
+
 class ChatRequestIdempotencyOwnershipError(RuntimeError):
     """Raised when a chat request idempotency claim cannot be completed by its owner.
 
@@ -395,6 +402,37 @@ class Repository:
             datetime.fromisoformat(created_at),
             owner_user_id=owner_user_id,
         )
+
+    def ensure_campaign_character(self, campaign_id: str) -> str:
+        """Return the campaign's character ID, creating the starter row if absent.
+
+        The character ID is derived deterministically from the campaign ID so
+        retries and concurrent callers converge on one row (``character_id`` is
+        unique). Name and inventory/abilities are not duplicated here: the
+        character-detail API projects inventory and abilities from the
+        campaign's persisted game state.
+        """
+        existing = self.get_campaign_character_id(campaign_id)
+        if existing is not None:
+            return existing
+        character_id = starter_character_id(campaign_id)
+        try:
+            with self.conn.begin_nested():
+                self.conn.execute(
+                    insert(characters).values(
+                        character_id=character_id,
+                        campaign_id=campaign_id,
+                        name=STARTER_CHARACTER_NAME,
+                        description=None,
+                        created_at=datetime.utcnow().isoformat(),
+                    )
+                )
+        except IntegrityError:
+            pass
+        resolved = self.get_campaign_character_id(campaign_id)
+        if resolved is None:
+            raise RuntimeError("failed to create campaign character")
+        return resolved
 
     def _row_to_campaign(self, row) -> CampaignDBModel:
         return CampaignDBModel(
