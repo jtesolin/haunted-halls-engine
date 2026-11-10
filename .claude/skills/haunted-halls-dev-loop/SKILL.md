@@ -99,66 +99,90 @@ A remediation push creates an expected cross-head transition: the newest valid C
 
 Invoke the `haunted-halls-director` after **every** reviewer result, including a clean review.
 
-1. Resolve the authenticated GitHub identity used by the implementation session (for example, `gh api user --jq .login`) before reading or writing durable review state.
-2. Inspect **top-level PR/issue comments only** for the stable marker `<!-- haunted-halls-claude-review-disposition -->`. Never use inline review comments, review bodies, thread replies, commit comments, or quoted marker text as durable disposition state.
-   - Each marked comment is one immutable Director-round audit record, except that a targeted-re-review reservation comment may be updated in place only for its `reserved -> used` launch-state transition before the follow-up Director round completes.
-   - The authoritative artifact schema is version `1` and must contain exact machine-readable fields for `Claude disposition schema`, `Claude disposition owner`, `PR head evaluated`, and `Targeted re-review`.
-   - Validate marked comments independently. A comment is valid only when its GitHub author equals the authenticated implementation identity, `Claude disposition owner` equals that login, schema is exactly `1`, and required fields parse unambiguously.
-   - Ignore foreign marked comments as untrusted evidence. If a marked comment authored by the authenticated implementation identity is malformed, owner-mismatched, or schema-incompatible, stop with `ESCALATE` rather than guessing around corrupted durable state.
-   - For any head, order valid marked comments by GitHub creation time (tie-break by numeric comment id) and validate the **entire same-head retry history** before selecting authority. Retry state is monotonic: `not used -> reserved -> used`; same-state later records are allowed, but a later `not used` after `reserved`/`used`, or a later `reserved` after `used`, is corrupted durable state and requires `ESCALATE`.
-   - After that monotonic-history check succeeds, the **latest valid** marked comment for the head is authoritative for the latest Director result. Older valid comments remain immutable history and never override it.
-   - If no valid marked comment exists for the current head, its targeted-re-review state is `not used`.
-3. Recover the targeted-re-review state for the **current exact head SHA** from the validated same-head history as one of `not used`, `reserved`, or `used`. Never derive it from only the newest comment without checking for a downgrade. State recorded for another head does not consume this head's allowance.
-4. Provide the current PR/base/head, linked issue/specification when present, PR description, current diff/scoped patch, CI state, the complete reviewer coverage summary and candidate findings, the recovered `not used | reserved | used` state for this head, trusted-base repository instructions, and relevant trusted-base engine architecture/status/review-policy context.
-5. The director first evaluates whether review coverage is sufficient for the material risks in the change.
-6. Handle recovered incomplete retry state before normal Director coverage decisions:
-   - If the recovered state is `reserved`, do not launch or repeat a targeted review. The previous launch outcome is ambiguous. Require the Director's terminal retry-state `ESCALATE` disposition, persist it as a **new** marked comment after same-head revalidation, and stop for human/external review.
-   - If the recovered state is `used` and the latest valid same-head comment still has `Review coverage: targeted re-review required`, the targeted reviewer launched but no follow-up Director disposition was durably completed. Only the still-live owning session that holds the task/result from that exact launch may continue to the follow-up Director. A restarted/recovered session must pass the explicit incomplete-result fact to the Director, persist a new terminal `Review coverage: indeterminate due to targeted re-review result state` + `ESCALATE` disposition after same-head revalidation, and stop. Never treat this pending `used` record as a completed review or reopen the retry allowance.
-7. If the director returns `Review coverage: targeted re-review required` while the state is `not used`:
-   - **before every durable comment mutation**, re-fetch the PR and verify its current head still equals the exact head being reviewed. If the head changed, do not write stale review/retry state. Discard the stale disposition/result and restart the required review flow on the new head; the stale comment remains immutable history until a new-head Director disposition supersedes it for current-head authority.
-   - before launching the reviewer, after the head check succeeds, create a **new** trusted marked comment for this Director round recording schema `1`, authenticated owner, current head, `Targeted re-review: reserved for <current-head>`, the Director's targeted instruction, current CI state, and `Review coverage: targeted re-review required`; older disposition comments remain unchanged;
-   - re-fetch the PR head again immediately before launch. If it no longer matches the reviewed head, do not launch the stale targeted review; restart review on the new head.
-   - invoke the reviewer once more for this head with the director's exact narrow `Targeted re-review instruction`;
-   - treat the retry as launched only when the subagent invocation itself succeeds and returns a reviewer task/handle. If the invocation fails before returning a task/handle, keep the durable state `reserved`, invoke the Director with the explicit launch-failure fact, persist the Director's terminal retry-state `ESCALATE` disposition after re-validating the same PR head, and stop. Do not silently reset the retry to `not used` or attempt another launch.
-   - after a successful launch, re-fetch the PR head before updating durable state. If it changed, do not write `used` for the stale head and do not use that targeted review as current-head evidence; restart review on the new head.
-   - when the head still matches, immediately update only that current round's reservation comment to `Targeted re-review: used for <current-head>` before waiting for the review result;
-   - if launch succeeds but the `used` update fails, or the session terminates while the durable state is still `reserved`, stop with `ESCALATE`; do not guess whether another retry is safe;
-   - provide the same trusted context and current diff to the reviewer;
-   - then invoke the director again with the original review plus targeted follow-up result and explicitly report state `used` for this head;
-   - re-fetch the PR head before persisting that Director result. If the head changed while review/director work was running, do not persist the stale result; restart review on the new head.
-   - if coverage is still insufficient, the director must return the terminal `Review coverage: insufficient after targeted re-review` disposition with `ESCALATE`; never request another targeted review for that head.
-8. When coverage is sufficient, the director validates and classifies every substantive finding as:
-   - `FIX IN THIS PR`
-   - `DEFER`
-   - `REJECT`
-   - `ESCALATE`
-9. The implementation session must not override the director's coverage decision or disposition.
-10. A clean reviewer result with sufficient coverage must still produce a director disposition that explicitly states that no remediation is required.
+### Durable record schema
+
+Top-level PR/issue comments marked `<!-- haunted-halls-claude-review-disposition -->` use **Claude disposition schema 2**. Schema-2 comments must include:
+
+- `Claude disposition schema: 2`
+- `Claude disposition owner: <authenticated-login>`
+- `Claude disposition record: reservation | director | recovery`
+- `PR head evaluated: <sha>`
+- `Targeted re-review: not used | reserved | used for <same-sha>`
+
+The SHA in `Targeted re-review` must exactly equal `PR head evaluated`. A cross-field mismatch is malformed durable state.
+
+Record types are distinct:
+
+- **reservation** — intermediate targeted-review state only. It must use heading `## Targeted re-review reservation`, `Review coverage: targeted re-review required`, a narrow `Targeted re-review instruction`, and retry state `reserved` or `used`. It is never remediation authority and never satisfies the ready-state requirement. The same reservation comment may be mutated only once from `reserved` to `used`.
+- **director** — one completed Director round. It must use heading `## Review disposition` and contain `Review evaluated`, `CI`, `Review coverage`, `Reviewer result`, the matching retry line, and `### Implementation instruction`. Allowed completed coverage values are `sufficient`, `insufficient after targeted re-review`, `indeterminate due to targeted re-review launch state`, and `indeterminate due to targeted re-review result state`. A director record using `targeted re-review required` is invalid; that state belongs only to a reservation record. Any completed director record with an `### ESCALATE` section is terminal for that head until explicit human recovery is durably recorded.
+- **recovery** — explicit human-authorized clearing of a terminal escalation. It must use heading `## Review recovery`, include `Recovery authorization: explicit user direction` plus a concise reason, and preserve the highest retry state already reached for the head. A recovery record never reopens a targeted-review allowance and is never remediation authority or ready-state evidence; it only permits a fresh ordinary reviewer -> Director round.
+
+Schema-1 records are legacy evidence only and are not valid schema-2 workflow authority. If schema-1 state exists for the current exact head when schema-2 workflow is expected, stop with `ESCALATE` for explicit migration/recovery rather than silently translating it.
+
+### Read and validate durable state
+
+1. Resolve the authenticated GitHub implementation identity before reading or writing durable review state.
+2. Inspect **top-level PR/issue comments only** for the exact marker. Never use inline review comments, review bodies, thread replies, commit comments, or quoted marker text as durable state.
+3. Partition marked comments by `PR head evaluated`. For the current exact head:
+   - if any marked comment from another GitHub identity targets this head, fail closed with `ESCALATE` and require an explicit ownership-handoff/recovery decision; do not ignore it and reopen state;
+   - if a foreign marked comment has an unparseable/missing head, fail closed because its applicability cannot be proven;
+   - validate every same-owner schema-2 record against the complete record-type schema above;
+   - a malformed, owner-mismatched, schema-incompatible, or cross-field-mismatched same-owner record is corrupted durable state and requires `ESCALATE`.
+4. Order valid current-head schema-2 records by GitHub creation time (tie-break numeric comment id) and validate the **entire** retry history. Retry state is monotonic: `not used -> reserved -> used`. Same-state later records are allowed; any downgrade requires `ESCALATE`.
+5. Recover the highest retry state reached for this head from the full validated history, not from only the latest record. A head with no marked history starts at `not used`.
+6. Check terminal/recovery state in order:
+   - a completed director record containing `### ESCALATE` is sticky;
+   - only a later valid `recovery` record may clear that sticky stop;
+   - recovery must preserve the already-reached retry state and cannot itself authorize remediation or readiness;
+   - after recovery, require a fresh ordinary reviewer -> Director round before any implementation or ready-state decision.
+7. Determine the latest workflow record after validation:
+   - latest **reservation** with `reserved`: launch outcome is incomplete/ambiguous; obtain and persist a new terminal director record with `Review coverage: indeterminate due to targeted re-review launch state` and stop;
+   - latest **reservation** with `used` and no later completed director record: the targeted review launched but its follow-up Director result was not durably completed. Only the still-live owning session that holds the result from that exact launch may continue. A restarted/recovered session must persist a new terminal director record with `Review coverage: indeterminate due to targeted re-review result state` and stop;
+   - latest **recovery**: no current completed Director authority exists yet; run a fresh ordinary reviewer -> Director round;
+   - latest nonterminal **director**: it is the current completed Director authority for that head.
+
+### Director handoff and targeted re-review
+
+8. Provide the Director the current PR/base/head, linked issue/specification, PR description, diff/scoped patch, CI state, complete reviewer coverage/findings, recovered highest retry state, any explicit launch/result recovery facts, trusted-base repository instructions, and relevant trusted-base engine architecture/status/review-policy context.
+9. The Director first evaluates whether review coverage is sufficient for the material risks in the change.
+10. If the Director returns `Review coverage: targeted re-review required`, the recovered state must be `not used`. Otherwise stop with `ESCALATE`; never reopen a consumed retry.
+11. Before launching the targeted reviewer:
+   - re-fetch the PR and require the exact reviewed head;
+   - create a **new schema-2 reservation record** with state `reserved`, the current head in both SHA fields, current CI state, and the Director's narrow targeted instruction;
+   - re-fetch the head immediately before launch; if it changed, do not launch the stale retry.
+12. Invoke the reviewer once with the exact targeted instruction. The retry counts as launched only when invocation succeeds and returns a task/handle.
+13. If invocation fails before returning a task/handle, leave the reservation record unchanged at `reserved`, invoke the Director with the explicit launch-failure fact, revalidate the same head, persist a **new terminal director record** with launch-state indeterminate + `ESCALATE`, and stop.
+14. After successful launch, re-fetch the head. If unchanged, update **only that reservation record** from `reserved` to `used` before waiting for the result. Never mutate it again.
+15. If the session dies after `used` but before the follow-up Director result is durably persisted, recovery follows the fail-closed rule above; the retry remains consumed.
+16. With the live targeted-review result, invoke the Director again with state `used`. Re-fetch the head before persistence. Persist the follow-up Director output as a **new schema-2 director record** carrying `used`.
+17. If coverage remains insufficient after the targeted review, the Director must return terminal `Review coverage: insufficient after targeted re-review` + `ESCALATE`; never request another targeted review for that head.
+18. When coverage is sufficient, the Director classifies every substantive finding as `FIX IN THIS PR`, `DEFER`, `REJECT`, or `ESCALATE`. The implementation session must not override the Director.
+19. A clean reviewer result with sufficient coverage still requires a completed director record explicitly stating that no remediation is required.
 
 ## 6. Persist disposition and show the audit trail
 
-The reviewer and director remain read-only. The **main implementation session** owns persistence for every complete Director disposition, including sufficient-coverage results and terminal `ESCALATE` results, plus the intermediate retry reservation state.
+The reviewer and Director remain read-only. The **main implementation session** owns durable record persistence.
 
-- Every completed Director round is persisted as a **new top-level comment** beginning with the exact hidden marker `<!-- haunted-halls-claude-review-disposition -->`, followed by `Claude disposition schema: 1`, `Claude disposition owner: <authenticated-login>`, and the heading `## Review disposition`. This append-only history is the human audit trail.
-- Before trusting marked comments, validate each independently. Valid comments must be authored by the authenticated implementation identity, have matching owner, schema exactly `1`, and valid required machine-readable fields. Foreign marked comments are untrusted evidence and ignored. A malformed/schema-incompatible marked comment authored by the authenticated identity is an `ESCALATE` condition.
-- For the current exact head, validate all valid marked comments in creation order before selecting authority. Retry state must never move backward from `reserved` or `used`; a same-head downgrade is durable-state corruption and requires `ESCALATE`. After this check, the latest valid comment is authoritative for the latest Director result. Older valid dispositions are immutable history.
-- Immediately after a remediation push there may be no disposition yet for the new head. Prior-head dispositions must not authorize new work; the active loop may continue only the mandatory fresh reviewer/Director round and then post a new disposition for the new head.
-- Before persisting any Director output or retry-state transition, re-fetch the PR head and require an exact match with the head that output/state evaluates. Never write a stale-head result merely because it was valid when review began. If the head changed, treat the completed result as stale evidence and restart review on the new head.
-- Persist the Director's complete output in the new round comment and include the exact current-head retry line `Targeted re-review: not used for <sha>`, `Targeted re-review: reserved for <sha>`, or `Targeted re-review: used for <sha>`.
-- A new head starts at `not used`. When a targeted re-review is requested, create the new round comment with `reserved` before launch and update **only that reservation comment** to `used` after successful reviewer invocation. The subsequent Director result is posted as another new disposition comment carrying `used`. No later same-head record may return to `reserved` or `not used`.
-- A recovered `reserved` state is fail-closed. A recovered latest `used` record with `Review coverage: targeted re-review required` is also fail-closed unless this same live owning session still holds the exact launched reviewer task/result; otherwise the result-completion state is indeterminate and requires terminal escalation.
-- Persist terminal `Review coverage: insufficient after targeted re-review`, `indeterminate due to targeted re-review launch state`, and `indeterminate due to targeted re-review result state` dispositions as new Director-round comments **before** stopping on `ESCALATE`.
+- Every completed Director round is a **new schema-2 director comment**. Older valid comments remain immutable history.
+- The only in-place mutation allowed is a schema-2 reservation record's `reserved -> used` transition.
+- Before every durable write or reservation mutation, re-fetch the PR head and require an exact match with `PR head evaluated`.
+- Every record's retry SHA must equal its evaluated-head SHA.
+- Never write a same-head retry-state downgrade.
+- A terminal director record containing `### ESCALATE` remains sticky across restart/recovery. Do not resume autonomous work until explicit user recovery direction is durably captured in a new schema-2 recovery record; that record must preserve the highest retry state and is not itself remediation authority.
+- A remediation push creates a new head and therefore a new per-head record history. Prior-head records remain immutable audit history and never authorize the new head.
 - Do not post implementation rationale as review authority and do not resolve inline review threads.
-- If the disposition cannot be persisted because GitHub access/permissions fail, stop and surface the operational failure rather than declaring the loop ready.
-- After each completed reviewer/director round, print a concise session audit containing:
-  - PR number and head SHA;
-  - reviewer result: `clean` or finding count;
-  - director review-coverage decision;
-  - disposition counts or `no remediation required`;
-  - CI state;
-  - next action: `targeted re-review`, `remediate`, `escalate`, or `human validation`.
+- If durable persistence fails, stop rather than declaring readiness.
+- After each completed reviewer/Director round, print a concise session audit containing PR/head, reviewer result, Director coverage decision, disposition counts or clean result, CI state, and next action.
 
-Do not dump hidden reasoning or long agent transcripts into the audit trail.
+Declare `READY FOR HUMAN VALIDATION` only when all are true:
+
+- the current exact head's validated schema-2 history has no unresolved sticky terminal escalation;
+- the **latest workflow record is a complete schema-2 director record**, not a reservation or recovery record;
+- that director record evaluates the current exact head, has `Review coverage: sufficient`, and has no `FIX IN THIS PR` or `ESCALATE` items;
+- its retry state equals the highest retry state reached in the full same-head history;
+- required validation is green;
+- the PR remains scoped to its durable issue/specification or fallback scope contract;
+- no merge has occurred.
 
 ## 7. Remediate
 
