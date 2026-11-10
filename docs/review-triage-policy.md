@@ -395,10 +395,19 @@ Reviewer result: <clean | N substantive findings | targeted result unavailable>
 ```
 
 The exact heading, review/CI/coverage/result fields, matching retry state, and
-implementation instruction are required. A partial same-owner record is
-malformed and cannot become authority. `Review coverage: targeted re-review
-required` is invalid in a director record; that state belongs to a reservation
-record.
+implementation instruction are required. Cross-field combinations are strict:
+
+- `sufficient` requires retry `not used` or `used`;
+- `insufficient after targeted re-review` requires retry `used` and
+  `### ESCALATE`;
+- `indeterminate due to targeted re-review launch state` requires retry
+  `reserved` and `### ESCALATE`;
+- `indeterminate due to targeted re-review result state` requires retry
+  `used` and `### ESCALATE`.
+
+A partial or inconsistent same-owner record is malformed and cannot become
+authority. `Review coverage: targeted re-review required` is invalid in a
+director record; that state belongs to a reservation record.
 
 A director record with `### ESCALATE` is terminal/sticky for the head until a
 later explicit recovery record.
