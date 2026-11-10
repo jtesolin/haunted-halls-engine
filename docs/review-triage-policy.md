@@ -143,9 +143,10 @@ within the current durable scope contract, and does not require unresolved
 architectural or product judgment.
 
 Examples include correctness bugs introduced or exposed by the PR, CI or test
-gaps necessary to prove acceptance criteria, narrow portability or
-error-handling mistakes, and documentation that misstates behavior the PR
-claims to provide.
+gaps necessary to prove acceptance criteria or behavior newly introduced and
+documented by the PR, missing trusted-base completion requirements that apply to
+the current change, narrow portability or error-handling mistakes, and
+documentation that misstates behavior the PR claims to provide.
 
 ### `DEFER`
 
