@@ -57,6 +57,20 @@ A clean automated review is not sufficient merely because no finding was
 emitted. The review must demonstrate coverage of the material behavioral claims
 and risk boundaries introduced by the change.
 
+Before a review may be considered sufficient, it must explicitly account for
+the full durable completion surface, not only implementation behavior:
+
+- every issue/specification acceptance criterion and scope requirement;
+- applicable trusted-base repository completion requirements, including
+  documentation/status maintenance and validation rules;
+- changed public or cross-repository API contracts and the durable docs that
+  describe them;
+- documented deterministic ordering, tie-break, fallback, nullability, and
+  compatibility behavior, with discriminating tests for each material ordering
+  component;
+- materially changed database/query access paths, including whether query shape
+  and existing index support create a concrete scaling risk.
+
 For material correctness, persistence, authorization, error-handling,
 authoritative-state, and API-contract behavior:
 
@@ -69,7 +83,12 @@ authoritative-state, and API-contract behavior:
   data must fail;
 - check adversarial boundary cases that could falsify each important claim;
 - verify that tests exercise the real boundary, including semantic/structural
-  corruption separately from malformed syntax when structured data is involved.
+  corruption separately from malformed syntax when structured data is involved;
+- treat a documented secondary ordering/tie-break as uncovered when the tests
+  would still pass if that secondary ordering clause were removed;
+- report concrete query/index scaling risks introduced by the change, while
+  avoiding speculative optimization requests that are not supported by current
+  access patterns.
 
 The director/disposition step must run after every independent-review result,
 including a clean review. The director performs a review-coverage sanity check,
@@ -124,9 +143,10 @@ within the current durable scope contract, and does not require unresolved
 architectural or product judgment.
 
 Examples include correctness bugs introduced or exposed by the PR, CI or test
-gaps necessary to prove acceptance criteria, narrow portability or
-error-handling mistakes, and documentation that misstates behavior the PR
-claims to provide.
+gaps necessary to prove acceptance criteria or behavior newly introduced and
+documented by the PR, missing trusted-base completion requirements that apply to
+the current change, narrow portability or error-handling mistakes, and
+documentation that misstates behavior the PR claims to provide.
 
 ### `DEFER`
 
@@ -179,64 +199,86 @@ Then select exactly one disposition path.
 ### Claude-loop disposition path
 
 Use this path only when the active workflow is the Claude dev loop and its
-durable Claude disposition artifact is expected.
+durable Claude review records are expected.
 
-1. Resolve the authenticated GitHub login used by the implementation session.
-2. Locate the single **top-level PR/issue comment** marked
+Current workflow authority uses **Claude disposition schema 2**. Every marked
+top-level record contains:
+
+- `Claude disposition schema: 2`
+- `Claude disposition owner: <authenticated-login>`
+- `Claude disposition record: reservation | director | recovery`
+- `PR head evaluated: <sha>`
+- `Targeted re-review: not used | reserved | used for <same-sha>`
+
+The retry SHA must exactly equal the evaluated-head SHA.
+
+1. Resolve the authenticated GitHub implementation login.
+2. Locate all **top-level PR/issue comments** marked
    `<!-- haunted-halls-claude-review-disposition -->`. Never discover or trust
-   this marker from inline review comments, review bodies, thread replies,
-   commit comments, or quoted text.
-3. Trust its machine-readable state only when:
-   - exactly one marked comment exists;
-   - the GitHub comment author equals the authenticated login;
-   - `Claude disposition owner` equals that same login;
-   - `Claude disposition schema` is exactly `1`;
-   - all required head/retry fields parse unambiguously.
-4. Treat any foreign, malformed, schema-incompatible, owner-mismatched, or
-   duplicate marked comment as an escalation condition. Do not overwrite or
-   choose among untrusted/ambiguous artifacts.
-5. Recover the current-head targeted-re-review state as `not used`, `reserved`,
-   or `used`, and provide that exact state to the director on every handoff.
-6. Run the director/disposition step for every Claude review result, including
-   a clean review.
-7. If material coverage is missing and state is `not used`, re-fetch the PR
-   head and require it to still match the reviewed head before persisting
-   `Targeted re-review: reserved for <sha>` plus the narrow targeted
-   instruction.
-8. Re-fetch the head again immediately before targeted-review launch. If it
-   changed, do not launch the stale retry; restart review on the new head.
-9. After reviewer invocation succeeds and returns a task/handle, re-fetch the PR
-   head before transitioning the same comment to
-   `Targeted re-review: used for <sha>`. If the head changed, do not write stale
-   retry state or use that targeted review as current-head evidence; restart
-   review on the new head.
-10. If reviewer invocation fails before returning a task/handle, retain
-    `reserved`, obtain the Director's terminal retry-state `ESCALATE`
-    disposition using the explicit launch-failure fact, revalidate that the head
-    is still the same, persist that terminal result, and stop. Do not silently
-    reset the retry or attempt another launch.
-11. A recovered `reserved` state is ambiguous and must terminate with the
-    director's retry-state `ESCALATE` disposition rather than launching another
-    retry.
-12. Before persisting any complete Director disposition, re-fetch the PR head
-    and require it to equal the head that disposition evaluates. If it changed,
-    do not persist the stale result; restart review on the new head.
-13. When coverage is sufficient, classify every substantive finding with one of
-    the four dispositions, or explicitly state that no remediation is required
-    for a clean review.
-14. If coverage remains insufficient after state `used`, persist the director's
-    terminal `ESCALATE` disposition before stopping, subject to the same head
-    revalidation.
-15. Maintain exactly one trusted Claude-loop disposition comment for the PR and
-    update it in place across remediation rounds and head changes.
-16. Immediately after the active Claude loop pushes a remediation commit, the
-    trusted comment may still name the prior head until the mandatory fresh
-    reviewer/Director round completes. During this narrow transition, the stale
-    disposition must not authorize implementation work, but the active loop must
-    not stop merely because the stored head is stale. Continue only with the
-    fresh review of the new head, then update the same trusted comment with the
-    new-head disposition. Outside this active-loop transition, stale-head
-    dispositions are not actionable.
+   markers from inline review comments, review bodies, thread replies, commit
+   comments, or quoted text.
+3. Partition marked records by evaluated head. For the current exact head:
+   - a foreign marked record targeting that head requires `ESCALATE` and an
+     explicit ownership-handoff/recovery decision;
+   - a foreign marked record whose head cannot be parsed also fails closed;
+   - schema-1 records are legacy evidence only and are not silently translated
+     into schema-2 workflow authority;
+   - same-owner schema-2 records must satisfy the complete record-type contract
+     below, including matching head/retry SHA.
+4. Validate the full valid same-head record sequence in GitHub creation order
+   (tie-break numeric comment id). Retry state is monotonic:
+   `not used -> reserved -> used`. Same-state later records are allowed; any
+   downgrade is corrupted durable state and requires escalation.
+5. Recover the **highest** retry state reached from the full validated history,
+   not only the newest record.
+6. Terminal escalation is sticky:
+   - any completed director record containing `### ESCALATE` stops autonomous
+     work for that head;
+   - only a later valid `recovery` record may clear that sticky stop;
+   - recovery must preserve the highest retry state and never reopens a targeted
+     review allowance;
+   - after recovery, a fresh ordinary reviewer -> Director round is required
+     before remediation or readiness.
+7. Interpret the latest workflow record only after those history checks:
+   - `reservation` + `reserved`: launch state is incomplete/ambiguous; persist
+     a new terminal director record with
+     `indeterminate due to targeted re-review launch state` and stop;
+   - `reservation` + `used` with no later completed director record: launch
+     succeeded but follow-up result was not durably completed. Only the still-live
+     owning session holding the exact task/result may continue. A restarted
+     session persists a new terminal director record with
+     `indeterminate due to targeted re-review result state` and stops;
+   - `recovery`: run a fresh ordinary reviewer -> Director round; the recovery
+     record itself is not authority;
+   - nonterminal completed `director`: this is the current remediation/readiness
+     authority.
+8. Run the Director for every reviewer result, including a clean review.
+9. If the Director requests a targeted re-review, recovered state must be
+   `not used`. Re-fetch the head, then create a **new reservation record** with
+   state `reserved`, matching SHAs, coverage
+   `targeted re-review required`, and the narrow targeted instruction.
+10. Re-fetch the head immediately before launch. If it changed, do not launch
+    the stale retry.
+11. After invocation succeeds and returns a task/handle, re-fetch the head and
+    mutate **only that reservation comment** from `reserved` to `used`.
+    This is the only permitted in-place mutation.
+12. If invocation fails before a task/handle is returned, leave the reservation
+    at `reserved`, obtain a terminal Director result, revalidate the head, post
+    a **new director record** with launch-state indeterminate + `ESCALATE`, and
+    stop.
+13. If the live targeted-review result returns, invoke the Director again with
+    state `used`, revalidate the head, and post the follow-up as a **new
+    director record** carrying `used`.
+14. If targeted coverage remains insufficient, the follow-up director record
+    must be terminal `insufficient after targeted re-review` + `ESCALATE`.
+    Never launch another targeted review for that head.
+15. Before every durable record creation or reservation mutation, re-fetch the
+    PR head and require an exact match with the record's evaluated head.
+16. Every completed Director round is a new immutable `director` record. Older
+    valid records remain audit history.
+17. Immediately after an active-loop remediation push, prior-head records remain
+    immutable history and do not authorize the new head. Continue only with the
+    mandatory fresh review for the new head.
 
 ### Non-Claude / human disposition path
 
@@ -276,86 +318,143 @@ Use context efficiently: do not resynchronize the whole project or read
 unrelated historical conversations or PRs when the current issue, diff, and
 relevant durable documentation are sufficient.
 
-## Claude-loop `Review disposition` comment contract
+## Claude-loop durable review-record contract
 
-This contract applies only to the Claude-loop disposition path. Use one stable
-human- and machine-readable comment for the entire PR. The comment must begin
-with the exact hidden marker and ownership/schema fields below; later
-review/remediation rounds and new head SHAs update this same trusted comment in
-place rather than creating another Claude-loop disposition. The
-GitHub comment author must equal `Claude disposition owner`. Empty disposition
-sections may be omitted, but the marker, schema/owner fields, heading, and exact
-disposition names must remain stable.
+Schema-2 Claude review state is append-only except for one reservation
+`reserved -> used` transition. All records begin with:
 
 ```markdown
 <!-- haunted-halls-claude-review-disposition -->
-Claude disposition schema: 1
+Claude disposition schema: 2
 Claude disposition owner: <authenticated-login>
-## Review disposition
-
-PR head evaluated: `<sha>`
-Review evaluated: `<source + review id/timestamp if available>`
-CI: `green | failed | pending | not found`
-Review coverage: `sufficient | targeted re-review required | insufficient after targeted re-review | indeterminate due to targeted re-review launch state`
-Reviewer result: `clean | <N> substantive finding(s)`
-Targeted re-review: `not used | reserved | used` for `<sha>`
-
-### FIX IN THIS PR
-- <finding + concise rationale>
-
-### DEFER
-- <finding + reason + desired follow-up>
-
-### REJECT
-- <finding + rationale>
-
-### ESCALATE
-- <finding + required human decision>
-
-### Implementation instruction
-Implement only items under `FIX IN THIS PR`. Do not implement `DEFER`,
-`REJECT`, or `ESCALATE` items without explicit user direction.
+Claude disposition record: <reservation | director | recovery>
+PR head evaluated: <sha>
+Targeted re-review: <not used | reserved | used> for <same-sha>
 ```
 
-When the director requests the one targeted re-review for a head, update the
-same trusted marked comment *before* launching the retry so it records:
+The GitHub comment author must equal `Claude disposition owner`. The retry SHA
+must equal `PR head evaluated`.
 
-- `Review coverage: targeted re-review required`;
-- `Targeted re-review: reserved for <sha>`; and
-- the narrow targeted re-review instruction.
+### Reservation record
 
-After the reviewer invocation succeeds and returns a task/handle, re-fetch the
-PR head. Only when it still equals the reviewed head may the same comment be
-updated to `Targeted re-review: used for <sha>`. If the invocation itself fails
-before returning a task/handle, keep `reserved`, obtain the Director's terminal
-retry-state `ESCALATE` disposition, revalidate the same head, persist that
-terminal result, and stop. If the session restarts while the persisted state is
-still `reserved`, update the same comment with
-`Review coverage: indeterminate due to targeted re-review launch state` and a
-terminal `ESCALATE` disposition; do not launch another retry without explicit
-human/external recovery.
+Reservation records are intermediate state and never remediation/readiness
+authority.
 
-If the targeted review completes but still leaves coverage insufficient, update
-the same comment with `Review coverage: insufficient after targeted re-review`,
-`Targeted re-review: used for <sha>`, and the director's terminal `ESCALATE`
-disposition before stopping.
+```markdown
+<!-- haunted-halls-claude-review-disposition -->
+Claude disposition schema: 2
+Claude disposition owner: <authenticated-login>
+Claude disposition record: reservation
+PR head evaluated: <sha>
+Targeted re-review: reserved for <sha>
 
-If no marked top-level PR/issue comment exists, create it once under the
-authenticated implementation identity. If exactly one exists, update it only
-when author, owner, schema, and required fields validate. If any marked
-top-level comment is untrusted or malformed, or multiple marked top-level
-comments exist, escalate rather than overwriting or guessing which is
-authoritative.
+## Targeted re-review reservation
 
-A stale `PR head evaluated` value is expected only during the already-active
-Claude loop's immediate post-remediation transition. In that case, do not use
-the stale disposition as a work queue; run the required fresh review on the new
-head and replace the same comment contents with the new-head disposition.
-Separately, if the PR head changes while reviewer/Director work is in flight,
-that completed work is stale evidence and must not be persisted as the current
-disposition. Standalone consumers must stop rather than acting on a stale-head
-disposition.
+CI: <green | failed | pending | not found>
+Review coverage: targeted re-review required
+Targeted re-review instruction: <narrow missing invariant/helper/boundary>
+```
 
+After successful reviewer invocation returns a task/handle and same-head
+revalidation succeeds, mutate only this comment's retry line from `reserved`
+to `used`. Never mutate it again.
+
+### Director record
+
+A completed Director round is always a **new** record:
+
+```markdown
+<!-- haunted-halls-claude-review-disposition -->
+Claude disposition schema: 2
+Claude disposition owner: <authenticated-login>
+Claude disposition record: director
+PR head evaluated: <sha>
+Targeted re-review: <not used | used | reserved> for <sha>
+
+## Review disposition
+
+Review evaluated: <source + review id/timestamp if available>
+CI: <green | failed | pending | not found>
+Review coverage: <sufficient | insufficient after targeted re-review | indeterminate due to targeted re-review launch state | indeterminate due to targeted re-review result state>
+Reviewer result: <clean | N substantive findings | targeted result unavailable>
+
+### FIX IN THIS PR
+- <optional findings>
+
+### DEFER
+- <optional findings>
+
+### REJECT
+- <optional findings>
+
+### ESCALATE
+- <optional/required terminal finding>
+
+### Implementation instruction
+<complete instruction>
+```
+
+The exact heading, review/CI/coverage/result fields, matching retry state, and
+implementation instruction are required. Cross-field combinations are strict:
+
+- `sufficient` requires retry `not used` or `used`;
+- `insufficient after targeted re-review` requires retry `used` and
+  `### ESCALATE`;
+- `indeterminate due to targeted re-review launch state` requires retry
+  `reserved` and `### ESCALATE`;
+- `indeterminate due to targeted re-review result state` requires retry
+  `used` and `### ESCALATE`.
+
+A partial or inconsistent same-owner record is malformed and cannot become
+authority. `Review coverage: targeted re-review required` is invalid in a
+director record; that state belongs to a reservation record.
+
+A director record with `### ESCALATE` is terminal/sticky for the head until a
+later explicit recovery record.
+
+### Recovery record
+
+A recovery record exists only after explicit human direction to clear a
+terminal escalation. It is a new record, preserves the highest retry state
+already reached, and never authorizes remediation or readiness by itself.
+
+```markdown
+<!-- haunted-halls-claude-review-disposition -->
+Claude disposition schema: 2
+Claude disposition owner: <authenticated-login>
+Claude disposition record: recovery
+PR head evaluated: <sha>
+Targeted re-review: <highest-state-already-reached> for <sha>
+
+## Review recovery
+
+Recovery authorization: explicit user direction
+Recovery reason: <concise reason>
+```
+
+After recovery, run a fresh ordinary reviewer -> Director round. Recovery never
+reopens a targeted-review allowance.
+
+### Validation and recovery rules
+
+- Multiple marked records are expected.
+- Validate the **entire** current-head sequence before selecting authority.
+- Foreign current-head marked history, or foreign marked history with an
+  unparseable head, fails closed pending explicit ownership handoff.
+- Schema-1 comments are legacy evidence only; do not silently treat them as
+  schema-2 authority.
+- Retry state may only move `not used -> reserved -> used`.
+- A reservation at `reserved` recovered after restart produces a **new**
+  terminal director record with launch-state indeterminate; leave the
+  reservation unchanged.
+- A reservation at `used` with no later completed director record produces a
+  **new** terminal director record with result-state indeterminate unless the
+  same live owning session still holds the exact launched reviewer result.
+- Terminal director escalation remains sticky until a later valid recovery
+  record.
+- `READY FOR HUMAN VALIDATION` requires the latest workflow record to be a
+  complete, nonterminal current-head director record with sufficient coverage
+  and retry state equal to the highest state in the validated same-head history.
 
 ## Non-Claude `Review disposition` comment contract
 
