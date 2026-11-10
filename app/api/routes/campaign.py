@@ -53,6 +53,11 @@ async def get_campaign(
         campaign, turns, truncated = db.get_campaign_with_turns_for_owner(
             campaign_id, owner_user_id
         )
+        character_id = (
+            db.get_campaign_character_id(campaign.campaign_id)
+            if campaign is not None
+            else None
+        )
     if campaign is None:
         raise HTTPException(status_code=404, detail="Campaign not found")
     return CampaignDetail(
@@ -69,6 +74,7 @@ async def get_campaign(
             for turn in turns
         ],
         truncated=truncated,
+        character_id=character_id,
     )
 
 
@@ -109,6 +115,7 @@ async def list_campaigns(
                 campaign_id=campaign_id,
                 name=name,
                 last_message=campaign["last_message"],
+                character_id=campaign["character_id"],
             )
         )
     return summaries

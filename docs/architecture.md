@@ -125,6 +125,25 @@ calls a model.
 
 `GET /api/characters` remains the lightweight `{character_id, name}` list.
 
+### Campaign-to-character association API contract
+
+The campaign-to-character association is the persisted `characters.campaign_id`
+relationship. It is exposed as a nullable `character_id` on
+`GET /api/campaign/{campaign_id}` (`CampaignDetail`) and `GET /api/campaigns`
+(`CampaignSummary`), both authenticated and owner-scoped (foreign or unknown
+campaigns return 404 on detail and are absent from the list). The frontend uses
+it to call `GET /api/character/{character_id}` for the active campaign.
+
+- The value is read only from persisted `characters` rows; it is never inferred,
+  generated, or derived from model output or chat content.
+- `character_id` is `null` when the campaign has no associated character row
+  (for example legacy campaigns, and campaigns returned by
+  `POST /api/campaign`, since no application code creates character rows yet).
+  Existing campaign fields and behavior are otherwise unchanged.
+- The schema does not enforce one character per campaign. If multiple character
+  rows exist for a campaign, the earliest by `created_at`, tie-broken by
+  ascending row id, is returned deterministically in both detail and list.
+
 ## World-authority boundary
 
 Player `ParsedAction` values and the player `ToolExecutor` remain limited to
