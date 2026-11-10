@@ -147,7 +147,10 @@ it to call `GET /api/character/{character_id}` for the active campaign.
 - `character_id` is `null` only when the campaign has no character row.
   Migration `0005_backfill_characters` idempotently inserts a starter character
   for every pre-existing campaign that has none (`make db-upgrade`); campaigns
-  that already have a character are untouched. Existing campaign fields and
+  that already have a character are untouched. If a campaign's deterministic
+  character ID is already used by another row, the migration aborts before
+  changing data and names the affected campaigns so the conflict is resolved
+  manually rather than silently skipped. Existing campaign fields and
   behavior are otherwise unchanged.
 - The schema does not enforce one character per campaign. If multiple character
   rows exist for a campaign, the earliest by `created_at`, tie-broken by

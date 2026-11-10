@@ -142,7 +142,8 @@ end-to-end and `POST /api/campaign` returns it. The name is the fixed starter
 name `Investigator` (no player-name source exists yet); inventory and abilities
 remain projected from persisted campaign state. Migration
 `0005_backfill_characters` idempotently repairs existing campaigns that had no
-character. Frontend preview smoke testing remains a manual follow-up.
+character, and aborts with a clear error (changing nothing) if a deterministic
+character ID collision would prevent a repair. Frontend preview smoke testing remains a manual follow-up.
 
 ## Runtime provider and Action Parser contract
 

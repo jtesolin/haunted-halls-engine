@@ -193,22 +193,25 @@ def _seed_user_and_campaigns(conn, campaign_ids) -> None:
         )
 
 
-def _backfill_sql() -> str:
-    import importlib.util
-    from pathlib import Path
-
-    path = Path("alembic/versions/0005_backfill_campaign_characters.py")
-    spec = importlib.util.spec_from_file_location("backfill_0005", path)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    captured: list[str] = []
-    setattr(module, "op", type("Op", (), {"execute": staticmethod(captured.append)}))
-    module.upgrade()
-    return captured[0]
+def _snapshot() -> list[tuple[str, str, str]]:
+    with get_engine().connect() as conn:
+        return [
+            (row[0], row[1], row[2])
+            for row in conn.execute(
+                text(
+                    "SELECT character_id, campaign_id, name FROM characters "
+                    "ORDER BY character_id"
+                )
+            )
+        ]
 
 
-def test_backfill_is_idempotent_and_guards_character_id_collisions(tmp_path) -> None:
+def _alembic_revision() -> str:
+    with get_engine().connect() as conn:
+        return conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
+
+
+def test_backfill_rerun_is_idempotent(tmp_path) -> None:
     original = settings.DATABASE_URL
     settings.DATABASE_URL = f"sqlite:///{tmp_path / 'backfill-rerun.db'}"
     try:
@@ -216,37 +219,62 @@ def test_backfill_is_idempotent_and_guards_character_id_collisions(tmp_path) -> 
         command.upgrade(cfg, "0004_chat_idempotency")
         with get_engine().begin() as conn:
             _seed_user_and_campaigns(conn, ["campaign_a", "campaign_b"])
-            # A foreign row already squats campaign_b's deterministic character id.
+        command.upgrade(cfg, "head")
+        first = _snapshot()
+        assert [row[0] for row in first] == [
+            "character_campaign_a",
+            "character_campaign_b",
+        ]
+        # Re-run the real migration against the already-backfilled data.
+        command.stamp(cfg, "0004_chat_idempotency")
+        command.upgrade(cfg, "head")
+        assert _snapshot() == first
+    finally:
+        settings.DATABASE_URL = original
+
+
+def test_backfill_character_id_collision_fails_safely_and_clearly(tmp_path) -> None:
+    original = settings.DATABASE_URL
+    settings.DATABASE_URL = f"sqlite:///{tmp_path / 'backfill-collision.db'}"
+    try:
+        cfg = Config("alembic.ini")
+        command.upgrade(cfg, "0004_chat_idempotency")
+        with get_engine().begin() as conn:
+            _seed_user_and_campaigns(
+                conn, ["campaign_a", "campaign_b", "campaign_c"]
+            )
+            # campaign_a has a character; a foreign row squats campaign_b's
+            # deterministic id, so campaign_b cannot receive its starter row.
             conn.execute(
                 text(
                     "INSERT INTO characters (character_id, campaign_id, name, created_at) "
-                    "VALUES ('character_campaign_b', 'campaign_a', 'Squatter', "
-                    "'2026-01-01T00:00:00')"
+                    "VALUES ('existing_a', 'campaign_a', 'Keep', '2026-01-01T00:00:00'), "
+                    "('character_campaign_b', 'campaign_a', 'Squatter', '2026-01-01T00:00:00')"
                 )
             )
+        before = _snapshot()
+
+        with pytest.raises(RuntimeError, match="campaign_b") as excinfo:
+            command.upgrade(cfg, "head")
+        assert "campaign_c" not in str(excinfo.value)
+        # Fails before changing anything: no partial backfill (campaign_c is
+        # untouched) and the revision is not advanced.
+        assert _snapshot() == before
+        assert _alembic_revision() == "0004_chat_idempotency"
+
+        # After the operator resolves the conflict the migration succeeds and
+        # every legacy campaign ends with a character.
+        with get_engine().begin() as conn:
+            conn.execute(
+                text("DELETE FROM characters WHERE character_id = 'character_campaign_b'")
+            )
         command.upgrade(cfg, "head")
-        sql = _backfill_sql()
-
-        def snapshot() -> list[tuple[str, str, str]]:
-            with get_engine().connect() as conn:
-                return [
-                    (row[0], row[1], row[2])
-                    for row in conn.execute(
-                        text(
-                            "SELECT character_id, campaign_id, name FROM characters "
-                            "ORDER BY character_id"
-                        )
-                    )
-                ]
-
-        first = snapshot()
-        # campaign_a already had a character; campaign_b is skipped by the
-        # collision guard instead of violating character_id uniqueness.
-        assert first == [("character_campaign_b", "campaign_a", "Squatter")]
-        for _ in range(2):
-            with get_engine().begin() as conn:
-                conn.execute(text(sql))
-        assert snapshot() == first
+        assert {row[1] for row in _snapshot()} == {
+            "campaign_a",
+            "campaign_b",
+            "campaign_c",
+        }
+        assert _alembic_revision() == "0005_backfill_characters"
     finally:
         settings.DATABASE_URL = original
 
