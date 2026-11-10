@@ -63,6 +63,11 @@ def _campaign_with_character(client: TestClient, headers, character_id: str) -> 
     response = client.post("/api/campaign", json={}, headers=headers)
     assert response.status_code == 201
     campaign_id = response.json()["campaign_id"]
+    # Replace the starter character the app creates with a fixed-ID fixture.
+    with get_engine().begin() as conn:
+        conn.execute(
+            text("DELETE FROM characters WHERE campaign_id = :c"), {"c": campaign_id}
+        )
     _insert_character(campaign_id, character_id, "Investigator")
     return campaign_id
 

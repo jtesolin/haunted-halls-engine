@@ -57,3 +57,4 @@ grpcio>=1.70,<2
 requests>=2.31,<3
 ruff==0.12.2
 pyright==1.1.411
+faker>=40,<41

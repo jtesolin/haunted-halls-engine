@@ -136,10 +136,22 @@ it to call `GET /api/character/{character_id}` for the active campaign.
 
 - The value is read only from persisted `characters` rows; it is never inferred,
   generated, or derived from model output or chat content.
-- `character_id` is `null` when the campaign has no associated character row
-  (for example legacy campaigns, and campaigns returned by
-  `POST /api/campaign`, since no application code creates character rows yet).
-  Existing campaign fields and behavior are otherwise unchanged.
+- Every newly created campaign (`POST /api/campaign` and auto-created chat
+  campaigns) persists exactly one starter character in the same transaction as
+  the campaign, so a failure leaves neither row. The character ID is derived
+  deterministically from the campaign ID (`character_<campaign_id>`), so retries
+  converge on one row. The name is generated with the Faker library (`app/game/character_names.py`) when the row is created and never changes on retry;
+  inventory and abilities are not copied but projected from the campaign's
+  persisted game state by the character-detail API. `POST /api/campaign`
+  returns this `character_id`.
+- `character_id` is `null` only when the campaign has no character row.
+  Migration `0005_backfill_characters` idempotently inserts a starter character
+  for every pre-existing campaign that has none (`make db-upgrade`); campaigns
+  that already have a character are untouched. If a campaign's deterministic
+  character ID is already used by another row, the migration aborts before
+  changing data and names the affected campaigns so the conflict is resolved
+  manually rather than silently skipped. Existing campaign fields and
+  behavior are otherwise unchanged.
 - The schema does not enforce one character per campaign. If multiple character
   rows exist for a campaign, the earliest by `created_at`, tie-broken by
   ascending row id, is returned deterministically in both detail and list.

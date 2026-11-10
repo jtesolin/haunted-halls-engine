@@ -11,7 +11,14 @@ pytestmark = pytest.mark.usefixtures("fake_runtime_model_provider")
 def _create_campaign(client: TestClient, headers) -> str:
     response = client.post("/api/campaign", json={}, headers=headers)
     assert response.status_code == 201
-    return response.json()["campaign_id"]
+    campaign_id = response.json()["campaign_id"]
+    # These tests model legacy/seeded association states, so drop the starter
+    # character the application now creates (see test_campaign_character_lifecycle).
+    with get_engine().begin() as conn:
+        conn.execute(
+            text("DELETE FROM characters WHERE campaign_id = :c"), {"c": campaign_id}
+        )
+    return campaign_id
 
 
 def _list_entry(client: TestClient, headers, campaign_id: str) -> dict:

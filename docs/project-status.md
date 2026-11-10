@@ -130,10 +130,21 @@ The authenticated campaign detail and list responses
 [#111](https://github.com/jtesolin/haunted-halls-engine/issues/111)) now expose
 a nullable `character_id` read from the persisted campaign-to-character
 association, so the frontend can identify the campaign's character and call the
-character-detail API. It is `null` when no character row exists; if several
+character-detail API. It is `null` only when no character row exists; if several
 exist, the earliest-created one is returned deterministically. Owner scoping and
 other campaign fields are unchanged. See the contract in
 [architecture.md](architecture.md).
+
+Engine [#114](https://github.com/jtesolin/haunted-halls-engine/issues/114):
+new campaigns (`POST /api/campaign` and auto-created chat campaigns) now persist
+a starter character atomically with the campaign, so `character_id` is non-null
+end-to-end and `POST /api/campaign` returns it. The name is generated with the Faker
+library at creation (product decision, no player-name source exists; backfilled
+campaigns get a generated name too); inventory and abilities
+remain projected from persisted campaign state. Migration
+`0005_backfill_characters` idempotently repairs existing campaigns that had no
+character, and aborts with a clear error (changing nothing) if a deterministic
+character ID collision would prevent a repair. Frontend preview smoke testing remains a manual follow-up.
 
 ## Runtime provider and Action Parser contract
 
