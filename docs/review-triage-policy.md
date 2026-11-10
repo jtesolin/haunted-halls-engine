@@ -226,7 +226,7 @@ durable Claude disposition artifact is expected.
 7. Recover the current-head targeted-re-review state as `not used`, `reserved`,
    or `used` from the validated same-head history, not merely from the newest
    record. If no valid comment exists for the current head, state is `not used`.
-9. Run the director/disposition step for every Claude review result, including
+8. Run the director/disposition step for every Claude review result, including
    a clean review.
 9. If material coverage is missing and state is `not used`, re-fetch the PR
    head and require it to still match the reviewed head, then create a **new**
@@ -318,8 +318,10 @@ relevant durable documentation are sufficient.
 This contract applies only to the Claude-loop disposition path. Every completed
 Director round is a separate human- and machine-readable top-level comment. Each
 comment begins with the exact hidden marker and ownership/schema fields below.
-Older valid disposition comments remain immutable audit history; the latest
-valid comment for the current exact head is authoritative. The GitHub comment
+Older valid disposition comments remain immutable audit history. For the
+current exact head, validate the full retry-state sequence for monotonic
+`not used -> reserved -> used` progression before treating the latest valid
+comment as the latest Director result. The GitHub comment
 author must equal `Claude disposition owner`. Empty disposition sections may
 be omitted, but the marker, schema/owner fields, heading, and exact disposition
 names must remain stable.
