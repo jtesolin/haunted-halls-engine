@@ -101,6 +101,8 @@ def test_character_failure_rolls_back_campaign(monkeypatch) -> None:
     with get_engine().connect() as conn:
         assert conn.execute(text("SELECT COUNT(*) FROM campaigns")).scalar_one() == 0
         assert conn.execute(text("SELECT COUNT(*) FROM characters")).scalar_one() == 0
+        assert conn.execute(text("SELECT COUNT(*) FROM turns")).scalar_one() == 0
+        assert conn.execute(text("SELECT COUNT(*) FROM game_events")).scalar_one() == 0
 
     # Retry after the failure succeeds with exactly one campaign and character.
     created = _create(client, headers)
@@ -171,3 +173,110 @@ def test_backfill_migration_repairs_legacy_campaigns_without_touching_others(tmp
         }
     finally:
         settings.DATABASE_URL = original
+
+
+def _seed_user_and_campaigns(conn, campaign_ids) -> None:
+    conn.execute(
+        text(
+            "INSERT INTO internal_users (user_id, identity_provider, provider_issuer, "
+            "provider_subject, email, email_verified, created_at, updated_at, last_login_at) "
+            "VALUES ('u1','google','iss','sub','e@example.com',1,'t','t','t')"
+        )
+    )
+    for cid in campaign_ids:
+        conn.execute(
+            text(
+                "INSERT INTO campaigns (campaign_id, owner_user_id, name, created_at) "
+                "VALUES (:c, 'u1', 'n', '2026-01-01T00:00:00')"
+            ),
+            {"c": cid},
+        )
+
+
+def _backfill_sql() -> str:
+    import importlib.util
+    from pathlib import Path
+
+    path = Path("alembic/versions/0005_backfill_campaign_characters.py")
+    spec = importlib.util.spec_from_file_location("backfill_0005", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    captured: list[str] = []
+    setattr(module, "op", type("Op", (), {"execute": staticmethod(captured.append)}))
+    module.upgrade()
+    return captured[0]
+
+
+def test_backfill_is_idempotent_and_guards_character_id_collisions(tmp_path) -> None:
+    original = settings.DATABASE_URL
+    settings.DATABASE_URL = f"sqlite:///{tmp_path / 'backfill-rerun.db'}"
+    try:
+        cfg = Config("alembic.ini")
+        command.upgrade(cfg, "0004_chat_idempotency")
+        with get_engine().begin() as conn:
+            _seed_user_and_campaigns(conn, ["campaign_a", "campaign_b"])
+            # A foreign row already squats campaign_b's deterministic character id.
+            conn.execute(
+                text(
+                    "INSERT INTO characters (character_id, campaign_id, name, created_at) "
+                    "VALUES ('character_campaign_b', 'campaign_a', 'Squatter', "
+                    "'2026-01-01T00:00:00')"
+                )
+            )
+        command.upgrade(cfg, "head")
+        sql = _backfill_sql()
+
+        def snapshot() -> list[tuple[str, str, str]]:
+            with get_engine().connect() as conn:
+                return [
+                    (row[0], row[1], row[2])
+                    for row in conn.execute(
+                        text(
+                            "SELECT character_id, campaign_id, name FROM characters "
+                            "ORDER BY character_id"
+                        )
+                    )
+                ]
+
+        first = snapshot()
+        # campaign_a already had a character; campaign_b is skipped by the
+        # collision guard instead of violating character_id uniqueness.
+        assert first == [("character_campaign_b", "campaign_a", "Squatter")]
+        for _ in range(2):
+            with get_engine().begin() as conn:
+                conn.execute(text(sql))
+        assert snapshot() == first
+    finally:
+        settings.DATABASE_URL = original
+
+
+def test_character_id_collision_fails_creation_without_partial_state(monkeypatch) -> None:
+    client = _client()
+    headers = _headers(client, "lifecycle-collision")
+    existing = _create(client, headers)
+    with get_engine().connect() as conn:
+        campaigns_before = conn.execute(text("SELECT COUNT(*) FROM campaigns")).scalar_one()
+        characters_before = conn.execute(text("SELECT COUNT(*) FROM characters")).scalar_one()
+
+    # Force the new campaign's deterministic id onto an already-used character
+    # id: the swallowed IntegrityError leaves no row, reaching the RuntimeError.
+    monkeypatch.setattr(
+        "app.db.repositories.starter_character_id",
+        lambda _campaign_id: existing["character_id"],
+    )
+    failing = TestClient(client.app, raise_server_exceptions=False)
+    response = failing.post("/api/campaign", json={}, headers=headers)
+    assert response.status_code == 500
+
+    with get_engine().connect() as conn:
+        assert conn.execute(text("SELECT COUNT(*) FROM campaigns")).scalar_one() == campaigns_before
+        assert conn.execute(text("SELECT COUNT(*) FROM characters")).scalar_one() == characters_before
+        for table in ("turns", "game_events"):
+            orphaned = conn.execute(
+                text(
+                    f"SELECT COUNT(*) FROM {table} WHERE campaign_id NOT IN "
+                    "(SELECT campaign_id FROM campaigns)"
+                )
+            ).scalar_one()
+            assert orphaned == 0
