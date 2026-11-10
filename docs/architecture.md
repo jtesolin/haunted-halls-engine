@@ -140,7 +140,7 @@ it to call `GET /api/character/{character_id}` for the active campaign.
   campaigns) persists exactly one starter character in the same transaction as
   the campaign, so a failure leaves neither row. The character ID is derived
   deterministically from the campaign ID (`character_<campaign_id>`), so retries
-  converge on one row. The name is the fixed starter name `Investigator`;
+  converge on one row. The name is generated with the Faker library (`app/game/character_names.py`) when the row is created and never changes on retry;
   inventory and abilities are not copied but projected from the campaign's
   persisted game state by the character-detail API. `POST /api/campaign`
   returns this `character_id`.

@@ -138,8 +138,9 @@ other campaign fields are unchanged. See the contract in
 Engine [#114](https://github.com/jtesolin/haunted-halls-engine/issues/114):
 new campaigns (`POST /api/campaign` and auto-created chat campaigns) now persist
 a starter character atomically with the campaign, so `character_id` is non-null
-end-to-end and `POST /api/campaign` returns it. The name is the fixed starter
-name `Investigator` (no player-name source exists yet); inventory and abilities
+end-to-end and `POST /api/campaign` returns it. The name is generated with the Faker
+library at creation (product decision, no player-name source exists; backfilled
+campaigns get a generated name too); inventory and abilities
 remain projected from persisted campaign state. Migration
 `0005_backfill_characters` idempotently repairs existing campaigns that had no
 character, and aborts with a clear error (changing nothing) if a deterministic

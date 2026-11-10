@@ -7,7 +7,6 @@ from fastapi.testclient import TestClient
 from sqlalchemy import text
 
 from app.core.config import settings
-from app.db.repositories import STARTER_CHARACTER_NAME
 from app.db.session import get_engine, session
 from app.orchestration import orchestrator as orchestrator_module
 from app.schemas.chat import ChatRequest
@@ -53,7 +52,13 @@ def test_created_campaign_has_usable_character_end_to_end() -> None:
     sheet = client.get(f"/api/character/{character_id}", headers=headers)
     assert sheet.status_code == 200
     body = sheet.json()
-    assert body["name"] == STARTER_CHARACTER_NAME
+    assert isinstance(body["name"], str) and body["name"].strip()
+    with get_engine().connect() as conn:
+        stored = conn.execute(
+            text("SELECT name FROM characters WHERE character_id = :c"),
+            {"c": character_id},
+        ).scalar_one()
+    assert body["name"] == stored
     # Starter inventory/abilities are projected from the persisted campaign state.
     assert len(body["abilities"]) >= 2
     assert body["inventory"]
@@ -63,6 +68,28 @@ def test_created_campaign_has_usable_character_end_to_end() -> None:
         client.get(f"/api/campaign/{campaign_id}", headers=headers)
         client.get(f"/api/character/{character_id}", headers=headers)
     assert _character_rows(campaign_id) == [character_id]
+
+
+def test_character_name_comes_from_generator_and_is_persisted(monkeypatch) -> None:
+    names = iter(["Ada Lovelace", "Grace Hopper"])
+    monkeypatch.setattr(
+        orchestrator_module, "generate_character_name", lambda: next(names)
+    )
+    client = _client()
+    headers = _headers(client, "lifecycle-name")
+    first = _create(client, headers)
+    second = _create(client, headers)
+    for created, expected in ((first, "Ada Lovelace"), (second, "Grace Hopper")):
+        sheet = client.get(f"/api/character/{created['character_id']}", headers=headers)
+        assert sheet.json()["name"] == expected
+
+
+def test_generate_character_name_returns_nonempty_names() -> None:
+    from app.game.character_names import generate_character_name
+
+    names = {generate_character_name() for _ in range(20)}
+    assert all(isinstance(name, str) and name.strip() for name in names)
+    assert len(names) > 1
 
 
 def test_second_campaign_gets_its_own_character_and_other_user_is_denied() -> None:
@@ -80,9 +107,16 @@ def test_ensure_campaign_character_is_idempotent_on_retry() -> None:
     client = _client()
     created = _create(client, _headers(client, "lifecycle-retry"))
     with session() as db:
-        again = db.ensure_campaign_character(created["campaign_id"])
-        third = db.ensure_campaign_character(created["campaign_id"])
+        again = db.ensure_campaign_character(created["campaign_id"], "Retry One")
+        third = db.ensure_campaign_character(created["campaign_id"], "Retry Two")
     assert again == third == created["character_id"]
+    # A retry never renames or replaces the existing character.
+    with get_engine().connect() as conn:
+        name = conn.execute(
+            text("SELECT name FROM characters WHERE character_id = :c"),
+            {"c": created["character_id"]},
+        ).scalar_one()
+    assert name not in {"Retry One", "Retry Two"}
     assert _character_rows(created["campaign_id"]) == [created["character_id"]]
 
 
@@ -90,7 +124,7 @@ def test_character_failure_rolls_back_campaign(monkeypatch) -> None:
     client = _client()
     headers = _headers(client, "lifecycle-rollback")
 
-    def boom(self, campaign_id):  # noqa: ANN001, ANN202, ARG001
+    def boom(self, campaign_id, name):  # noqa: ANN001, ANN202, ARG001
         raise RuntimeError("character insert failed")
 
     with monkeypatch.context() as patch:
@@ -171,6 +205,16 @@ def test_backfill_migration_repairs_legacy_campaigns_without_touching_others(tmp
             "campaign_legacy": "character_campaign_legacy",
             "campaign_has_char": "existing",
         }
+        with get_engine().connect() as conn:
+            names = {
+                row[0]: row[1]
+                for row in conn.execute(
+                    text("SELECT campaign_id, name FROM characters")
+                )
+            }
+        assert names["campaign_has_char"] == "Keep"
+        assert names["campaign_legacy"].strip()
+        assert names["campaign_legacy"] != "Keep"
     finally:
         settings.DATABASE_URL = original
 
@@ -221,6 +265,7 @@ def test_backfill_rerun_is_idempotent(tmp_path) -> None:
             _seed_user_and_campaigns(conn, ["campaign_a", "campaign_b"])
         command.upgrade(cfg, "head")
         first = _snapshot()
+        assert all(row[2].strip() for row in first)
         assert [row[0] for row in first] == [
             "character_campaign_a",
             "character_campaign_b",

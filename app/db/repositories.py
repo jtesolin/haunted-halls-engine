@@ -42,9 +42,6 @@ from app.memory.retriever import (
 from app.schemas.events import GameEventPayload, GameEventType
 
 
-STARTER_CHARACTER_NAME = "Investigator"
-
-
 def starter_character_id(campaign_id: str) -> str:
     return f"character_{campaign_id}"
 
@@ -403,12 +400,13 @@ class Repository:
             owner_user_id=owner_user_id,
         )
 
-    def ensure_campaign_character(self, campaign_id: str) -> str:
-        """Return the campaign's character ID, creating the starter row if absent.
+    def ensure_campaign_character(self, campaign_id: str, name: str) -> str:
+        """Return the campaign's character ID, creating the character if absent.
 
         The character ID is derived deterministically from the campaign ID so
         retries and concurrent callers converge on one row (``character_id`` is
-        unique). Name and inventory/abilities are not duplicated here: the
+        unique). ``name`` is used only when a row is actually created; an
+        existing character keeps its name. Inventory/abilities are not duplicated here: the
         character-detail API projects inventory and abilities from the
         campaign's persisted game state.
         """
@@ -422,7 +420,7 @@ class Repository:
                     insert(characters).values(
                         character_id=character_id,
                         campaign_id=campaign_id,
-                        name=STARTER_CHARACTER_NAME,
+                        name=name,
                         description=None,
                         created_at=datetime.utcnow().isoformat(),
                     )

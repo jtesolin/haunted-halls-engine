@@ -26,6 +26,7 @@ from app.agents.narrator import (
     NarratorNarrativeReveal,
 )
 from app.db.session import session
+from app.game.character_names import generate_character_name
 from app.game.campaign_state import (
     InvalidCampaignStateError,
     build_fresh_campaign_state,
@@ -196,7 +197,9 @@ class ChatOrchestrator:
                     description="AI-created campaign",
                     state=initial_state,
                 )
-                character_id = db.ensure_campaign_character(campaign_id)
+                character_id = db.ensure_campaign_character(
+                    campaign_id, generate_character_name()
+                )
                 assistant_turn = db.create_turn(
                     turn_id=assistant_turn_id,
                     campaign_id=campaign_id,
@@ -377,7 +380,9 @@ class ChatOrchestrator:
                     description="Auto-created campaign",
                     state=initial_state,
                 )
-                db.ensure_campaign_character(campaign_id)
+                db.ensure_campaign_character(
+                    campaign_id, generate_character_name()
+                )
             db.create_turn(
                 turn_id=player_turn_id,
                 campaign_id=campaign_id,
