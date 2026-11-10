@@ -143,7 +143,10 @@ def test_character_failure_rolls_back_campaign(monkeypatch) -> None:
     assert _character_rows(created["campaign_id"]) == [created["character_id"]]
 
 
-def test_auto_created_chat_campaign_gets_character() -> None:
+def test_auto_created_chat_campaign_gets_character(monkeypatch) -> None:
+    monkeypatch.setattr(
+        orchestrator_module, "generate_character_name", lambda: "Chat Created"
+    )
     client = _client()
     headers = _headers(client, "lifecycle-chat")
     owner = headers[INTERNAL_USER_ID_HEADER_NAME]
@@ -156,6 +159,9 @@ def test_auto_created_chat_campaign_gets_character() -> None:
     assert len(rows) == 1
     detail = client.get(f"/api/campaign/{response.campaign_id}", headers=headers).json()
     assert detail["character_id"] == rows[0]
+    sheet = client.get(f"/api/character/{rows[0]}", headers=headers)
+    assert sheet.status_code == 200
+    assert sheet.json()["name"] == "Chat Created"
     asyncio.run(
         orchestrator_module.orchestrator.handle_chat(
             ChatRequest(message="look around", campaign_id=response.campaign_id),
