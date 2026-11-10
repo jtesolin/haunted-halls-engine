@@ -68,6 +68,35 @@ def test_multiple_characters_pick_earliest_created_deterministically() -> None:
     assert _list_entry(client, headers, campaign_id)["character_id"] == "char-early"
 
 
+def test_equal_created_at_uses_lower_row_id_as_tie_breaker() -> None:
+    client = _client()
+    headers = _headers(client, "assoc-tie")
+    campaign_id = _create_campaign(client, headers)
+    # Inserted first => lower row id, but a lexicographically larger character_id,
+    # so passing cannot be explained by ordering on character_id.
+    with get_engine().begin() as conn:
+        for cid in ("char-z-lower-id", "char-a-higher-id"):
+            conn.execute(
+                text(
+                    "INSERT INTO characters (character_id, campaign_id, name, created_at) "
+                    "VALUES (:cid, :camp, 'N', '2026-01-01T00:00:00')"
+                ),
+                {"cid": cid, "camp": campaign_id},
+            )
+        # A later row must not win either.
+        conn.execute(
+            text(
+                "INSERT INTO characters (character_id, campaign_id, name, created_at) "
+                "VALUES ('char-0-later', :camp, 'N', '2026-03-01T00:00:00')"
+            ),
+            {"camp": campaign_id},
+        )
+
+    detail = client.get(f"/api/campaign/{campaign_id}", headers=headers).json()
+    assert detail["character_id"] == "char-z-lower-id"
+    assert _list_entry(client, headers, campaign_id)["character_id"] == "char-z-lower-id"
+
+
 def test_character_id_is_owner_scoped() -> None:
     client = _client()
     headers_a = _headers(client, "assoc-owner-a")
