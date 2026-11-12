@@ -518,6 +518,7 @@ Schema-2 Claude review state is append-only except for one reservation
 Claude disposition schema: 2
 Claude disposition owner: <authenticated-login>
 Claude disposition record: <reservation | director | recovery>
+Workflow scope record: <none | issue-comment:<id>>
 PR head evaluated: <sha>
 Targeted re-review: <not used | reserved | used> for <same-sha>
 ```
@@ -535,6 +536,7 @@ authority.
 Claude disposition schema: 2
 Claude disposition owner: <authenticated-login>
 Claude disposition record: reservation
+Workflow scope record: <none | issue-comment:<id>>
 PR head evaluated: <sha>
 Targeted re-review: reserved for <sha>
 
@@ -558,6 +560,7 @@ A completed Director round is always a **new** record:
 Claude disposition schema: 2
 Claude disposition owner: <authenticated-login>
 Claude disposition record: director
+Workflow scope record: <none | issue-comment:<id>>
 PR head evaluated: <sha>
 Targeted re-review: <not used | used | reserved> for <sha>
 
@@ -628,6 +631,7 @@ already reached, and never authorizes remediation or readiness by itself.
 Claude disposition schema: 2
 Claude disposition owner: <authenticated-login>
 Claude disposition record: recovery
+Workflow scope record: <none | issue-comment:<id>>
 PR head evaluated: <sha>
 Targeted re-review: <highest-state-already-reached> for <sha>
 
