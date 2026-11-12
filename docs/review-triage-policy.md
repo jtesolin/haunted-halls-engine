@@ -42,6 +42,13 @@ do not allow the changed definitions to review or approve their own changes.
 Use independently trusted/base definitions, or escalate for human/external
 review when that isolation is unavailable.
 
+For coordinated workflow-control changes spanning engine and frontend, the
+engine repository's review-policy change is canonical and must merge first.
+A dependent frontend control PR may reference the proposed engine policy as
+cross-repository evidence during external/human review, but it must explicitly
+record that dependency and cannot reach `READY FOR HUMAN VALIDATION` or merge
+until the canonical engine-policy PR has merged.
+
 A fresh Claude session must not establish its review authority by starting
 directly inside an existing PR worktree, because repository instructions from
 the PR head may be auto-loaded before the in-repository workflow can establish
