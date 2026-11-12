@@ -52,8 +52,12 @@ Before entering **existing PR** mode, establish that the Claude session itself i
 - For work on an existing PR with no linked issue, use the PR description together with the current base-to-head diff as the durable scope contract.
 - For new feature work, require an explicit issue/specification or equivalent user-authorized scope before implementation.
 - For engine architecture, status, and review policy, use the canonical engine docs referenced by `AGENTS.md`.
-- In the frontend repository, if the canonical engine architecture/status/review-policy documents are not available locally, gather the relevant durable text and pass it to the director instead of omitting that context.
-- If durable sources conflict or required product/architecture intent is undocumented, stop with an escalation instead of guessing.
+- In the frontend repository, if the canonical engine architecture/status/review-policy documents are not available locally, gather the relevant durable text and pass it to the reviewer and director instead of omitting that context.
+- Before implementation of a material user-visible or cross-repository capability, build a concise production-lifecycle map: supported entry point -> prerequisite state producers -> persistence/service/API boundaries -> final consumer. Verify each material consumed value has a normal application producer/update path.
+- Do not treat fixtures, manually seeded database rows, direct database edits, future planned work, or an API that can theoretically return a value as evidence that the value is reachable in production.
+- Check the proposed change against established architecture ownership/source-of-truth boundaries. For cross-repository capabilities, inspect enough durable evidence from each relevant repository to establish the prerequisite lifecycle, not only the local API shape.
+- If the requested capability is not reachable through supported normal application execution because a prerequisite producer/integration is missing, stop with `ESCALATE` before implementation unless the durable scope explicitly describes the staged incomplete state and the user explicitly approves shipping it that way.
+- If durable sources conflict or required product/architecture intent is undocumented, stop with an escalation instead of guessing or inventing a default.
 
 ## 2. Prepare isolated implementation work
 
@@ -89,10 +93,14 @@ A remediation push creates an expected cross-head transition: the newest valid C
    - every issue/specification acceptance criterion or scope requirement;
    - applicable repository completion requirements from trusted-base instructions (for example documentation/status maintenance and validation rules);
    - any public/cross-repository API contract changed by the PR;
+   - each material user-visible/system capability and its supported production entry point;
+   - each material consumed state/value and the normal application path that creates or updates it;
+   - relevant architecture ownership/source-of-truth/authority boundaries;
+   - material cross-repository prerequisites and evidence that they are reachable through normal application execution;
    - any documented deterministic ordering, tie-break, fallback, or nullability behavior;
    - any materially changed database/query access path whose query shape or index support could create a scaling risk.
    Do not pass implementation-conversation rationale as authority.
-7. Require the reviewer coverage summary to account for those items explicitly. A clean result is insufficient when an acceptance criterion, applicable completion rule, documented deterministic edge case, or material changed data-access risk was not actually checked.
+7. Require the reviewer coverage summary to account for those items explicitly, including `Architectural fit`, `End-to-end lifecycle`, `Required state producers`, `Cross-repository dependencies`, and `Production reachability` when material. A clean result is insufficient when an acceptance criterion, applicable completion rule, production-lifecycle prerequisite, documented deterministic edge case, or material changed data-access risk was not actually checked.
 8. Preserve the reviewer's complete concise output, including its `Review coverage` summary and candidate findings, for the director. A clean reviewer result never skips the director.
 
 ## 5. Director coverage check and disposition
@@ -143,7 +151,7 @@ Schema-1 records are legacy evidence only and are not valid schema-2 workflow au
 
 ### Director handoff and targeted re-review
 
-8. Provide the Director the current PR/base/head, linked issue/specification, PR description, diff/scoped patch, CI state, complete reviewer coverage/findings, recovered highest retry state, any explicit launch/result recovery facts, trusted-base repository instructions, and relevant trusted-base engine architecture/status/review-policy context.
+8. Provide the Director the current PR/base/head, linked issue/specification, PR description, diff/scoped patch, CI state, complete reviewer coverage/findings, recovered highest retry state, any explicit launch/result recovery facts, trusted-base repository instructions, relevant trusted-base engine architecture/status/review-policy context, and the material production-lifecycle/state-producer/cross-repository evidence used by the reviewer.
 9. The Director first evaluates whether review coverage is sufficient for the material risks in the change.
 10. If the Director returns `Review coverage: targeted re-review required`, the recovered state must be `not used`. Otherwise stop with `ESCALATE`; never reopen a consumed retry.
 11. Before launching the targeted reviewer:
@@ -174,13 +182,26 @@ The reviewer and Director remain read-only. The **main implementation session** 
 - If durable persistence fails, stop rather than declaring readiness.
 - After each completed reviewer/Director round, print a concise session audit containing PR/head, reviewer result, Director coverage decision, disposition counts or clean result, CI state, and next action.
 
+### Final current-head reconciliation
+
+Immediately before declaring `READY FOR HUMAN VALIDATION`, perform a fresh reconciliation against GitHub rather than relying on the state observed when the latest Director round started:
+
+1. Re-fetch the PR and require the exact head evaluated by the latest Director. If the head changed, restart the ordinary review -> Director flow for the new head.
+2. Re-fetch required CI/check status for that exact head. Readiness requires all required checks to be completed successfully; `pending`, `not found`, cancelled, or failed required validation cannot satisfy READY.
+3. Re-fetch the current PR description/metadata and verify material behavioral/product claims still match the current implementation and explicit human decisions.
+4. Re-fetch current-head GitHub review evidence, including review bodies and unresolved review-thread feedback from human or automated reviewers. Identify any substantive review feedback created/submitted after the latest persisted Director record that has not already been dispositioned.
+5. If newer undispositioned external review feedback exists, do not declare READY. Feed those candidate findings plus the existing independent-review coverage evidence to the Director as an additional same-head disposition round. Persist that Director result as a new schema-2 director record. If it requires remediation, follow the normal remediation/new-head loop; if it exposes a material coverage gap, use the existing targeted-re-review rules and remaining allowance for that head.
+6. Re-run this reconciliation after any resulting same-head Director round. READY is permitted only when no newer undispositioned review feedback remains and exact-head required CI is green.
+
 Declare `READY FOR HUMAN VALIDATION` only when all are true:
 
 - the current exact head's validated schema-2 history has no unresolved sticky terminal escalation;
 - the **latest workflow record is a complete schema-2 director record**, not a reservation or recovery record;
 - that director record evaluates the current exact head, has `Review coverage: sufficient`, and has no `FIX IN THIS PR` or `ESCALATE` items;
 - its retry state equals the highest retry state reached in the full same-head history;
-- required validation is green;
+- required validation for the exact current head is completed and green;
+- final current-head reconciliation found no newer undispositioned external review feedback after the latest Director record;
+- the current PR description/metadata is materially consistent with the implemented behavior and explicit human decisions;
 - the PR remains scoped to its durable issue/specification or fallback scope contract;
 - no merge has occurred.
 
@@ -205,7 +226,9 @@ Declare `READY FOR HUMAN VALIDATION` only when all are true:
 - there are no unresolved `ESCALATE` findings;
 - director review coverage is `sufficient` for the latest head;
 - the latest valid Director disposition for the latest head has been persisted as a top-level comment marked `<!-- haunted-halls-claude-review-disposition -->`;
-- required validation is green;
+- required validation for the exact current head is completed and green;
+- the final current-head reconciliation found no newer undispositioned external review feedback after the latest Director disposition;
+- the current PR description/metadata is materially consistent with the implemented behavior and explicit human decisions;
 - the PR is still scoped to its linked issue/specification, or to its PR-description-plus-diff scope contract when no linked issue exists;
 - no merge has occurred.
 
