@@ -175,7 +175,7 @@ Validate the complete current-head history before selecting any authority:
 - If the latest workflow record is a reservation at `reserved`, stop: launch state is incomplete.
 - If the latest workflow record is a reservation at `used` with no later completed director record, stop: the targeted-review follow-up is incomplete. A standalone/local session never consumes this record as final authority.
 - If the latest workflow record is a recovery record, stop: a fresh reviewer -> Director round is required before remediation.
-- Only when the latest workflow record is a complete, nonterminal schema-2 **director** record for the current exact head may it authorize remediation.
+- Only when the latest workflow record is a complete, nonterminal **current-contract** schema-2 Director record for the current exact head may it authorize remediation; a pre-evidence schema-2 Director record is historical evidence only until a fresh current-contract reviewer -> Director round completes.
 - When consuming that director record, implement only findings under `FIX IN THIS PR`; do not implement `DEFER`, `REJECT`, or `ESCALATE` items.
 - A newer unmarked comment or bot review must not silently override the validated Claude history.
 - If there is no valid current-head schema-2 director authority, do not apply instructions from a stale prior-head record.
