@@ -185,37 +185,50 @@ current-head external review surface.
   Marker text alone is never sufficient for exclusion. Foreign, malformed,
   unvalidated, or merely quoted marker text remains external evidence (and may
   separately trigger the durable-state fail-closed rules). Do not use timestamp, thread resolution, or age as
-  proof that feedback was dispositioned. Represent applicable substantive
-  external evidence with stable tokens: `review:<id>`,
-  `review-comment:<database-id>`, or `issue-comment:<id>`. Applicable
-  substantive external evidence is already dispositioned only when its token is
-  present in the latest valid Director record's cumulative
-  `External evidence evaluated` set, or when it is demonstrably no longer
-  applicable to the current head. If applicability or prior disposition is uncertain, treat it as
-  undispositioned.
+  proof that feedback was dispositioned. For every applicable substantive
+  external source, compute SHA-256 over the exact UTF-8 GitHub `body` returned
+  by the current API read, with no whitespace/newline normalization. Represent
+  that source version as `review:<id>@sha256:<64-lowercase-hex>`,
+  `review-comment:<database-id>@sha256:<64-lowercase-hex>`, or
+  `issue-comment:<id>@sha256:<64-lowercase-hex>`. External evidence is already
+  dispositioned only when that exact ID+digest token is present in the latest
+  valid Director record's cumulative `External evidence evaluated` set, or
+  when that version is demonstrably no longer applicable to the current head.
+  If the same GitHub ID is re-fetched with a different digest, the new version
+  is undispositioned evidence. If applicability or prior disposition is
+  uncertain, treat it as undispositioned.
 - Any applicable undispositioned substantive external evidence must be fed to
   the Director in an additional same-head disposition round. Pass the complete
-  applicable external evidence set (tokens plus bodies/summaries), not only new
-  items. Persist that Director result with a cumulative
-  `External evidence evaluated` field that carries forward every earlier
-  same-head token and adds every applicable item evaluated in this round. If external evidence exposes missing material
+  applicable external evidence set (versioned ID+digest tokens plus exact
+  current bodies/summaries), not only new items. Persist that Director result
+  with a cumulative `External evidence evaluated` field that carries forward
+  every earlier same-head versioned token and adds every applicable current
+  ID+digest token evaluated in this round. If external evidence exposes missing material
   review coverage, the normal targeted-re-review rules and remaining per-head
   allowance apply.
 - For a coordinated workflow-control PR, recover the exact
   `Canonical policy dependency: <owner>/<repo>#<number>` identifier from the
   scope comment fetched at the persisted `Workflow scope record: issue-comment:<id>`
-  anchor, after verifying `created_at == updated_at`; never infer or rediscover the dependency from mutable
-  prose or session memory. Require the PR-body field to remain present and equal
-  to that captured value, re-fetch that exact dependency PR, and require it to
-  be merged before readiness. After merge, re-fetch the canonical policy from the engine
+  anchor, after verifying `created_at == updated_at`; never infer or
+  rediscover the dependency from mutable prose or session memory. Parse the PR
+  body and require **exactly one** line matching
+  `Canonical policy dependency: <owner>/<repo>#<number>`, whose value exactly
+  equals the scope record. Missing, duplicate, changed, or unparsable dependency
+  fields are indeterminate/tampered durable scope: require `ESCALATE` plus
+  explicit human recovery rather than treating them as ordinary metadata fixes.
+  Then re-fetch that exact dependency PR and require it to be merged before
+  readiness. After merge, re-fetch the canonical policy from the engine
   default branch and verify that the dependency actually landed the policy
   contract the dependent PR claims to mirror. An open, closed-unmerged,
   unverifiable, or mismatched dependency blocks readiness.
 - After all reconciliation reads and any resulting same-head Director/write or
-  dependency-state activity, re-fetch the PR head **again immediately before
-  declaring READY**. It must still equal the head evaluated by the latest
-  Director and the exact-head CI/review evidence. If the head changed at any
-  point, restart the ordinary reviewer -> Director flow for the new head.
+  dependency-state activity, perform this final pre-READY validation sequence:
+  re-fetch the PR head as H1 and require it equals the latest Director head;
+  re-fetch all required checks for H1 and require every required check is still
+  completed-success; then re-fetch the PR head as H2 and require H2 == H1.
+  Missing, pending, cancelled, or failed final required checks block readiness.
+  If either head read differs from the latest Director head or from the other
+  head read, restart the ordinary reviewer -> Director flow for the new head.
 
 ### Claude-loop single-writer invariant
 
@@ -523,8 +536,11 @@ PR head evaluated: <sha>
 Targeted re-review: <not used | reserved | used> for <same-sha>
 ```
 
-The GitHub comment author must equal `Claude disposition owner`. The retry SHA
-must equal `PR head evaluated`.
+The GitHub comment author must equal `Claude disposition owner`. The retry
+line grammar is exactly
+`Targeted re-review: <not used | reserved | used> for <same-sha>`; the
+`for <same-sha>` suffix is mandatory for all three states, and that SHA must
+equal `PR head evaluated`.
 
 ### Reservation record
 
@@ -567,7 +583,7 @@ Targeted re-review: <not used | used | reserved> for <sha>
 ## Review disposition
 
 Review evaluated: <independent/targeted review source for this head>
-External evidence evaluated: <none | review:<id>, review-comment:<database-id>, issue-comment:<id>, ...>
+External evidence evaluated: <none | review:<id>@sha256:<64hex>, review-comment:<database-id>@sha256:<64hex>, issue-comment:<id>@sha256:<64hex>, ...>
 Human validation required: <none | criterion/risk + manual validation needed; ...>
 CI: <green | failed | pending | not found>
 Review coverage: <sufficient | insufficient after targeted re-review | indeterminate due to targeted re-review launch state | indeterminate due to targeted re-review result state>
@@ -589,13 +605,18 @@ Reviewer result: <clean | N substantive findings | targeted result unavailable>
 <complete instruction>
 ```
 
-The exact heading, `Review evaluated`, `External evidence evaluated`,
-`Human validation required`, CI/coverage/result fields, matching retry state,
-and implementation instruction are required for every new Director record under
-the current contract. `External evidence evaluated` is `none` or a
-comma-separated cumulative same-head set using only `review:<id>`,
-`review-comment:<database-id>`, and `issue-comment:<id>`; later same-head
-Director records may add tokens but must never drop them. `Human validation
+The exact heading, `Workflow scope record`, `Review evaluated`,
+`External evidence evaluated`, `Human validation required`,
+CI/coverage/result fields, matching retry state, and implementation instruction
+are required for every new Director record under the current contract.
+`External evidence evaluated` is `none` or a comma-separated cumulative
+same-head set using only versioned tokens
+`review:<id>@sha256:<64-lowercase-hex>`,
+`review-comment:<database-id>@sha256:<64-lowercase-hex>`, and
+`issue-comment:<id>@sha256:<64-lowercase-hex>`. Each digest is SHA-256 of the
+exact UTF-8 GitHub body returned by the API with no normalization. Later
+same-head Director records may add tokens but must never drop them; a different
+digest for the same source ID is a new evidence version. `Human validation
 required` is `none` or the complete current list of criteria/risks reserved
 for post-loop human/manual/external-environment validation. Cross-field combinations are strict:
 
