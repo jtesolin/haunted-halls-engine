@@ -174,11 +174,18 @@ Validate the complete current-head history before selecting any authority:
 - Same-owner schema-2 **reservation** records must have heading `## Targeted re-review reservation`, coverage `targeted re-review required`, a targeted instruction, and retry state `reserved` or `used`. They are intermediate state only and never remediation authority.
 - New same-owner schema-2 **director** records under the current contract must have heading `## Review disposition`, `Review evaluated`, `External evidence evaluated`, `Human validation required`, `CI`, an allowed completed `Review coverage`, `Reviewer result`, matching retry state, and `### Implementation instruction`. `External evidence evaluated` must be `none` or a cumulative same-head set
 of versioned `review:<id>@sha256:<64-lowercase-hex>`,
-`review-comment:<database-id>@sha256:<64-lowercase-hex>`, and
-`issue-comment:<id>@sha256:<64-lowercase-hex>` tokens, where each digest is
+`review-comment:<database-id>@sha256:<64-lowercase-hex>`,
+`issue-comment:<id>@sha256:<64-lowercase-hex>`, and
+`commit-comment:<id>@sha256:<64-lowercase-hex>` tokens, where each digest is
 SHA-256 of the exact UTF-8 GitHub body with no normalization. Later same-head
 Director records may add but never drop tokens; a changed digest for an existing
-ID is a new evidence version. `Human validation required` must be `none` or the complete current list. Enforce coverage/retry combinations: `sufficient` -> `not used|used`; `insufficient after targeted re-review` -> `used` + `### ESCALATE`; launch-state indeterminate -> `reserved` + `### ESCALATE`; result-state indeterminate -> `used` + `### ESCALATE`. A partial or inconsistent Director record is malformed and must not become authority.
+ID is a new evidence version. Before consuming a current-contract Director
+record as remediation/readiness authority, re-fetch every currently applicable
+external source, including commit comments for commits in the current PR commit
+set, recompute SHA-256 over the exact current UTF-8 GitHub body, and require
+that exact current token in the latest Director record. Older-version tokens
+may remain for audit but never substitute for the current token; an
+unfetchable/unhashable current source blocks authority. `Human validation required` must be `none` or the complete current list. Enforce coverage/retry combinations: `sufficient` -> `not used|used`; `insufficient after targeted re-review` -> `used` + `### ESCALATE`; launch-state indeterminate -> `reserved` + `### ESCALATE`; result-state indeterminate -> `used` + `### ESCALATE`. A partial or inconsistent Director record is malformed and must not become authority.
 - Same-owner schema-2 **recovery** records must have heading `## Review recovery`, `Recovery authorization: explicit user direction`, and preserve the highest retry state already reached. They are not remediation authority.
 - Schema-1 comments are legacy evidence only. If schema-1 marked state exists for the current exact head when schema-2 workflow authority is expected, stop and ask the user instead of translating it silently.
 - A pre-scope/evidence schema-2 record lacking `Workflow scope record`, or a Director record lacking `External evidence evaluated` and/or `Human validation required` or carrying non-`none` unversioned evidence tokens, remains historical retry/sticky-escalation evidence rather than being malformed solely for those omissions, but it cannot authorize current remediation/readiness; a fresh current-contract reviewer -> Director round is required.
