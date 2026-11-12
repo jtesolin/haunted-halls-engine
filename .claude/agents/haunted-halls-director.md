@@ -89,7 +89,7 @@ Human validation required: `none | <criterion/risk + manual validation needed>; 
 CI: `green | failed | pending | not found`
 Review coverage: sufficient
 Reviewer result: `clean | <N> substantive finding(s)`
-Targeted re-review: `used | not used` for `<sha>`
+Targeted re-review: `<state>` for `<sha>`
 
 ### FIX IN THIS PR
 - <finding id + concise rationale>
@@ -107,6 +107,8 @@ Targeted re-review: `used | not used` for `<sha>`
 Implement only items under `FIX IN THIS PR`. Do not implement `DEFER`,
 `REJECT`, or `ESCALATE` items without explicit user direction.
 ```
+
+For the sufficient-coverage template above, replace `<state>` with exactly `not used` or `used`; never emit the placeholder or alternatives literally. The resulting line must therefore be exactly `Targeted re-review: not used for <sha>` or `Targeted re-review: used for <sha>`.
 
 Omit empty disposition sections. The hidden marker, `Claude disposition schema: 2`, `Claude disposition owner`, `Claude disposition record: director`, `Workflow scope record`, `PR head evaluated`, matching `Targeted re-review`, `External evidence evaluated`, and `Human validation required` fields are mandatory in every completed Director record, including terminal records. Use the authenticated owner login and validated workflow-scope identity supplied by the caller verbatim. `Workflow scope record` must be `none` for PRs without a coordinated canonical-policy dependency and `issue-comment:<id>` for coordinated workflow-control PRs; never infer or substitute a different scope comment. `External evidence evaluated` is the cumulative same-head set of versioned ID+digest tokens and must never drop a previously recorded token; use `none` only when empty. Every emitted retry line must use the exact grammar `Targeted re-review: <not used | reserved | used> for <sha>`; the `for <sha>` suffix is mandatory for all three states. Always echo whether the targeted re-review was `used` or `not used` for the evaluated head so the main session can persist restart-safe per-head retry state. A complete sufficient-coverage disposition is never emitted while state is `reserved`; reserved state uses the terminal retry-state escalation variant below. If there are no actionable findings and no escalation, include the heading, evaluated head/review/CI fields, `Review coverage: sufficient`, `Reviewer result: clean`, the targeted-re-review state, and an implementation instruction stating that no remediation is required.
 
