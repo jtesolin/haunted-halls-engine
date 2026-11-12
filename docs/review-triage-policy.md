@@ -354,8 +354,11 @@ The retry SHA must exactly equal the evaluated-head SHA.
      `indeterminate due to targeted re-review result state` and stops;
    - `recovery`: run a fresh ordinary reviewer -> Director round; the recovery
      record itself is not authority;
-   - nonterminal completed `director`: this is the current remediation/readiness
-     authority.
+   - nonterminal completed `director`: this is current remediation/readiness
+     authority only when it satisfies the current-contract Director fields.
+     A pre-evidence schema-2 Director record remains historical evidence and
+     requires a fresh ordinary reviewer -> Director round before authority is
+     restored.
 8. Run the Director for every reviewer result, including a clean review.
 9. If the Director requests a targeted re-review, recovered state must be
    `not used`. Re-fetch the head, then create a **new reservation record** with
