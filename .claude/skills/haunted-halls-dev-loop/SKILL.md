@@ -90,7 +90,7 @@ A remediation push creates an expected cross-head transition: the newest valid C
 4. If the PR changes `.claude/agents/haunted-halls-reviewer.md`, `.claude/agents/haunted-halls-director.md`, or `.claude/skills/haunted-halls-dev-loop/SKILL.md`, do not let the head versions review or direct their own changes. Stop with `ESCALATE` unless the reviewer/director can be instantiated from a trusted-base copy outside the changed PR.
 5. Invoke the `haunted-halls-reviewer` subagent with fresh context only after the trusted boundary is established.
 6. Supply the durable scope contract, current change identity, actual diff/scoped patch, and trusted-base instruction/policy context. Explicitly identify:
-   - every issue/specification acceptance criterion or scope requirement;
+   - every issue/specification acceptance criterion or scope requirement, identifying criteria legitimately reserved for post-loop manual/external-environment human validation rather than silently treating them as deferred engineering work;
    - applicable repository completion requirements from trusted-base instructions (for example documentation/status maintenance and validation rules);
    - any public/cross-repository API contract changed by the PR;
    - each material user-visible/system capability and its supported production entry point;
@@ -189,9 +189,9 @@ Immediately before declaring `READY FOR HUMAN VALIDATION`, perform a fresh recon
 1. Re-fetch the PR and require the exact head evaluated by the latest Director. If the head changed, restart the ordinary review -> Director flow for the new head.
 2. Re-fetch required CI/check status for that exact head. Readiness requires all required checks to be completed successfully; `pending`, `not found`, cancelled, or failed required validation cannot satisfy READY.
 3. Re-fetch the current PR description/metadata and verify material behavioral/product claims still match the current implementation and explicit human decisions.
-4. Re-fetch current-head GitHub review evidence, including review bodies and unresolved review-thread feedback from human or automated reviewers. Identify any substantive review feedback created/submitted after the latest persisted Director record that has not already been dispositioned.
-5. If newer undispositioned external review feedback exists, do not declare READY. Feed those candidate findings plus the existing independent-review coverage evidence to the Director as an additional same-head disposition round. Persist that Director result as a new schema-2 director record. If it requires remediation, follow the normal remediation/new-head loop; if it exposes a material coverage gap, use the existing targeted-re-review rules and remaining allowance for that head.
-6. Re-run this reconciliation after any resulting same-head Director round. READY is permitted only when no newer undispositioned review feedback remains and exact-head required CI is green.
+4. Re-fetch current-head GitHub review evidence, including review bodies and review-thread feedback from human or automated reviewers. Resolution state is useful evidence but does not by itself mean feedback newer than the latest Director was dispositioned. Identify any substantive review feedback created/submitted after the latest persisted Director record that has not already been dispositioned.
+5. If the PR description/metadata has a material mismatch with current behavior/decisions, or if newer undispositioned external review feedback exists, do not declare READY. Feed those candidate findings plus the existing independent-review coverage evidence to the Director as an additional same-head disposition round. Persist that Director result as a new schema-2 director record. If it requires remediation or PR-metadata correction, perform only the authorized `FIX IN THIS PR` work and then continue the normal loop; if it exposes a material coverage gap, use the existing targeted-re-review rules and remaining allowance for that head.
+6. Re-run this reconciliation after any resulting metadata correction or same-head Director round. READY is permitted only when no material PR-metadata mismatch or newer undispositioned review feedback remains and exact-head required CI is green.
 
 Declare `READY FOR HUMAN VALIDATION` only when all are true:
 
@@ -232,6 +232,6 @@ Declare `READY FOR HUMAN VALIDATION` only when all are true:
 - the PR is still scoped to its linked issue/specification, or to its PR-description-plus-diff scope contract when no linked issue exists;
 - no merge has occurred.
 
-Report the PR number/head, validation status, review/remediation rounds, any targeted re-review, any deferred findings, and anything the human should specifically validate.
+Report the PR number/head, validation status, review/remediation rounds, any targeted re-review, any deferred findings, and every acceptance criterion or risk still marked `human validation required` so the human knows exactly what remains to validate.
 
 Never merge.
