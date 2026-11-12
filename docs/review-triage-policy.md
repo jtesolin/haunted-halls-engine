@@ -203,7 +203,8 @@ current-head external review surface.
   allowance apply.
 - For a coordinated workflow-control PR, recover the exact
   `Canonical policy dependency: <owner>/<repo>#<number>` identifier from the
-  immutable scope record; never infer or rediscover the dependency from mutable
+  scope comment fetched at the persisted `Workflow scope record: issue-comment:<id>`
+  anchor, after verifying `created_at == updated_at`; never infer or rediscover the dependency from mutable
   prose or session memory. Require the PR-body field to remain present and equal
   to that captured value, re-fetch that exact dependency PR, and require it to
   be merged before readiness. After merge, re-fetch the canonical policy from the engine
@@ -348,18 +349,25 @@ This immutable record captures the canonical-policy dependency for this PR.
 ```
 
 The comment author and owner field must equal the authenticated implementation
-identity, the dependency must match PR scope at capture time, and the comment
-must never be edited or replaced. Multiple, malformed, foreign-owner, or
-conflicting scope records require escalation. On restart, recover the dependency
-from this scope record rather than from PR prose or conversational memory. If
-review/disposition work has already begun under this contract and the required
-scope record is missing, require explicit human recovery instead of inferring a
-baseline from the current PR body.
+identity, the dependency must match PR scope at capture time, and the numeric
+GitHub issue-comment ID returned by creation becomes the scope integrity anchor.
+Every subsequent schema-2 reservation/Director/recovery record must persist that
+ID as `Workflow scope record: issue-comment:<id>`. On every scope read, fetch
+that exact top-level issue comment through an API surface exposing `created_at`
+and `updated_at`; both must be present and equal. An edit
+(`updated_at != created_at`), missing/unverifiable timestamps, deletion,
+replacement at a different ID, multiple scope records, malformed content,
+foreign ownership, or disagreement among schema-2 records about the scope ID
+requires escalation. On restart, recover the dependency
+from this scope record rather than from PR prose or conversational memory. If any schema-2 workflow record already exists, its `Workflow scope record`
+value is the restart-safe integrity anchor and every same-owner schema-2 record
+for the PR must name the same value. If such workflow state exists and the
+required scope comment is missing, edited, replaced, or cannot be fetched at the
+persisted ID, require explicit human recovery instead of inferring a baseline
+from the current PR body.
 
 The scope record is PR-wide and not head-bound. It is neither retry state nor
 remediation/readiness authority by itself.
-
-Current workflow authority uses **Claude disposition schema 2**. Every marked
 
 Current workflow authority uses **Claude disposition schema 2**. Every marked
 top-level record contains:
@@ -367,10 +375,14 @@ top-level record contains:
 - `Claude disposition schema: 2`
 - `Claude disposition owner: <authenticated-login>`
 - `Claude disposition record: reservation | director | recovery`
+- `Workflow scope record: none | issue-comment:<id>`
 - `PR head evaluated: <sha>`
 - `Targeted re-review: not used | reserved | used for <same-sha>`
 
-The retry SHA must exactly equal the evaluated-head SHA.
+The retry SHA must exactly equal the evaluated-head SHA. `Workflow scope record`
+is `none` for ordinary PRs. For a coordinated workflow-control PR, it must be
+the single validated scope-comment ID and must remain identical across every
+same-owner schema-2 record for the PR, across all heads.
 
 1. Resolve the authenticated GitHub implementation login.
 2. Locate all **top-level PR/issue comments** marked
@@ -384,7 +396,11 @@ The retry SHA must exactly equal the evaluated-head SHA.
    - schema-1 records are legacy evidence only and are not silently translated
      into schema-2 workflow authority;
    - same-owner schema-2 records must satisfy the complete record-type contract
-     below, including matching head/retry SHA.
+     below, including matching head/retry SHA and a valid workflow-scope anchor;
+   - for coordinated workflow-control PRs, fetch the scope comment at the
+     persisted ID and require author/owner/schema/dependency validity plus
+     `created_at == updated_at`; a missing, edited, replaced, or unverifiable
+     scope comment fails closed.
 4. Validate the full valid same-head record sequence in GitHub creation order
    (tie-break numeric comment id). Retry state is monotonic:
    `not used -> reserved -> used`. Same-state later records are allowed; any
