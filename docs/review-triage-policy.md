@@ -145,25 +145,41 @@ restart review on the new head.
 
 A completed current-head Director disposition is necessary but not by itself
 sufficient for `READY FOR HUMAN VALIDATION`. Immediately before readiness, the
-owning loop must re-fetch the exact current head, required CI/check state, PR
-description/metadata, and current-head GitHub review evidence.
+owning loop must reconcile the exact current head, current durable scope,
+required CI/check state, PR description/metadata, and the complete applicable
+current-head external review surface.
 
+- Re-fetch the linked issue/specification when one exists and compare its current
+  scope/acceptance criteria with the scope supplied to the latest Director
+  round. If it materially changed, or a restarted session cannot prove it is
+  unchanged, run a fresh ordinary reviewer -> Director round with the current
+  scope before readiness.
 - Required CI/checks for the exact current head must be completed successfully;
   pending, missing, cancelled, or failed required validation cannot satisfy
   readiness.
 - Material PR-description/product claims must still match the implementation and
   explicit human decisions. A material mismatch is a current-head candidate
   finding and must be dispositioned/corrected before readiness.
-- Any substantive human or automated review feedback created/submitted after the
-  latest persisted Director record and not already dispositioned is new evidence,
-  not something readiness may ignore. Review-thread resolution state is evidence
-  but does not by itself count as Director disposition. Feed newer candidate
-  findings to the Director in an additional same-head disposition round and
-  persist the result before readiness.
-- If newer feedback exposes missing material review coverage, the normal
-  targeted-re-review rules and remaining per-head allowance apply.
-- If the head changes during reconciliation, restart the ordinary review ->
-  Director flow for the new head.
+- Re-fetch review submissions/bodies, review-thread comments, and substantive
+  top-level PR conversation comments from human or automated reviewers. Do not
+  use timestamp, thread resolution, or age as proof that feedback was
+  dispositioned. Applicable substantive external evidence is already
+  dispositioned only when its stable GitHub review/comment/thread identifier is
+  explicitly represented in the latest Director record's `Review evaluated`
+  evidence set, or when it is demonstrably no longer applicable to the current
+  head. If applicability or prior disposition is uncertain, treat it as
+  undispositioned.
+- Any applicable undispositioned substantive external evidence must be fed to
+  the Director in an additional same-head disposition round. Persist that
+  Director result with `Review evaluated` explicitly naming the stable GitHub
+  identifiers it evaluated. If external evidence exposes missing material
+  review coverage, the normal targeted-re-review rules and remaining per-head
+  allowance apply.
+- After all reconciliation reads and any resulting same-head Director/write
+  activity, re-fetch the PR head **again immediately before declaring READY**.
+  It must still equal the head evaluated by the latest Director and the
+  exact-head CI/review evidence. If the head changed at any point, restart the
+  ordinary reviewer -> Director flow for the new head.
 
 ### Claude-loop single-writer invariant
 
@@ -206,8 +222,6 @@ only for validation that inherently requires human/external execution or that
 durable scope/trusted workflow explicitly reserves for human validation; it
 must not be used to avoid implementable code, tests, documentation, or
 automation required by the current change.
-
-Every substantive finding receives exactly one of these four dispositions:
 
 ### `FIX IN THIS PR`
 
@@ -363,12 +377,15 @@ The retry SHA must exactly equal the evaluated-head SHA.
     immutable history and do not authorize the new head. Continue only with the
     mandatory fresh review for the new head.
 18. Immediately before `READY FOR HUMAN VALIDATION`, run the final current-head
-    reconciliation above. A newer undispositioned human/automated review finding
-    requires an additional same-head Director round; exact-head required CI must
-    be completed green; material PR-description claims must match the current
-    implementation and explicit human decisions.
-19. Do not declare readiness until that reconciliation is clean and no newer
-    undispositioned review evidence remains.
+    reconciliation above. Re-fetch the linked issue/specification, require
+    exact-head required CI to be completed green, reconcile material PR metadata,
+    and account for **all applicable substantive external review evidence**, not
+    only newer feedback. Persist stable GitHub identifiers for evaluated external
+    evidence in the latest Director record's `Review evaluated` field.
+19. After those reads and any resulting same-head Director/write activity,
+    re-fetch the PR head one final time immediately before READY. Do not declare
+    readiness unless it still matches the latest Director/CI/review-evidence head
+    and no applicable undispositioned external review evidence remains.
 
 ### Non-Claude / human disposition path
 
