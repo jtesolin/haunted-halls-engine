@@ -358,9 +358,21 @@ Then select exactly one disposition path.
 Use this path only when the active workflow is the Claude dev loop and its
 durable Claude review records are expected.
 
+Before any Claude reviewer invocation, classify the PR from the durable scope
+contract established by the trusted caller/base context. A PR whose scope is a
+coordinated workflow-control change must have exactly one
+`Canonical policy dependency: <owner>/<repo>#<number>` value and exactly one
+validated scope comment before review begins. With zero current-contract
+workflow records, missing scope capture blocks the first review rather than
+allowing `Workflow scope record: none`. If only pre-scope legacy schema-2
+history exists, keep it as historical/non-authoritative evidence and establish a
+fresh scope anchor before the first current-contract reviewer -> Director round;
+if the dependency cannot be established unambiguously from current durable
+scope, require explicit human recovery.
+
 For a coordinated workflow-control PR with a canonical-policy dependency,
 persist exactly one immutable PR-wide scope comment before the first
-reviewer/Director round:
+current-contract reviewer/Director round:
 
 ```markdown
 <!-- haunted-halls-claude-scope -->
@@ -375,20 +387,23 @@ This immutable record captures the canonical-policy dependency for this PR.
 The comment author and owner field must equal the authenticated implementation
 identity, the dependency must match PR scope at capture time, and the numeric
 GitHub issue-comment ID returned by creation becomes the scope integrity anchor.
-Every subsequent schema-2 reservation/Director/recovery record must persist that
-ID as `Workflow scope record: issue-comment:<id>`. On every scope read, fetch
+Every subsequent **current-contract** schema-2
+reservation/Director/recovery record must persist that ID as
+`Workflow scope record: issue-comment:<id>`. On every scope read, fetch
 that exact top-level issue comment through an API surface exposing `created_at`
 and `updated_at`; both must be present and equal. An edit
 (`updated_at != created_at`), missing/unverifiable timestamps, deletion,
 replacement at a different ID, multiple scope records, malformed content,
 foreign ownership, or disagreement among schema-2 records about the scope ID
 requires escalation. On restart, recover the dependency
-from this scope record rather than from PR prose or conversational memory. If any schema-2 workflow record already exists, its `Workflow scope record`
-value is the restart-safe integrity anchor and every same-owner schema-2 record
-for the PR must name the same value. If such workflow state exists and the
-required scope comment is missing, edited, replaced, or cannot be fetched at the
-persisted ID, require explicit human recovery instead of inferring a baseline
-from the current PR body.
+from this scope record rather than from PR prose or conversational memory. If any **current-contract** schema-2 workflow record already exists, its
+`Workflow scope record` value is the restart-safe integrity anchor and every
+same-owner current-contract schema-2 record for the PR must name the same value.
+Pre-scope legacy records remain historical/non-authoritative and are exempt from
+the field-level anchor invariant they predate. If current-contract workflow state
+exists and the required scope comment is missing, edited, replaced, or cannot be
+fetched at the persisted ID, require explicit human recovery instead of
+inferring a baseline from the current PR body.
 
 The scope record is PR-wide and not head-bound. It is neither retry state nor
 remediation/readiness authority by itself.
@@ -406,7 +421,9 @@ top-level record contains:
 The retry SHA must exactly equal the evaluated-head SHA. `Workflow scope record`
 is `none` for ordinary PRs. For a coordinated workflow-control PR, it must be
 the single validated scope-comment ID and must remain identical across every
-same-owner schema-2 record for the PR, across all heads.
+same-owner **current-contract** schema-2 record for the PR, across all heads.
+Pre-scope legacy records are historical/non-authoritative and need not contain
+the field.
 
 1. Resolve the authenticated GitHub implementation login.
 2. Locate all **top-level PR/issue comments** marked
@@ -419,8 +436,10 @@ same-owner schema-2 record for the PR, across all heads.
    - a foreign marked record whose head cannot be parsed also fails closed;
    - schema-1 records are legacy evidence only and are not silently translated
      into schema-2 workflow authority;
-   - same-owner schema-2 records must satisfy the complete record-type contract
-     below, including matching head/retry SHA and a valid workflow-scope anchor;
+   - same-owner current-contract schema-2 records must satisfy the complete
+     record-type contract below, including matching head/retry SHA and a valid
+     workflow-scope anchor; pre-scope legacy records remain historical evidence
+     under the compatibility rule below and cannot authorize remediation/readiness;
    - for coordinated workflow-control PRs, fetch the scope comment at the
      persisted ID and require author/owner/schema/dependency validity plus
      `created_at == updated_at`; a missing, edited, replaced, or unverifiable
