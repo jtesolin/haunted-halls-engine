@@ -199,7 +199,7 @@ unfetchable/unhashable current source blocks authority. `Human validation requir
 - When consuming that director record, implement only findings under `FIX IN THIS PR`; do not implement `DEFER`, `REJECT`, or `ESCALATE` items.
 - A newer unmarked comment or bot review must not silently override the validated Claude history.
 - For coordinated workflow-control PRs, require the single validated scope
-  record; if schema-2 workflow state exists and that record is
+  record; if current-contract schema-3 workflow state exists and that record is
   absent/unverifiable, stop for explicit recovery. Parse the current PR body and
   require **exactly one** `Canonical policy dependency: <owner>/<repo>#<number>`
   line matching the validated scope record. Missing, duplicate, changed, or
