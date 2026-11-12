@@ -45,9 +45,13 @@ review when that isolation is unavailable.
 For coordinated workflow-control changes spanning engine and frontend, the
 engine repository's review-policy change is canonical and must merge first.
 A dependent frontend control PR may reference the proposed engine policy as
-cross-repository evidence during external/human review, but it must explicitly
-record the exact dependency PR and cannot reach `READY FOR HUMAN VALIDATION`
-or merge until that PR is re-fetched and verified merged. Readiness must also
+cross-repository evidence during external/human review, but durable PR scope
+must record the exact dependency as
+`Canonical policy dependency: <owner>/<repo>#<number>`. Capture that exact
+identifier when scope is established; later removal or alteration is a material
+metadata mismatch and must not erase the dependency from reconciliation. The
+frontend PR cannot reach `READY FOR HUMAN VALIDATION` or merge until that exact
+PR is re-fetched and verified merged. Readiness must also
 verify the merged engine default branch actually contains the canonical policy
 contract the frontend PR claims to mirror.
 
@@ -193,9 +197,11 @@ current-head external review surface.
   same-head token and adds every applicable item evaluated in this round. If external evidence exposes missing material
   review coverage, the normal targeted-re-review rules and remaining per-head
   allowance apply.
-- For a coordinated workflow-control PR that records a canonical engine-policy
-  PR dependency, re-fetch that exact dependency PR and require it to be merged
-  before readiness. After merge, re-fetch the canonical policy from the engine
+- For a coordinated workflow-control PR, use the exact
+  `Canonical policy dependency: <owner>/<repo>#<number>` identifier captured
+  at scope establishment; never infer or rediscover the dependency from mutable
+  prose. Require the field to remain present and unchanged, re-fetch that exact
+  dependency PR, and require it to be merged before readiness. After merge, re-fetch the canonical policy from the engine
   default branch and verify that the dependency actually landed the policy
   contract the dependent PR claims to mirror. An open, closed-unmerged,
   unverifiable, or mismatched dependency blocks readiness.
