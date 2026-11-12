@@ -387,7 +387,7 @@ This immutable record captures the canonical-policy dependency for this PR.
 The comment author and owner field must equal the authenticated implementation
 identity, the dependency must match PR scope at capture time, and the numeric
 GitHub issue-comment ID returned by creation becomes the scope integrity anchor.
-Every subsequent **current-contract** schema-2
+Every subsequent **current-contract** schema-3
 reservation/Director/recovery record must persist that ID as
 `Workflow scope record: issue-comment:<id>`. On every scope read, fetch
 that exact top-level issue comment through an API surface exposing `created_at`
@@ -396,9 +396,9 @@ and `updated_at`; both must be present and equal. An edit
 replacement at a different ID, multiple scope records, malformed content,
 foreign ownership, or disagreement among schema-2 records about the scope ID
 requires escalation. On restart, recover the dependency
-from this scope record rather than from PR prose or conversational memory. If any **current-contract** schema-2 workflow record already exists, its
+from this scope record rather than from PR prose or conversational memory. If any **current-contract** schema-3 workflow record already exists, its
 `Workflow scope record` value is the restart-safe integrity anchor and every
-same-owner current-contract schema-2 record for the PR must name the same value.
+same-owner current-contract schema-3 record for the PR must name the same value.
 Pre-scope legacy records remain historical/non-authoritative and are exempt from
 the field-level anchor invariant they predate. If current-contract workflow state
 exists and the required scope comment is missing, edited, replaced, or cannot be
@@ -408,10 +408,10 @@ inferring a baseline from the current PR body.
 The scope record is PR-wide and not head-bound. It is neither retry state nor
 remediation/readiness authority by itself.
 
-Current workflow authority uses **Claude disposition schema 2**. Every marked
+Current workflow authority uses **Claude disposition schema 3**. Every marked
 top-level record contains:
 
-- `Claude disposition schema: 2`
+- `Claude disposition schema: 3`
 - `Claude disposition owner: <authenticated-login>`
 - `Claude disposition record: reservation | director | recovery`
 - `Workflow scope record: none | issue-comment:<id>`
@@ -419,11 +419,7 @@ top-level record contains:
 - `Targeted re-review: <not used | reserved | used> for <same-sha>`
 
 The retry SHA must exactly equal the evaluated-head SHA. `Workflow scope record`
-is `none` for ordinary PRs. For a coordinated workflow-control PR, it must be
-the single validated scope-comment ID and must remain identical across every
-same-owner **current-contract** schema-2 record for the PR, across all heads.
-Pre-scope legacy records are historical/non-authoritative and need not contain
-the field.
+is `none` for ordinary PRs. For a coordinated workflow-control PR, it must be the single validated scope-comment ID and must remain identical across every same-owner schema-3 record for the PR, across all heads.
 
 1. Resolve the authenticated GitHub implementation login.
 2. Locate all **top-level PR/issue comments** marked
@@ -434,12 +430,8 @@ the field.
    - a foreign marked record targeting that head requires `ESCALATE` and an
      explicit ownership-handoff/recovery decision;
    - a foreign marked record whose head cannot be parsed also fails closed;
-   - schema-1 records are legacy evidence only and are not silently translated
-     into schema-2 workflow authority;
-   - same-owner current-contract schema-2 records must satisfy the complete
-     record-type contract below, including matching head/retry SHA and a valid
-     workflow-scope anchor; pre-scope legacy records remain historical evidence
-     under the compatibility rule below and cannot authorize remediation/readiness;
+   - schema-1 and schema-2 records are legacy historical evidence only and are never silently translated into schema-3 workflow authority;
+   - same-owner schema-3 records must satisfy the complete record-type contract below, including matching head/retry SHA and a valid workflow-scope anchor;
    - for coordinated workflow-control PRs, fetch the scope comment at the
      persisted ID and require author/owner/schema/dependency validity plus
      `created_at == updated_at`; a missing, edited, replaced, or unverifiable
@@ -553,12 +545,12 @@ relevant durable documentation are sufficient.
 
 ## Claude-loop durable review-record contract
 
-Schema-2 Claude review state is append-only except for one reservation
+Schema-3 Claude review state is append-only except for one reservation
 `reserved -> used` transition. All records begin with:
 
 ```markdown
 <!-- haunted-halls-claude-review-disposition -->
-Claude disposition schema: 2
+Claude disposition schema: 3
 Claude disposition owner: <authenticated-login>
 Claude disposition record: <reservation | director | recovery>
 Workflow scope record: <none | issue-comment:<id>>
@@ -579,7 +571,7 @@ authority.
 
 ```markdown
 <!-- haunted-halls-claude-review-disposition -->
-Claude disposition schema: 2
+Claude disposition schema: 3
 Claude disposition owner: <authenticated-login>
 Claude disposition record: reservation
 Workflow scope record: <none | issue-comment:<id>>
@@ -603,7 +595,7 @@ A completed Director round is always a **new** record:
 
 ```markdown
 <!-- haunted-halls-claude-review-disposition -->
-Claude disposition schema: 2
+Claude disposition schema: 3
 Claude disposition owner: <authenticated-login>
 Claude disposition record: director
 Workflow scope record: <none | issue-comment:<id>>
@@ -659,13 +651,7 @@ for post-loop human/manual/external-environment validation. Cross-field combinat
 - `indeterminate due to targeted re-review result state` requires retry
   `used` and `### ESCALATE`.
 
-A pre-scope/evidence schema-2 record lacking `Workflow scope record`, or a
-Director record lacking `External evidence evaluated` and/or
-`Human validation required`, or carrying a non-`none` unversioned external
-evidence set, remains historical retry/sticky-escalation evidence and is not
-malformed solely for those legacy omissions/formats, but it cannot authorize
-remediation or readiness under the current contract. A fresh ordinary
-reviewer -> Director round must produce a complete current-contract record first.
+Schema-1 and schema-2 records are legacy historical evidence only and are never current remediation/readiness authority under schema 3. Same-owner schema-2 records may still contribute historical retry/sticky-escalation state when their owner/head/retry fields are parseable under the historical contract; absence of later extension fields is not corruption. A current head with only schema-1/2 history requires a fresh ordinary reviewer -> Director round producing a complete schema-3 record before remediation/readiness. Any record that claims schema 3 but omits a required schema-3 field is malformed and fails closed; missing fields can never cause a schema-3 record to be reclassified as legacy.
 
 A partial or inconsistent new current-contract same-owner record is malformed
 and cannot become authority. `Review coverage: targeted re-review required` is
@@ -682,7 +668,7 @@ already reached, and never authorizes remediation or readiness by itself.
 
 ```markdown
 <!-- haunted-halls-claude-review-disposition -->
-Claude disposition schema: 2
+Claude disposition schema: 3
 Claude disposition owner: <authenticated-login>
 Claude disposition record: recovery
 Workflow scope record: <none | issue-comment:<id>>
@@ -705,7 +691,7 @@ reopens a targeted-review allowance.
 - Foreign current-head marked history, or foreign marked history with an
   unparseable head, fails closed pending explicit ownership handoff.
 - Schema-1 comments are legacy evidence only; do not silently treat them as
-  schema-2 authority.
+  schema-3 authority.
 - Retry state may only move `not used -> reserved -> used`.
 - A reservation at `reserved` recovered after restart produces a **new**
   terminal director record with launch-state indeterminate; leave the
@@ -723,7 +709,7 @@ reopens a targeted-review allowance.
 
 For non-Claude/human triage, do not use the Claude marker or Claude retry-state
 fields. The optional source/id format in this subsection applies **only** to the
-non-Claude disposition contract; it is not the schema-2 Director record contract
+non-Claude disposition contract; it is not the schema-3 Director record contract
 and does not satisfy Claude-loop external-evidence requirements. A trusted
 non-Claude disposition uses the exact heading:
 
