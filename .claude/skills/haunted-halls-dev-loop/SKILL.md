@@ -150,7 +150,7 @@ A schema-2 Director record from the pre-evidence contract that lacks `External e
    - latest **reservation** with `reserved`: launch outcome is incomplete/ambiguous; obtain and persist a new terminal director record with `Review coverage: indeterminate due to targeted re-review launch state` and stop;
    - latest **reservation** with `used` and no later completed director record: the targeted review launched but its follow-up Director result was not durably completed. Only the still-live owning session that holds the result from that exact launch may continue. A restarted/recovered session must persist a new terminal director record with `Review coverage: indeterminate due to targeted re-review result state` and stop;
    - latest **recovery**: no current completed Director authority exists yet; run a fresh ordinary reviewer -> Director round;
-   - latest nonterminal **director**: it is the current completed Director authority for that head.
+   - latest nonterminal **director**: it is current remediation/readiness authority only when it satisfies the current-contract Director fields above. A pre-evidence schema-2 Director record remains historical evidence and requires a fresh ordinary reviewer -> Director round before authority is restored.
 
 ### Director handoff and targeted re-review
 
