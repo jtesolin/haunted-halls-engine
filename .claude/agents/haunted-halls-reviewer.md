@@ -44,7 +44,7 @@ Before concluding that a change is clean:
    - identify established architecture/authority boundaries and cross-repository prerequisites that the capability depends on;
    - identify documented deterministic ordering, tie-break, fallback, nullability, or compatibility behavior;
    - identify materially changed database/query access paths.
-   For each item, record what code/test/doc evidence was inspected and whether it is covered, not applicable, or produces a finding.
+   For each item, record what code/test/doc evidence was inspected and whether it is covered, explicitly reserved for post-loop human validation, not applicable, or produces a finding. Use the human-validation state only for criteria that inherently require manual/external-environment validation or that the durable scope/trusted workflow explicitly reserves for human validation; do not use it to avoid an implementable acceptance criterion.
 2. Map the important behavioral claims and acceptance criteria to the code paths that are supposed to guarantee them.
 3. For every material user-visible or end-to-end capability, trace a supported production lifecycle from a real entry point through prerequisite state producers, persistence, service/API boundaries, and the final consumer. Tests that manually seed rows, fixtures that inject otherwise-unreachable state, direct database edits, or an API that can theoretically return a value are not evidence that the production lifecycle can create that value.
 4. For every material state/value consumed by the change, identify what creates and updates it during normal application execution. If no supported producer exists, or the only producer is test/manual/future work, report a reachability/prerequisite finding even when the local code is correct.
@@ -78,7 +78,7 @@ Use:
 
 ```markdown
 ## Review coverage
-- Scope / acceptance criteria: <each criterion or requirement -> covered | not applicable | finding R#>
+- Scope / acceptance criteria: <each criterion or requirement -> covered | human validation required | not applicable | finding R#>
 - Trusted-base completion requirements: <each applicable repository rule -> covered | not applicable | finding R#>
 - Public / cross-repository contracts: <changed contracts and docs checked, or "none">
 - Architectural fit: <ownership/source-of-truth/authority boundaries checked, or "not material">
