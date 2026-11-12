@@ -87,12 +87,16 @@ direct database edits, and future planned work do not establish production
 reachability. Cross-repository features must be traced far enough to establish
 the prerequisite lifecycle across the relevant repositories.
 
+A prerequisite that is explicitly part of the current durable scope and is
+implemented by the current change is part of the intended lifecycle; it does
+not require escalation merely because it was absent on the base revision.
+
 If a capability is intentionally staged before a prerequisite exists, that
 incomplete state is acceptable to automated review only when the durable scope
 explicitly describes the staging and explicit human direction approves shipping
-it that way. Otherwise, a missing producer/integration that makes the claimed
-capability unreachable requires escalation rather than a clean or deferred
-disposition.
+it that way. Otherwise, a producer/integration that would still be missing after
+the scoped change and makes the claimed capability unreachable requires
+escalation rather than a clean or deferred disposition.
 
 For material correctness, persistence, authorization, error-handling,
 authoritative-state, and API-contract behavior:
