@@ -592,13 +592,16 @@ reopens a targeted-review allowance.
 ## Non-Claude `Review disposition` comment contract
 
 For non-Claude/human triage, do not use the Claude marker or Claude retry-state
-fields. A trusted non-Claude disposition uses the exact heading:
+fields. The optional source/id format in this subsection applies **only** to the
+non-Claude disposition contract; it is not the schema-2 Director record contract
+and does not satisfy Claude-loop external-evidence requirements. A trusted
+non-Claude disposition uses the exact heading:
 
 ```markdown
 ## Review disposition
 
 PR head evaluated: `<sha>`
-Review evaluated: `<source + review id/timestamp if available>`
+Review evaluated: `<non-Claude source + review id/timestamp if available>`
 CI: `green | failed | pending | not found`
 
 ### FIX IN THIS PR
