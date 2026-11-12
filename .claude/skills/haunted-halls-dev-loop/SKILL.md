@@ -187,11 +187,15 @@ The reviewer and Director remain read-only. The **main implementation session** 
 Immediately before declaring `READY FOR HUMAN VALIDATION`, perform a fresh reconciliation against GitHub rather than relying on the state observed when the latest Director round started:
 
 1. Re-fetch the PR and require the exact head evaluated by the latest Director. If the head changed, restart the ordinary review -> Director flow for the new head.
-2. Re-fetch required CI/check status for that exact head. Readiness requires all required checks to be completed successfully; `pending`, `not found`, cancelled, or failed required validation cannot satisfy READY.
-3. Re-fetch the current PR description/metadata and verify material behavioral/product claims still match the current implementation and explicit human decisions.
-4. Re-fetch current-head GitHub review evidence, including review bodies and review-thread feedback from human or automated reviewers. Resolution state is useful evidence but does not by itself mean feedback newer than the latest Director was dispositioned. Identify any substantive review feedback created/submitted after the latest persisted Director record that has not already been dispositioned.
-5. If the PR description/metadata has a material mismatch with current behavior/decisions, or if newer undispositioned external review feedback exists, do not declare READY. Feed those candidate findings plus the existing independent-review coverage evidence to the Director as an additional same-head disposition round. Persist that Director result as a new schema-2 director record. If it requires remediation or PR-metadata correction, perform only the authorized `FIX IN THIS PR` work and then continue the normal loop; if it exposes a material coverage gap, use the existing targeted-re-review rules and remaining allowance for that head.
-6. Re-run this reconciliation after any resulting metadata correction or same-head Director round. READY is permitted only when no material PR-metadata mismatch or newer undispositioned review feedback remains and exact-head required CI is green.
+2. Re-fetch the linked issue/specification when one exists. Compare its current scope/acceptance criteria with the scope supplied to the latest Director round. If the scope materially changed, or a restarted session cannot prove it is unchanged, restart the ordinary reviewer -> Director flow with the current scope before readiness.
+3. Re-fetch required CI/check status for that exact head. Readiness requires all required checks to be completed successfully; `pending`, `not found`, cancelled, or failed required validation cannot satisfy READY.
+4. Re-fetch the current PR description/metadata and verify material behavioral/product claims still match the current implementation and explicit human decisions.
+5. Re-fetch the complete applicable current-head external review surface: review submissions/bodies, review-thread comments, and substantive top-level PR conversation comments from human or automated reviewers. Do not use timestamp, thread resolution, or age as proof that feedback was dispositioned. Treat a substantive item as already dispositioned only when its stable GitHub review/comment/thread identifier is explicitly represented in the latest persisted Director record's `Review evaluated` evidence set, or when the item is demonstrably no longer applicable to the current head. If applicability or prior disposition is uncertain, treat it as undispositioned.
+6. If the PR description/metadata has a material mismatch, or any applicable substantive external review evidence is undispositioned, do not declare READY. Feed the current candidate findings plus the existing independent-review coverage evidence to the Director as an additional same-head disposition round. Persist the resulting schema-2 Director record with `Review evaluated` explicitly naming the stable GitHub identifiers of the external evidence it evaluated. If it requires remediation or PR-metadata correction, perform only the authorized `FIX IN THIS PR` work and continue the normal loop; if it exposes a material coverage gap, use the existing targeted-re-review rules and remaining allowance for that head.
+7. Re-run steps 1-6 after any resulting metadata correction, remediation, or same-head Director round. Once the reconciliation surface is otherwise clean, **re-fetch the PR head one final time immediately before the READY declaration** and require it still equals the head evaluated by the latest Director and CI/review evidence. If it changed at any point during reconciliation, restart the ordinary review -> Director flow for the new head.
+8. READY is permitted only when the final head check passes, linked scope is current, exact-head required CI is green, PR metadata is materially consistent, and every applicable substantive external review item is either explicitly dispositioned by stable identifier in the latest Director evidence set or demonstrably no longer applicable.
+
+The following is the **single authoritative READY gate**. Do not use a weaker or partial readiness checklist elsewhere.
 
 Declare `READY FOR HUMAN VALIDATION` only when all are true:
 
@@ -200,7 +204,9 @@ Declare `READY FOR HUMAN VALIDATION` only when all are true:
 - that director record evaluates the current exact head, has `Review coverage: sufficient`, and has no `FIX IN THIS PR` or `ESCALATE` items;
 - its retry state equals the highest retry state reached in the full same-head history;
 - required validation for the exact current head is completed and green;
-- final current-head reconciliation found no newer undispositioned external review feedback after the latest Director record;
+- final current-head reconciliation proved the linked issue/specification scope is current (or the fallback PR-description-plus-diff scope when no issue exists);
+- final current-head reconciliation accounted for **all applicable substantive external review evidence**, not only evidence newer than the latest Director, with dispositioned external evidence explicitly identified by stable GitHub identifier in the latest Director's `Review evaluated` field;
+- the final immediate pre-READY head re-fetch still matches the head evaluated by the latest Director and exact-head validation/review evidence;
 - the current PR description/metadata is materially consistent with the implemented behavior and explicit human decisions;
 - the PR remains scoped to its durable issue/specification or fallback scope contract;
 - no merge has occurred.
@@ -220,17 +226,9 @@ If the director returns no `FIX IN THIS PR` items and no `ESCALATE` items, skip 
 
 ## 8. Stop condition
 
-Declare `READY FOR HUMAN VALIDATION` only when all are true:
+Run the final current-head reconciliation, then evaluate the **single authoritative READY gate in section 6 in full**. Section 8 does not define a second or weaker readiness checklist. In particular, do not omit the full-history sticky-escalation check, latest-record-type requirement, exact-head Director binding, or highest-retry-state invariant.
 
-- the latest head has no `FIX IN THIS PR` findings;
-- there are no unresolved `ESCALATE` findings;
-- director review coverage is `sufficient` for the latest head;
-- the latest valid Director disposition for the latest head has been persisted as a top-level comment marked `<!-- haunted-halls-claude-review-disposition -->`;
-- required validation for the exact current head is completed and green;
-- the final current-head reconciliation found no newer undispositioned external review feedback after the latest Director disposition;
-- the current PR description/metadata is materially consistent with the implemented behavior and explicit human decisions;
-- the PR is still scoped to its linked issue/specification, or to its PR-description-plus-diff scope contract when no linked issue exists;
-- no merge has occurred.
+Only after every section-6 READY condition passes may the loop declare `READY FOR HUMAN VALIDATION`.
 
 Report the PR number/head, validation status, review/remediation rounds, any targeted re-review, any deferred findings, and every acceptance criterion or risk still marked `human validation required` so the human knows exactly what remains to validate.
 
