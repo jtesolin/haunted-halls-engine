@@ -160,19 +160,28 @@ Current workflow authority uses **Claude disposition schema 2** with these requi
 - `Claude disposition record: reservation | director | recovery`
 - `Workflow scope record: none | issue-comment:<id>`
 - `PR head evaluated: <sha>`
-- `Targeted re-review: not used | reserved | used for <same-sha>`
+- `Targeted re-review: <not used | reserved | used> for <same-sha>`
 
-The retry-state SHA must exactly match `PR head evaluated`. `Workflow scope record` must be `none` for ordinary PRs and the validated single scope-comment ID for coordinated workflow-control PRs; it must not change across heads.
+The retry line grammar is exactly
+`Targeted re-review: <not used | reserved | used> for <same-sha>`; the SHA
+suffix is mandatory for all three states and must exactly match
+`PR head evaluated`. `Workflow scope record` must be `none` for ordinary PRs and the validated single scope-comment ID for coordinated workflow-control PRs; it must not change across heads.
 
 Validate the complete current-head history before selecting any authority:
 
 - Resolve the authenticated GitHub login.
 - If a foreign marked record targets the current exact head, or a foreign marked record's head cannot be parsed, stop and ask the user for an explicit ownership handoff/recovery decision. Do not ignore current-head foreign history and reopen state.
 - Same-owner schema-2 **reservation** records must have heading `## Targeted re-review reservation`, coverage `targeted re-review required`, a targeted instruction, and retry state `reserved` or `used`. They are intermediate state only and never remediation authority.
-- New same-owner schema-2 **director** records under the current contract must have heading `## Review disposition`, `Review evaluated`, `External evidence evaluated`, `Human validation required`, `CI`, an allowed completed `Review coverage`, `Reviewer result`, matching retry state, and `### Implementation instruction`. `External evidence evaluated` must be `none` or a cumulative same-head set of `review:<id>`, `review-comment:<database-id>`, and `issue-comment:<id>` tokens; later same-head Director records may add but never drop tokens. `Human validation required` must be `none` or the complete current list. Enforce coverage/retry combinations: `sufficient` -> `not used|used`; `insufficient after targeted re-review` -> `used` + `### ESCALATE`; launch-state indeterminate -> `reserved` + `### ESCALATE`; result-state indeterminate -> `used` + `### ESCALATE`. A partial or inconsistent Director record is malformed and must not become authority.
+- New same-owner schema-2 **director** records under the current contract must have heading `## Review disposition`, `Review evaluated`, `External evidence evaluated`, `Human validation required`, `CI`, an allowed completed `Review coverage`, `Reviewer result`, matching retry state, and `### Implementation instruction`. `External evidence evaluated` must be `none` or a cumulative same-head set
+of versioned `review:<id>@sha256:<64-lowercase-hex>`,
+`review-comment:<database-id>@sha256:<64-lowercase-hex>`, and
+`issue-comment:<id>@sha256:<64-lowercase-hex>` tokens, where each digest is
+SHA-256 of the exact UTF-8 GitHub body with no normalization. Later same-head
+Director records may add but never drop tokens; a changed digest for an existing
+ID is a new evidence version. `Human validation required` must be `none` or the complete current list. Enforce coverage/retry combinations: `sufficient` -> `not used|used`; `insufficient after targeted re-review` -> `used` + `### ESCALATE`; launch-state indeterminate -> `reserved` + `### ESCALATE`; result-state indeterminate -> `used` + `### ESCALATE`. A partial or inconsistent Director record is malformed and must not become authority.
 - Same-owner schema-2 **recovery** records must have heading `## Review recovery`, `Recovery authorization: explicit user direction`, and preserve the highest retry state already reached. They are not remediation authority.
 - Schema-1 comments are legacy evidence only. If schema-1 marked state exists for the current exact head when schema-2 workflow authority is expected, stop and ask the user instead of translating it silently.
-- A pre-scope/evidence schema-2 record lacking `Workflow scope record`, or a Director record lacking `External evidence evaluated` and/or `Human validation required`, remains historical retry/sticky-escalation evidence rather than being malformed solely for those omissions, but it cannot authorize current remediation/readiness; a fresh current-contract reviewer -> Director round is required.
+- A pre-scope/evidence schema-2 record lacking `Workflow scope record`, or a Director record lacking `External evidence evaluated` and/or `Human validation required` or carrying non-`none` unversioned evidence tokens, remains historical retry/sticky-escalation evidence rather than being malformed solely for those omissions, but it cannot authorize current remediation/readiness; a fresh current-contract reviewer -> Director round is required.
 - Order all valid current-head schema-2 records by GitHub creation time (tie-break numeric comment id). Validate monotonic retry state over the entire sequence: `not used -> reserved -> used`; same-state later records are allowed, but any downgrade is corrupted state and requires user intervention.
 - A completed director record containing `### ESCALATE` is sticky. Only a later valid recovery record may clear the sticky stop, and that recovery still does not authorize remediation.
 - If the latest workflow record is a reservation at `reserved`, stop: launch state is incomplete.
@@ -181,7 +190,13 @@ Validate the complete current-head history before selecting any authority:
 - Only when the latest workflow record is a complete, nonterminal **current-contract** schema-2 Director record for the current exact head may it authorize remediation; a pre-evidence schema-2 Director record is historical evidence only until a fresh current-contract reviewer -> Director round completes.
 - When consuming that director record, implement only findings under `FIX IN THIS PR`; do not implement `DEFER`, `REJECT`, or `ESCALATE` items.
 - A newer unmarked comment or bot review must not silently override the validated Claude history.
-- For coordinated workflow-control PRs, require the single validated scope record; if schema-2 workflow state exists and that record is absent/unverifiable, stop for explicit recovery. Require any current PR-body `Canonical policy dependency` field to match the validated scope record exactly; never accept a changed PR-body dependency as a replacement baseline.
+- For coordinated workflow-control PRs, require the single validated scope
+  record; if schema-2 workflow state exists and that record is
+  absent/unverifiable, stop for explicit recovery. Parse the current PR body and
+  require **exactly one** `Canonical policy dependency: <owner>/<repo>#<number>`
+  line matching the validated scope record. Missing, duplicate, changed, or
+  unparsable values are indeterminate/tampered durable scope and require
+  explicit recovery; never auto-correct them or accept a replacement baseline.
 - If there is no valid current-head schema-2 director authority, do not apply instructions from a stale prior-head record.
 - Exception: when this session is participating in an already-active `haunted-halls-dev-loop` immediately after that loop pushed its own remediation commit, prior-head history is an expected transition state. Do not consume it as a work queue; allow the active loop to complete the mandatory fresh review and post new current-head records.
 
