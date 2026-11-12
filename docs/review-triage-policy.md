@@ -176,8 +176,12 @@ current-head external review surface.
 - Material PR-description/product claims must still match the implementation and
   explicit human decisions. A material mismatch is a current-head candidate
   finding and must be dispositioned/corrected before readiness.
-- Re-fetch review submissions/bodies, review-thread comments, and substantive
-  top-level PR conversation comments from human or automated reviewers. Exclude
+- Re-fetch review submissions/bodies, review-thread comments, substantive
+  top-level PR conversation comments, and commit comments attached to commits in
+  the current PR commit set from human or automated reviewers. Enumerate the
+  current PR commits and fetch commit comments for that commit set; if this
+  surface cannot be enumerated completely, reconciliation is indeterminate and
+  readiness is forbidden. Exclude
   a marked top-level comment as internal workflow state only when it is authored
   by the authenticated loop owner and has already passed the durable-state
   parser as either a valid same-owner schema-2 reservation/Director/recovery
@@ -189,13 +193,20 @@ current-head external review surface.
   external source, compute SHA-256 over the exact UTF-8 GitHub `body` returned
   by the current API read, with no whitespace/newline normalization. Represent
   that source version as `review:<id>@sha256:<64-lowercase-hex>`,
-  `review-comment:<database-id>@sha256:<64-lowercase-hex>`, or
-  `issue-comment:<id>@sha256:<64-lowercase-hex>`. External evidence is already
+  `review-comment:<database-id>@sha256:<64-lowercase-hex>`,
+  `issue-comment:<id>@sha256:<64-lowercase-hex>`, or
+  `commit-comment:<id>@sha256:<64-lowercase-hex>`. External evidence is already
   dispositioned only when that exact ID+digest token is present in the latest
   valid Director record's cumulative `External evidence evaluated` set, or
   when that version is demonstrably no longer applicable to the current head.
   If the same GitHub ID is re-fetched with a different digest, the new version
-  is undispositioned evidence. If applicability or prior disposition is
+  is undispositioned evidence. Before a current-contract Director record may
+  authorize remediation/readiness, re-fetch every currently applicable source,
+  recompute its SHA-256 token from the exact current UTF-8 GitHub body, and
+  require that exact token in the latest Director record. Historical tokens for
+  older body versions may remain but cannot substitute for the current token.
+  An unfetchable or unhashable current source makes authority indeterminate and
+  requires escalation. If applicability or prior disposition is
   uncertain, treat it as undispositioned.
 - Any applicable undispositioned substantive external evidence must be fed to
   the Director in an additional same-head disposition round. Pass the complete
@@ -390,7 +401,7 @@ top-level record contains:
 - `Claude disposition record: reservation | director | recovery`
 - `Workflow scope record: none | issue-comment:<id>`
 - `PR head evaluated: <sha>`
-- `Targeted re-review: not used | reserved | used for <same-sha>`
+- `Targeted re-review: <not used | reserved | used> for <same-sha>`
 
 The retry SHA must exactly equal the evaluated-head SHA. `Workflow scope record`
 is `none` for ordinary PRs. For a coordinated workflow-control PR, it must be
@@ -583,7 +594,7 @@ Targeted re-review: <not used | used | reserved> for <sha>
 ## Review disposition
 
 Review evaluated: <independent/targeted review source for this head>
-External evidence evaluated: <none | review:<id>@sha256:<64hex>, review-comment:<database-id>@sha256:<64hex>, issue-comment:<id>@sha256:<64hex>, ...>
+External evidence evaluated: <none | review:<id>@sha256:<64hex>, review-comment:<database-id>@sha256:<64hex>, issue-comment:<id>@sha256:<64hex>, commit-comment:<id>@sha256:<64hex>, ...>
 Human validation required: <none | criterion/risk + manual validation needed; ...>
 CI: <green | failed | pending | not found>
 Review coverage: <sufficient | insufficient after targeted re-review | indeterminate due to targeted re-review launch state | indeterminate due to targeted re-review result state>
@@ -612,8 +623,9 @@ are required for every new Director record under the current contract.
 `External evidence evaluated` is `none` or a comma-separated cumulative
 same-head set using only versioned tokens
 `review:<id>@sha256:<64-lowercase-hex>`,
-`review-comment:<database-id>@sha256:<64-lowercase-hex>`, and
-`issue-comment:<id>@sha256:<64-lowercase-hex>`. Each digest is SHA-256 of the
+`review-comment:<database-id>@sha256:<64-lowercase-hex>`,
+`issue-comment:<id>@sha256:<64-lowercase-hex>`, and
+`commit-comment:<id>@sha256:<64-lowercase-hex>`. Each digest is SHA-256 of the
 exact UTF-8 GitHub body returned by the API with no normalization. Later
 same-head Director records may add tokens but must never drop them; a different
 digest for the same source ID is a new evidence version. `Human validation
@@ -628,10 +640,12 @@ for post-loop human/manual/external-environment validation. Cross-field combinat
 - `indeterminate due to targeted re-review result state` requires retry
   `used` and `### ESCALATE`.
 
-A pre-evidence schema-2 Director record lacking `External evidence evaluated`
-and/or `Human validation required` remains historical retry/sticky-escalation
-evidence and is not malformed solely for those omissions, but it cannot
-authorize remediation or readiness under the current contract. A fresh ordinary
+A pre-scope/evidence schema-2 record lacking `Workflow scope record`, or a
+Director record lacking `External evidence evaluated` and/or
+`Human validation required`, or carrying a non-`none` unversioned external
+evidence set, remains historical retry/sticky-escalation evidence and is not
+malformed solely for those legacy omissions/formats, but it cannot authorize
+remediation or readiness under the current contract. A fresh ordinary
 reviewer -> Director round must produce a complete current-contract record first.
 
 A partial or inconsistent new current-contract same-owner record is malformed
