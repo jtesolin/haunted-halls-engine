@@ -148,11 +148,14 @@ description/metadata, and current-head GitHub review evidence.
   pending, missing, cancelled, or failed required validation cannot satisfy
   readiness.
 - Material PR-description/product claims must still match the implementation and
-  explicit human decisions.
+  explicit human decisions. A material mismatch is a current-head candidate
+  finding and must be dispositioned/corrected before readiness.
 - Any substantive human or automated review feedback created/submitted after the
   latest persisted Director record and not already dispositioned is new evidence,
-  not something readiness may ignore. Feed it to the Director in an additional
-  same-head disposition round and persist the result before readiness.
+  not something readiness may ignore. Review-thread resolution state is evidence
+  but does not by itself count as Director disposition. Feed newer candidate
+  findings to the Director in an additional same-head disposition round and
+  persist the result before readiness.
 - If newer feedback exposes missing material review coverage, the normal
   targeted-re-review rules and remaining per-head allowance apply.
 - If the head changes during reconciliation, restart the ordinary review ->
@@ -189,6 +192,16 @@ product/architecture judgment. Use `ESCALATE` when satisfying it requires a
 product, architecture, cross-repository scope, risk, or other human decision.
 Use `REJECT` only when the finding is incorrect, already satisfied, or
 conflicts with explicit current requirements/architecture.
+
+An acceptance criterion legitimately reserved for post-loop
+manual/external-environment validation is not a `DEFER` disposition and need
+not become `FIX`/`ESCALATE` merely because that validation has not happened
+before `READY FOR HUMAN VALIDATION`. Keep it explicit as
+`human validation required` in coverage and the final handoff. This status is
+only for validation that inherently requires human/external execution or that
+durable scope/trusted workflow explicitly reserves for human validation; it
+must not be used to avoid implementable code, tests, documentation, or
+automation required by the current change.
 
 Every substantive finding receives exactly one of these four dispositions:
 
