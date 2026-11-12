@@ -71,11 +71,11 @@ A clean reviewer result does not bypass this step. Do not declare coverage suffi
 
 ## Output contract
 
-When review coverage is sufficient, return a **complete schema-2 Director record** suitable for direct persistence as a top-level PR comment. Do not rely on the caller to add the marker, schema, owner, or record-type fields after you return it:
+When review coverage is sufficient, return a **complete schema-3 Director record** suitable for direct persistence as a top-level PR comment. Do not rely on the caller to add the marker, schema, owner, or record-type fields after you return it:
 
 ```markdown
 <!-- haunted-halls-claude-review-disposition -->
-Claude disposition schema: 2
+Claude disposition schema: 3
 Claude disposition owner: <authenticated-login>
 Claude disposition record: director
 Workflow scope record: `none | issue-comment:<id>`
@@ -110,7 +110,7 @@ Implement only items under `FIX IN THIS PR`. Do not implement `DEFER`,
 
 For the sufficient-coverage template above, replace `<state>` with exactly `not used` or `used`; never emit the placeholder or alternatives literally. The resulting line must therefore be exactly `Targeted re-review: not used for <sha>` or `Targeted re-review: used for <sha>`.
 
-Omit empty disposition sections. The hidden marker, `Claude disposition schema: 2`, `Claude disposition owner`, `Claude disposition record: director`, `Workflow scope record`, `PR head evaluated`, matching `Targeted re-review`, `External evidence evaluated`, and `Human validation required` fields are mandatory in every completed Director record, including terminal records. Use the authenticated owner login and validated workflow-scope identity supplied by the caller verbatim. `Workflow scope record` must be `none` for PRs without a coordinated canonical-policy dependency and `issue-comment:<id>` for coordinated workflow-control PRs; never infer or substitute a different scope comment. `External evidence evaluated` is the cumulative same-head set of versioned ID+digest tokens and must never drop a previously recorded token; use `none` only when empty. Every emitted retry line must use the exact grammar `Targeted re-review: <not used | reserved | used> for <sha>`; the `for <sha>` suffix is mandatory for all three states. Always echo whether the targeted re-review was `used` or `not used` for the evaluated head so the main session can persist restart-safe per-head retry state. A complete sufficient-coverage disposition is never emitted while state is `reserved`; reserved state uses the terminal retry-state escalation variant below. If there are no actionable findings and no escalation, include the heading, evaluated head/review/CI fields, `Review coverage: sufficient`, `Reviewer result: clean`, the targeted-re-review state, and an implementation instruction stating that no remediation is required.
+Omit empty disposition sections. The hidden marker, `Claude disposition schema: 3`, `Claude disposition owner`, `Claude disposition record: director`, `Workflow scope record`, `PR head evaluated`, matching `Targeted re-review`, `External evidence evaluated`, and `Human validation required` fields are mandatory in every completed Director record, including terminal records. Use the authenticated owner login and validated workflow-scope identity supplied by the caller verbatim. `Workflow scope record` must be `none` for PRs without a coordinated canonical-policy dependency and `issue-comment:<id>` for coordinated workflow-control PRs; never infer or substitute a different scope comment. `External evidence evaluated` is the cumulative same-head set of versioned ID+digest tokens and must never drop a previously recorded token; use `none` only when empty. Every emitted retry line must use the exact grammar `Targeted re-review: <not used | reserved | used> for <sha>`; the `for <sha>` suffix is mandatory for all three states. Always echo whether the targeted re-review was `used` or `not used` for the evaluated head so the main session can persist restart-safe per-head retry state. A complete sufficient-coverage disposition is never emitted while state is `reserved`; reserved state uses the terminal retry-state escalation variant below. If there are no actionable findings and no escalation, include the heading, evaluated head/review/CI fields, `Review coverage: sufficient`, `Reviewer result: clean`, the targeted-re-review state, and an implementation instruction stating that no remediation is required.
 
 When review coverage is insufficient and the targeted re-review has **not** yet been consumed for this head, return only:
 
@@ -123,7 +123,7 @@ When review coverage remains insufficient **after** the targeted re-review has a
 
 ```markdown
 <!-- haunted-halls-claude-review-disposition -->
-Claude disposition schema: 2
+Claude disposition schema: 3
 Claude disposition owner: <authenticated-login>
 Claude disposition record: director
 Workflow scope record: `none | issue-comment:<id>`
@@ -151,7 +151,7 @@ When the caller reports a recovered `Targeted re-review: used` record for this h
 
 ```markdown
 <!-- haunted-halls-claude-review-disposition -->
-Claude disposition schema: 2
+Claude disposition schema: 3
 Claude disposition owner: <authenticated-login>
 Claude disposition record: director
 Workflow scope record: `none | issue-comment:<id>`
@@ -178,7 +178,7 @@ When the caller reports `Targeted re-review: reserved` for this head, return a t
 
 ```markdown
 <!-- haunted-halls-claude-review-disposition -->
-Claude disposition schema: 2
+Claude disposition schema: 3
 Claude disposition owner: <authenticated-login>
 Claude disposition record: director
 Workflow scope record: `none | issue-comment:<id>`
