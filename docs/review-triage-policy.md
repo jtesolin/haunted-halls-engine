@@ -47,9 +47,12 @@ engine repository's review-policy change is canonical and must merge first.
 A dependent frontend control PR may reference the proposed engine policy as
 cross-repository evidence during external/human review, but durable PR scope
 must record the exact dependency as
-`Canonical policy dependency: <owner>/<repo>#<number>`. Capture that exact
-identifier when scope is established; later removal or alteration is a material
-metadata mismatch and must not erase the dependency from reconciliation. The
+`Canonical policy dependency: <owner>/<repo>#<number>`. Once the PR exists,
+persist that exact identifier before the first reviewer/Director round in the
+single immutable PR-wide scope record defined below. The scope record, not
+mutable PR prose or session memory, is the restart-safe baseline; later removal
+or alteration is a material metadata mismatch and must not erase or replace the
+dependency from reconciliation. The
 frontend PR cannot reach `READY FOR HUMAN VALIDATION` or merge until that exact
 PR is re-fetched and verified merged. Readiness must also
 verify the merged engine default branch actually contains the canonical policy
@@ -177,7 +180,8 @@ current-head external review surface.
   top-level PR conversation comments from human or automated reviewers. Exclude
   a marked top-level comment as internal workflow state only when it is authored
   by the authenticated loop owner and has already passed the durable-state
-  parser as a valid same-owner schema-2 reservation/Director/recovery record.
+  parser as either a valid same-owner schema-2 reservation/Director/recovery
+  record or the single valid immutable Claude scope record for this PR.
   Marker text alone is never sufficient for exclusion. Foreign, malformed,
   unvalidated, or merely quoted marker text remains external evidence (and may
   separately trigger the durable-state fail-closed rules). Do not use timestamp, thread resolution, or age as
@@ -197,11 +201,12 @@ current-head external review surface.
   same-head token and adds every applicable item evaluated in this round. If external evidence exposes missing material
   review coverage, the normal targeted-re-review rules and remaining per-head
   allowance apply.
-- For a coordinated workflow-control PR, use the exact
-  `Canonical policy dependency: <owner>/<repo>#<number>` identifier captured
-  at scope establishment; never infer or rediscover the dependency from mutable
-  prose. Require the field to remain present and unchanged, re-fetch that exact
-  dependency PR, and require it to be merged before readiness. After merge, re-fetch the canonical policy from the engine
+- For a coordinated workflow-control PR, recover the exact
+  `Canonical policy dependency: <owner>/<repo>#<number>` identifier from the
+  immutable scope record; never infer or rediscover the dependency from mutable
+  prose or session memory. Require the PR-body field to remain present and equal
+  to that captured value, re-fetch that exact dependency PR, and require it to
+  be merged before readiness. After merge, re-fetch the canonical policy from the engine
   default branch and verify that the dependency actually landed the policy
   contract the dependent PR claims to mirror. An open, closed-unmerged,
   unverifiable, or mismatched dependency blocks readiness.
@@ -327,6 +332,34 @@ Then select exactly one disposition path.
 
 Use this path only when the active workflow is the Claude dev loop and its
 durable Claude review records are expected.
+
+For a coordinated workflow-control PR with a canonical-policy dependency,
+persist exactly one immutable PR-wide scope comment before the first
+reviewer/Director round:
+
+```markdown
+<!-- haunted-halls-claude-scope -->
+Claude scope schema: 1
+Claude scope owner: <authenticated-login>
+Canonical policy dependency: <owner>/<repo>#<number>
+
+## Workflow scope capture
+This immutable record captures the canonical-policy dependency for this PR.
+```
+
+The comment author and owner field must equal the authenticated implementation
+identity, the dependency must match PR scope at capture time, and the comment
+must never be edited or replaced. Multiple, malformed, foreign-owner, or
+conflicting scope records require escalation. On restart, recover the dependency
+from this scope record rather than from PR prose or conversational memory. If
+review/disposition work has already begun under this contract and the required
+scope record is missing, require explicit human recovery instead of inferring a
+baseline from the current PR body.
+
+The scope record is PR-wide and not head-bound. It is neither retry state nor
+remediation/readiness authority by itself.
+
+Current workflow authority uses **Claude disposition schema 2**. Every marked
 
 Current workflow authority uses **Claude disposition schema 2**. Every marked
 top-level record contains:
