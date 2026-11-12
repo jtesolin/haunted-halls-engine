@@ -161,18 +161,25 @@ current-head external review surface.
   explicit human decisions. A material mismatch is a current-head candidate
   finding and must be dispositioned/corrected before readiness.
 - Re-fetch review submissions/bodies, review-thread comments, and substantive
-  top-level PR conversation comments from human or automated reviewers. Do not
-  use timestamp, thread resolution, or age as proof that feedback was
-  dispositioned. Applicable substantive external evidence is already
-  dispositioned only when its stable GitHub review/comment/thread identifier is
-  explicitly represented in the latest Director record's `Review evaluated`
-  evidence set, or when it is demonstrably no longer applicable to the current
-  head. If applicability or prior disposition is uncertain, treat it as
+  top-level PR conversation comments from human or automated reviewers. Exclude
+  the Claude loop's own top-level durable comments carrying the exact
+  `<!-- haunted-halls-claude-review-disposition -->` marker; reservation,
+  Director, and recovery records are internal workflow state rather than
+  external review evidence. Do not use timestamp, thread resolution, or age as
+  proof that feedback was dispositioned. Represent applicable substantive
+  external evidence with stable tokens: `review:<id>`,
+  `review-comment:<database-id>`, or `issue-comment:<id>`. Applicable
+  substantive external evidence is already dispositioned only when its token is
+  present in the latest valid Director record's cumulative
+  `External evidence evaluated` set, or when it is demonstrably no longer
+  applicable to the current head. If applicability or prior disposition is uncertain, treat it as
   undispositioned.
 - Any applicable undispositioned substantive external evidence must be fed to
-  the Director in an additional same-head disposition round. Persist that
-  Director result with `Review evaluated` explicitly naming the stable GitHub
-  identifiers it evaluated. If external evidence exposes missing material
+  the Director in an additional same-head disposition round. Pass the complete
+  applicable external evidence set (tokens plus bodies/summaries), not only new
+  items. Persist that Director result with a cumulative
+  `External evidence evaluated` field that carries forward every earlier
+  same-head token and adds every applicable item evaluated in this round. If external evidence exposes missing material
   review coverage, the normal targeted-re-review rules and remaining per-head
   allowance apply.
 - After all reconciliation reads and any resulting same-head Director/write
@@ -380,8 +387,9 @@ The retry SHA must exactly equal the evaluated-head SHA.
     reconciliation above. Re-fetch the linked issue/specification, require
     exact-head required CI to be completed green, reconcile material PR metadata,
     and account for **all applicable substantive external review evidence**, not
-    only newer feedback. Persist stable GitHub identifiers for evaluated external
-    evidence in the latest Director record's `Review evaluated` field.
+    only newer feedback. Exclude the loop's own marked durable comments from that
+    external surface. Persist the cumulative stable-token evidence set in the
+    latest Director record's `External evidence evaluated` field.
 19. After those reads and any resulting same-head Director/write activity,
     re-fetch the PR head one final time immediately before READY. Do not declare
     readiness unless it still matches the latest Director/CI/review-evidence head
@@ -480,7 +488,9 @@ Targeted re-review: <not used | used | reserved> for <sha>
 
 ## Review disposition
 
-Review evaluated: <source + review id/timestamp if available>
+Review evaluated: <independent/targeted review source for this head>
+External evidence evaluated: <none | review:<id>, review-comment:<database-id>, issue-comment:<id>, ...>
+Human validation required: <none | criterion/risk + manual validation needed; ...>
 CI: <green | failed | pending | not found>
 Review coverage: <sufficient | insufficient after targeted re-review | indeterminate due to targeted re-review launch state | indeterminate due to targeted re-review result state>
 Reviewer result: <clean | N substantive findings | targeted result unavailable>
@@ -501,8 +511,15 @@ Reviewer result: <clean | N substantive findings | targeted result unavailable>
 <complete instruction>
 ```
 
-The exact heading, review/CI/coverage/result fields, matching retry state, and
-implementation instruction are required. Cross-field combinations are strict:
+The exact heading, `Review evaluated`, `External evidence evaluated`,
+`Human validation required`, CI/coverage/result fields, matching retry state,
+and implementation instruction are required for every new Director record under
+the current contract. `External evidence evaluated` is `none` or a
+comma-separated cumulative same-head set using only `review:<id>`,
+`review-comment:<database-id>`, and `issue-comment:<id>`; later same-head
+Director records may add tokens but must never drop them. `Human validation
+required` is `none` or the complete current list of criteria/risks reserved
+for post-loop human/manual/external-environment validation. Cross-field combinations are strict:
 
 - `sufficient` requires retry `not used` or `used`;
 - `insufficient after targeted re-review` requires retry `used` and
@@ -512,9 +529,15 @@ implementation instruction are required. Cross-field combinations are strict:
 - `indeterminate due to targeted re-review result state` requires retry
   `used` and `### ESCALATE`.
 
-A partial or inconsistent same-owner record is malformed and cannot become
-authority. `Review coverage: targeted re-review required` is invalid in a
-director record; that state belongs to a reservation record.
+A pre-evidence schema-2 Director record lacking `External evidence evaluated`
+and/or `Human validation required` remains historical retry/sticky-escalation
+evidence and is not malformed solely for those omissions, but it cannot
+authorize remediation or readiness under the current contract. A fresh ordinary
+reviewer -> Director round must produce a complete current-contract record first.
+
+A partial or inconsistent new current-contract same-owner record is malformed
+and cannot become authority. `Review coverage: targeted re-review required` is
+invalid in a director record; that state belongs to a reservation record.
 
 A director record with `### ESCALATE` is terminal/sticky for the head until a
 later explicit recovery record.
