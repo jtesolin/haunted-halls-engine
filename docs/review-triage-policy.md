@@ -184,8 +184,9 @@ current-head external review surface.
   readiness is forbidden. Exclude
   a marked top-level comment as internal workflow state only when it is authored
   by the authenticated loop owner and has already passed the durable-state
-  parser as either a valid same-owner schema-2 reservation/Director/recovery
-  record or the single valid immutable Claude scope record for this PR.
+  parser as either a valid same-owner schema-3 reservation/Director/recovery
+  record, a parseable same-owner schema-1/2 legacy workflow record, or the single
+  valid immutable Claude scope record for this PR.
   Marker text alone is never sufficient for exclusion. Foreign, malformed,
   unvalidated, or merely quoted marker text remains external evidence (and may
   separately trigger the durable-state fail-closed rules). Do not use timestamp, thread resolution, or age as
@@ -394,7 +395,7 @@ that exact top-level issue comment through an API surface exposing `created_at`
 and `updated_at`; both must be present and equal. An edit
 (`updated_at != created_at`), missing/unverifiable timestamps, deletion,
 replacement at a different ID, multiple scope records, malformed content,
-foreign ownership, or disagreement among schema-2 records about the scope ID
+foreign ownership, or disagreement among current-contract schema-3 records about the scope ID
 requires escalation. On restart, recover the dependency
 from this scope record rather than from PR prose or conversational memory. If any **current-contract** schema-3 workflow record already exists, its
 `Workflow scope record` value is the restart-safe integrity anchor and every
@@ -463,9 +464,9 @@ is `none` for ordinary PRs. For a coordinated workflow-control PR, it must be th
      record itself is not authority;
    - nonterminal completed `director`: this is current remediation/readiness
      authority only when it satisfies the current-contract Director fields.
-     A pre-evidence schema-2 Director record remains historical evidence and
-     requires a fresh ordinary reviewer -> Director round before authority is
-     restored.
+     A schema-1/2 Director record remains historical evidence and requires a
+     fresh ordinary reviewer -> Director round producing schema 3 before
+     authority is restored.
 8. Run the Director for every reviewer result, including a clean review.
 9. If the Director requests a targeted re-review, recovered state must be
    `not used`. Re-fetch the head, then create a **new reservation record** with
