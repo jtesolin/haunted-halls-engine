@@ -195,14 +195,23 @@ second paid run and counts again; replays of a completed idempotent request,
 in-progress 503s and validation rejections do not. *Model call* = one `model_requests` row. *Tokens* = the sum of those rows
 (estimate fallback). *Campaigns* and *turns* are gameplay limits.
 
-**Hard vs soft.** Token and request caps are hard (checked and recorded under
-the global lock). The campaign cap is exact in persistence (re-checked at commit
+**Hard vs soft.** Request caps are hard (checked and recorded under the global
+lock). Token caps are hard against what is known at admission: each call reserves
+its estimated input plus its provider-enforced `max_output_tokens` before it runs,
+and the row is reconciled to the provider's actual usage when it finishes, so
+later checks see actuals. The only source of overshoot is an input-token
+under-estimate on calls that are in flight together; it is bounded by the number
+of concurrent calls times (actual minus reserved input) and does not accumulate.
+The campaign cap is exact in persistence (re-checked at commit
 under a per-user lock) but concurrent over-limit creations may waste model spend
 bounded by the token caps. The turn limit is exact: one turn per campaign is in
 flight (`campaigns.turn_lease_*`, fenced by token, TTL `REQUEST_LEASE_SECONDS`).
 A concurrent turn gets 503. Residual uncertainty: token estimates can differ from
-provider billing (reconciled at finalization), and request caps under-count while
-an old image still serves traffic during a rolling deploy. Idempotency claims
+provider billing (reconciled at finalization). Rolling deploy: requests served by
+the previous image between migration 0006 and traffic cutover persist turns but no
+`usage_requests` rows, so they stay invisible to the request counters for the rest
+of that UTC day (bounded by the overlap window); token caps are unaffected because
+the previous image still writes `model_requests`. Idempotency claims
 carry `owner_token`/`lease_expires_at`; an expired claim from a crashed worker
 can be taken over and the stale worker's completion is fenced out.
 

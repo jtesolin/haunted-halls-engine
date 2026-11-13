@@ -35,9 +35,11 @@ the durable `usage_requests` ledger, so deleting a campaign never refunds allowa
 and a turn's several model calls count once. Failed paid requests count too, and a retry that
 re-executes after a failed or expired attempt counts as another request (it is a
 second paid run); a replay of an already completed idempotent request,
-in-progress 503s and validation rejections do not count. Token limits are hard caps:
-every model call reserves its estimated tokens under a global budget lock before
-it runs, and the reservation is finalized with actual usage afterwards. HTTP 429
+in-progress 503s and validation rejections do not count. Token limits are hard against
+estimates: every model call reserves its estimated input plus its maximum output
+tokens under a global budget lock before it runs, and the reservation is
+finalized with actual usage afterwards (overshoot is bounded by concurrent
+in-flight input under-estimates and does not accumulate). HTTP 429
 error contracts are unchanged. See `docs/architecture.md` ("Transactions, durable
 usage and concurrency"). Environment variables (or local `.env` values) can
 override these defaults.

@@ -22,7 +22,11 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from sqlalchemy import text
 
-from app.ai.model_client import model_client
+from app.agents.memory_reflection import MemoryReflectionAgent, MemoryReflectionInput
+from app.agents.memory_summarizer import MemorySummarizerAgent, MemorySummarizerInput
+from app.agents.starter_abilities import StarterAbilityGenerator
+from app.ai.model_client import ModelCallResult, ModelUsage, model_client
+from app.schemas.starter_ability_provider import StarterAbilityProviderGeneration
 from app.api.dependencies import INTERNAL_USER_ID_HEADER_NAME, get_internal_engine_service_token
 from app.core.config import Settings, settings
 from app.db.repositories import ChatRequestIdempotencyOwnershipError, Repository
@@ -34,6 +38,9 @@ from app.schemas.chat import ChatRequest
 from app.schemas.internal_auth import CANONICAL_GOOGLE_ISSUER
 
 pytestmark = pytest.mark.usefixtures("fake_runtime_model_provider")
+
+# Captured at import, before the autouse fixture replaces the generator with a fake.
+_REAL_STARTER_GENERATE = StarterAbilityGenerator.generate
 
 orchestrator = orchestrator_module.orchestrator
 
@@ -876,6 +883,74 @@ def test_director_output_failure_keeps_provider_usage(
             {"o": user_id},
         ).one()
     assert (int(row[0]), row[1], row[2]) == (0, 366, 321)
+
+
+def test_starter_validation_failure_keeps_provider_usage(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = TestClient(app)
+    headers, user_id = _user(client, "starter-usage")
+
+    async def provider_returns_unusable_output(**kwargs):
+        return ModelCallResult(
+            output=StarterAbilityProviderGeneration.model_construct(),
+            usage=ModelUsage(input_tokens=70, output_tokens=7, total_tokens=77),
+        )
+
+    def invalid_domain_output(self, provider_output):
+        raise ValueError("starter abilities failed domain validation")
+
+    generator = orchestrator.starter_ability_generator
+    monkeypatch.setattr(
+        generator, "generate", lambda **kw: _REAL_STARTER_GENERATE(generator, **kw)
+    )
+    monkeypatch.setattr(StarterAbilityGenerator, "_to_domain_generation", invalid_domain_output)
+    monkeypatch.setattr(model_client, "generate_structured", provider_returns_unusable_output)
+
+    response = client.post("/api/campaign", json={}, headers=headers)
+
+    assert response.status_code == 502
+    with session() as db:
+        row = db.conn.execute(
+            text(
+                "SELECT success, actual_total_tokens FROM model_requests "
+                "WHERE owner_user_id = :o AND agent_name = 'StarterAbilityGenerator'"
+            ),
+            {"o": user_id},
+        ).one()
+    assert (int(row[0]), row[1]) == (0, 77)
+
+
+def test_summarizer_and_reflection_fallbacks_keep_provider_usage(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def blank_text(**kwargs):
+        return ModelCallResult(
+            output="  ", usage=ModelUsage(input_tokens=4, output_tokens=1, total_tokens=5)
+        )
+
+    monkeypatch.setattr(model_client, "generate_text", blank_text)
+    turns = [{"role": "user", "content": "I open the door."}]
+
+    summary = asyncio.run(
+        MemorySummarizerAgent().summarize(
+            payload=MemorySummarizerInput(
+                previous_summary=None, recent_turns=turns, campaign_state="{}", latest_reply="ok"
+            ),
+            model="m",
+        )
+    )
+    reflection = asyncio.run(
+        MemoryReflectionAgent().reflect(
+            payload=MemoryReflectionInput(
+                recent_turns=turns, campaign_state="{}", current_summary=None
+            ),
+            model="m",
+        )
+    )
+
+    assert summary.summary_text and summary.total_tokens == 5
+    assert reflection.total_tokens == 5
 
 
 # ------------------------------------------------------------------ config

@@ -25,6 +25,17 @@ class ModelUsage:
     reasoning_output_tokens: int | None = None
     total_tokens: int | None = None
 
+    def as_output_fields(self) -> dict[str, Any]:
+        """Keyword fields for agent outputs that report provider usage."""
+        return {
+            "input_tokens": self.input_tokens,
+            "cached_input_tokens": self.cached_input_tokens,
+            "cache_write_input_tokens": self.cache_write_input_tokens,
+            "output_tokens": self.output_tokens,
+            "reasoning_output_tokens": self.reasoning_output_tokens,
+            "total_tokens": self.total_tokens,
+        }
+
 
 @dataclass
 class ModelCallResult(Generic[ModelOutputT]):

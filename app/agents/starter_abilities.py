@@ -5,7 +5,7 @@ from typing import Literal, overload
 from openai.types.chat import ChatCompletionMessageParam
 
 from app.agents.base import BaseAgent
-from app.ai.model_client import ModelCallResult, model_client
+from app.ai.model_client import ModelCallResult, ModelUsage, model_client
 from app.game.abilities import validate_starter_ability_definitions
 from app.guardrails.model_policy import ModelPolicy
 from app.guardrails.token_budget import TokenBudget, estimate_tokens
@@ -29,6 +29,14 @@ from app.schemas.starter_ability_provider import (
     StarterAbilityTraversalProviderOutput,
     StarterUtilityOperation,
 )
+
+
+class StarterAbilityOutputError(ValueError):
+    """Provider output was unusable; ``usage`` carries the billed provider usage."""
+
+    def __init__(self, message: str, *, usage: ModelUsage | None = None) -> None:
+        super().__init__(message)
+        self.usage = usage
 
 
 class StarterAbilityGenerator(BaseAgent):
@@ -114,9 +122,17 @@ class StarterAbilityGenerator(BaseAgent):
             provider_output = result.output
         else:
             provider_output = result.output if isinstance(result, ModelCallResult) else result
+        usage = result.usage if isinstance(result, ModelCallResult) else None
         if not isinstance(provider_output, StarterAbilityProviderGeneration):
-            raise ValueError("Starter ability generator did not return valid structured output.")
-        output = self._to_domain_generation(provider_output)
+            raise StarterAbilityOutputError(
+                "Starter ability generator did not return valid structured output.",
+                usage=usage,
+            )
+        try:
+            output = self._to_domain_generation(provider_output)
+        except Exception as exc:
+            # The provider call succeeded and was billed; keep its usage.
+            raise StarterAbilityOutputError(str(exc), usage=usage) from exc
         if return_usage:
             if not isinstance(result, ModelCallResult):
                 raise ValueError("Starter ability generator did not return model usage.")
