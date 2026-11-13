@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import threading
+from types import SimpleNamespace
 from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from uuid import uuid4
@@ -52,6 +53,7 @@ class Provider:
         self.delay: dict[str, float] = {}
         self.probes: list[Callable[[str], None]] = []
         self.blank_title = False
+        self.cancel: set[str] = set()
         self._text = model_client.generate_text
         self._structured = model_client.generate_structured
         monkeypatch.setattr(model_client, "generate_text", self._generate_text)
@@ -62,6 +64,8 @@ class Provider:
             probe(label)
         if label in self.delay:
             await asyncio.sleep(self.delay[label])
+        if label in self.cancel:
+            raise asyncio.CancelledError
         if label in self.fail:
             raise RuntimeError(f"injected {label} failure")
 
@@ -616,6 +620,104 @@ def test_model_deadline_returns_502_releases_claims_and_keeps_reservation(
     provider.delay.clear()
     settings.CHAT_MODEL_DEADLINE_SECONDS = 140
     assert _chat(client, headers, campaign_id).status_code == 200
+
+
+def test_campaign_deleted_mid_turn_is_404_and_keeps_usage(provider: Provider) -> None:
+    client = TestClient(app)
+    headers, user_id = _user(client, "deleted-mid-turn")
+    campaign_id = _new_campaign(client, headers)
+    before = len(_usage_rows(user_id))
+
+    def delete_during_narrator(label: str) -> None:
+        if label == "narrator":
+            with session() as db:
+                assert db.delete_campaign_for_owner(campaign_id, user_id)
+
+    provider.probes.append(delete_during_narrator)
+
+    response = _chat(client, headers, campaign_id)
+
+    assert response.status_code == 404
+    assert len(_usage_rows(user_id)) - before >= 3  # parser, director, narrator
+    assert _scalar("SELECT COUNT(*) FROM turns WHERE campaign_id = :c", c=campaign_id) == 0
+
+
+def test_cancellation_releases_lease_and_claim(provider: Provider) -> None:
+    client = TestClient(app)
+    headers, user_id = _user(client, "cancelled")
+    campaign_id = _new_campaign(client, headers)
+    key = str(uuid4())
+    provider.cancel.add("narrator")
+
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(
+            orchestrator.handle_chat(
+                ChatRequest(message="look", campaign_id=campaign_id),
+                owner_user_id=user_id,
+                idempotency_key=key,
+            )
+        )
+
+    assert _lease_token(campaign_id) is None
+    with session() as db:
+        assert db.get_chat_request_idempotency(user_id, key) is None
+    # the cancelled narrator reservation stays reserved and keeps counting
+    assert _scalar("SELECT COUNT(*) FROM model_requests WHERE status = 'reserved'") == 1
+
+
+@pytest.mark.parametrize(
+    ("prior_user_turns", "summary", "reflection"),
+    [
+        (settings.MEMORY_SUMMARY_EVERY_TURNS - 2, False, False),
+        (settings.MEMORY_SUMMARY_EVERY_TURNS - 1, True, False),
+        (settings.MEMORY_SUMMARY_EVERY_TURNS, False, False),
+        (settings.MEMORY_REFLECTION_EVERY_TURNS - 1, False, True),
+    ],
+)
+def test_memory_layer_cadence_matches_committed_user_turn_count(
+    monkeypatch: pytest.MonkeyPatch, prior_user_turns: int, summary: bool, reflection: bool
+) -> None:
+    client = TestClient(app)
+    _, user_id = _user(client, f"cadence-{prior_user_turns}")
+    usage = dict(
+        input_tokens=1, cached_input_tokens=None, cache_write_input_tokens=None,
+        output_tokens=1, reasoning_output_tokens=None, total_tokens=2,
+    )
+    calls: list[str] = []
+
+    async def fake_summarize(**kwargs):
+        calls.append("summary")
+        return SimpleNamespace(summary_text="s", **usage)
+
+    async def fake_reflect(**kwargs):
+        calls.append("reflection")
+        return SimpleNamespace(memories_to_store=[], **usage)
+
+    monkeypatch.setattr(orchestrator.memory_summarizer_agent, "summarize", fake_summarize)
+    monkeypatch.setattr(orchestrator.memory_reflection_agent, "reflect", fake_reflect)
+    snapshot = orchestrator_module._ChatSnapshot(
+        campaign_state="{}",
+        recent_turns=[],
+        memory_context=[],
+        summary_text=None,
+        prior_user_turns=prior_user_turns,
+    )
+    outcome = orchestrator_module._TurnOutcome(campaign_state="{}", reply="r")
+
+    asyncio.run(
+        orchestrator._run_memory_layers(
+            owner_user_id=user_id,
+            campaign_id="campaign_cadence",
+            player_turn_id="t1",
+            assistant_turn_id="t2",
+            snapshot=snapshot,
+            outcome=outcome,
+            request_message="m",
+        )
+    )
+
+    assert ("summary" in calls) is summary
+    assert ("reflection" in calls) is reflection
 
 
 def test_chat_turn_persists_ordered_turns(provider: Provider) -> None:

@@ -95,6 +95,9 @@ model_requests = Table(
     Text("created_at", nullable=False),
     # reserved = in-flight budget (counted at its estimate); completed = finalized.
     String("status", nullable=False, server_default="completed"),
+    # Token sums run under the global budget lock on every model call.
+    Index("ix_model_requests_created", "created_at"),
+    Index("ix_model_requests_owner_created", "owner_user_id", "created_at"),
 )
 
 # Durable logical player requests (a chat turn or a campaign creation). Not tied to

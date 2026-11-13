@@ -1858,8 +1858,11 @@ def test_auto_created_chat_idempotency_claim_prevents_duplicate_starter_generati
         for result in results
         if isinstance(result, HTTPException) and result.status_code == 503
     ]
-    assert len(completed) == 1
-    assert len(rejected) == 1
+    # The duplicate is either told to retry (503, claim still in progress) or, when
+    # it starts after the first commit, served the identical completed replay.
+    assert len(completed) + len(rejected) == 2
+    assert len(completed) >= 1
+    assert all(result == completed[0] for result in completed)
     assert parser_calls == 1
     assert campaign_creation_spy.call_count == 1
     assert campaign_creation_spy.call_args.kwargs["campaign_id"] == completed[0].campaign_id

@@ -8,7 +8,9 @@ image keep working during a rolling deploy (they simply do not write
 ``usage_requests``, so request caps under-count until the rollout completes).
 
 Downgrade drops the added tables/columns; the request ledger is lost and the
-previous turn-based counting resumes.
+previous turn-based counting resumes. The backfill counts only existing user
+turns, so campaign creations and failed requests made before the migration are
+absent from that day's request totals.
 
 Revision ID: 0006_durable_usage_leases
 Revises: 0005_backfill_characters
@@ -28,6 +30,10 @@ def upgrade() -> None:
     op.add_column(
         "model_requests",
         sa.Column("status", sa.String(), nullable=False, server_default="completed"),
+    )
+    op.create_index("ix_model_requests_created", "model_requests", ["created_at"])
+    op.create_index(
+        "ix_model_requests_owner_created", "model_requests", ["owner_user_id", "created_at"]
     )
     op.add_column("campaigns", sa.Column("turn_lease_token", sa.String(), nullable=True))
     op.add_column("campaigns", sa.Column("turn_lease_expires_at", sa.Text(), nullable=True))
@@ -68,6 +74,8 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    op.drop_index("ix_model_requests_owner_created", table_name="model_requests")
+    op.drop_index("ix_model_requests_created", table_name="model_requests")
     op.drop_table("usage_budget_lock")
     op.drop_index("ix_usage_requests_created", table_name="usage_requests")
     op.drop_index("ix_usage_requests_owner_created", table_name="usage_requests")

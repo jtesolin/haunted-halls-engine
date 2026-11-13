@@ -183,7 +183,8 @@ budget lock after checking the daily player and project token caps, then
 finalizes it with actual usage or the failure in its own transaction. Usage
 therefore survives any later failure. A failure with no provider usage keeps
 NULL actuals and keeps counting at the estimate; counts are never fabricated. A
-crash or deadline leaves the row reserved, which is conservative.
+crash, cancellation or deadline leaves the row reserved; it keeps counting at its
+estimate and there is no reaper (conservative, never under-counted).
 
 **Units.** *Request* = one chat turn or campaign creation, recorded in
 `usage_requests` (not cascade-deleted). Player and project request caps count
@@ -200,6 +201,16 @@ provider billing (reconciled at finalization), and request caps under-count whil
 an old image still serves traffic during a rolling deploy. Idempotency claims
 carry `owner_token`/`lease_expires_at`; an expired claim from a crashed worker
 can be taken over and the stale worker's completion is fenced out.
+
+Behavior notes: semantic-memory writes now commit inside the final transaction,
+so a failure there fails the turn (after paid usage, which is durable) instead of
+being swallowed. Accepted risk: if an idempotency-claim takeover begins exactly as
+a stalled previous owner commits, the two transactions lock the claim and
+campaign rows in opposite order and PostgreSQL may abort one; the commit side is
+retried and the begin side returns a retryable error, with no data loss.
+Migration 0006's downgrade drops the request ledger and its backfill counts only
+existing user turns (earlier campaign creations and failed requests are absent
+from that day's totals).
 
 The frontend contract is unchanged: status codes and bodies are as before. A
 concurrent turn on the same campaign returns 503 (retryable) and the server

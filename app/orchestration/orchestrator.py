@@ -707,8 +707,9 @@ class ChatOrchestrator:
                 parsed_action=outcome.parsed_action,
                 tool_result=outcome.tool_result,
             )
-        except Exception:
-            # Usage is already durable; drop the claim/lease so the client may retry.
+        except BaseException:
+            # Usage is already durable; drop the claim/lease so the client may retry
+            # (BaseException also covers cancellation; TTL expiry is the backstop).
             try:
                 await asyncio.to_thread(
                     self._release_chat_claims,
@@ -823,6 +824,14 @@ class ChatOrchestrator:
             raise HTTPException(
                 status_code=502, detail="Action parser service failed."
             ) from exc
+        except Exception as exc:
+            await self._finalize_model_call(
+                parser_request_id,
+                started_at=parser_start_time,
+                success=False,
+                failure_reason=str(exc),
+            )
+            raise
 
         await self._finalize_model_call(
             parser_request_id,
@@ -1238,6 +1247,14 @@ class ChatOrchestrator:
                 failure_reason=str(exc),
             )
             raise HTTPException(status_code=502, detail="Director service failed.") from exc
+        except Exception as exc:
+            await self._finalize_model_call(
+                director_request_id,
+                started_at=director_start_time,
+                success=False,
+                failure_reason=str(exc),
+            )
+            raise
 
         await self._finalize_model_call(
             director_request_id,
