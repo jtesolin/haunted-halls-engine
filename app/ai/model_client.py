@@ -54,7 +54,12 @@ def _sum_usage(first: ModelUsage | None, second: ModelUsage | None) -> ModelUsag
         reasoning_output_tokens=add(
             first.reasoning_output_tokens, second.reasoning_output_tokens
         ),
-        total_tokens=add(first.total_tokens, second.total_tokens),
+        # A one-sided total would understate spend; None lets the ledger sum input+output.
+        total_tokens=(
+            None
+            if first.total_tokens is None or second.total_tokens is None
+            else first.total_tokens + second.total_tokens
+        ),
     )
 
 
@@ -144,9 +149,15 @@ class ModelClient:
             retry_kwargs = dict(request_kwargs)
             retry_reasoning: Reasoning = {"effort": retry_reasoning_effort}
             retry_kwargs["reasoning"] = retry_reasoning
-            response = await client.responses.create(
-                **retry_kwargs,
-            )
+            try:
+                response = await client.responses.create(
+                    **retry_kwargs,
+                )
+            except Exception as exc:
+                # The first call was billed even though the retry failed.
+                if getattr(exc, "usage", None) is None:
+                    exc.usage = usage  # type: ignore[attr-defined]
+                raise
             content = self._extract_response_text(response)
             # Both calls were billed: report their combined usage.
             usage = _sum_usage(usage, self._extract_usage(response))
