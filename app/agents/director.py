@@ -171,7 +171,15 @@ class DirectorProviderError(DirectorError):
 
 
 class DirectorProposalOutputError(DirectorError):
-    """Raised when the provider does not return a valid Director proposal."""
+    """Raised when the provider does not return a valid Director proposal.
+
+    ``usage`` carries the provider usage when the call itself succeeded, so the
+    billable tokens are recorded even though the output was unusable.
+    """
+
+    def __init__(self, message: str, *, usage: ModelUsage | None = None) -> None:
+        super().__init__(message)
+        self.usage = usage
 
 
 class DirectorAgent(BaseAgent):
@@ -266,7 +274,7 @@ class DirectorAgent(BaseAgent):
                 estimated_input_tokens,
             )
             raise DirectorProposalOutputError(
-                "Director did not return valid structured output."
+                "Director did not return valid structured output.", usage=usage
             )
 
         try:
@@ -282,7 +290,7 @@ class DirectorAgent(BaseAgent):
                 exc_info=True,
             )
             raise DirectorProposalOutputError(
-                "Director returned invalid structured output."
+                "Director returned invalid structured output.", usage=usage
             ) from exc
 
         return DirectorAgentResult(proposal=proposal, usage=usage)

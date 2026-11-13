@@ -188,9 +188,11 @@ NULL actuals and keeps counting at the estimate; counts are never fabricated. A
 crash, cancellation or deadline leaves the row reserved; it keeps counting at its
 estimate and there is no reaper (conservative, never under-counted).
 
-**Units.** *Request* = one chat turn or campaign creation, recorded in
-`usage_requests` (not cascade-deleted). Player and project request caps count
-it. *Model call* = one `model_requests` row. *Tokens* = the sum of those rows
+**Units.** *Request* = one executed chat turn or campaign creation attempt,
+recorded in `usage_requests` (not cascade-deleted). Player and project request
+caps count it. A retry that re-executes after a failed or expired attempt is a
+second paid run and counts again; replays of a completed idempotent request,
+in-progress 503s and validation rejections do not. *Model call* = one `model_requests` row. *Tokens* = the sum of those rows
 (estimate fallback). *Campaigns* and *turns* are gameplay limits.
 
 **Hard vs soft.** Token and request caps are hard (checked and recorded under

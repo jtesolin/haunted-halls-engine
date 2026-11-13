@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import threading
+from datetime import datetime
 from types import SimpleNamespace
 from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor
@@ -23,7 +24,7 @@ from sqlalchemy import text
 
 from app.ai.model_client import model_client
 from app.api.dependencies import INTERNAL_USER_ID_HEADER_NAME, get_internal_engine_service_token
-from app.core.config import settings
+from app.core.config import Settings, settings
 from app.db.repositories import ChatRequestIdempotencyOwnershipError, Repository
 from app.db.session import get_engine, session
 from app.game.campaign_state import build_fresh_campaign_state
@@ -797,6 +798,104 @@ def test_user_turn_is_stamped_in_the_commit_and_sorts_before_its_reply(
     with session() as db:
         _, turns, _ = db.get_campaign_with_turns(campaign_id, limit=10)
     assert [t.role for t in turns] == ["assistant", "user", "assistant", "user", "assistant"]
+
+
+def test_user_turn_is_stamped_after_the_model_phase_not_at_request_start(
+    provider: Provider,
+) -> None:
+    client = TestClient(app)
+    headers, _ = _user(client, "stamp-late")
+    campaign_id = _new_campaign(client, headers)
+    narrator_started: list[str] = []
+    provider.probes.append(
+        lambda label: narrator_started.append(datetime.utcnow().isoformat())
+        if label == "narrator"
+        else None
+    )
+
+    assert _chat(client, headers, campaign_id).status_code == 200
+
+    with session() as db:
+        _, turns, _ = db.get_campaign_with_turns(campaign_id, limit=10)
+    user_turn = next(t for t in turns if t.role == "user")
+    assert user_turn.created_at.isoformat() > narrator_started[0]
+
+
+def test_retry_after_failure_counts_again_but_completed_replay_does_not(
+    provider: Provider,
+) -> None:
+    client = TestClient(app)
+    headers, user_id = _user(client, "retry-counts")
+    campaign_id = _new_campaign(client, headers)
+    key = str(uuid4())
+    keyed = {**headers, "Idempotency-Key": key}
+    body = {"message": "look", "campaign_id": campaign_id}
+    base = _requests(user_id)
+
+    provider.fail.add("narrator")
+    assert client.post("/api/chat", json=body, headers=keyed).status_code == 502
+    provider.fail.clear()
+    assert client.post("/api/chat", json=body, headers=keyed).status_code == 200
+    assert _requests(user_id) == base + 2  # two paid executions
+
+    assert client.post("/api/chat", json=body, headers=keyed).status_code == 200  # replay
+    assert _requests(user_id) == base + 2
+
+
+@pytest.mark.parametrize("missing_output", [True, False])
+def test_director_output_failure_keeps_provider_usage(
+    provider: Provider, monkeypatch: pytest.MonkeyPatch, missing_output: bool
+) -> None:
+    from app.ai.model_client import ModelCallResult, ModelUsage
+
+    client = TestClient(app)
+    headers, user_id = _user(client, f"director-usage-{missing_output}")
+    campaign_id = _new_campaign(client, headers)
+    real = provider._structured
+
+    async def bad_director(**kwargs):
+        if kwargs["response_model"].__name__ == "ActionParserOutput":
+            return await real(**kwargs)
+        output = None if missing_output else {"not": "a proposal"}
+        return ModelCallResult(
+            output=output,
+            usage=ModelUsage(input_tokens=321, output_tokens=45, total_tokens=366),
+        )
+
+    provider._structured = bad_director  # type: ignore[method-assign]
+
+    response = _chat(client, headers, campaign_id)
+
+    assert response.status_code == 502
+    with session() as db:
+        row = db.conn.execute(
+            text(
+                "SELECT success, actual_total_tokens, actual_input_tokens FROM model_requests "
+                "WHERE owner_user_id = :o AND agent_name = 'Director'"
+            ),
+            {"o": user_id},
+        ).one()
+    assert (int(row[0]), row[1], row[2]) == (0, 366, 321)
+
+
+# ------------------------------------------------------------------ config
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"REQUEST_LEASE_SECONDS": 140},
+        {"REQUEST_LEASE_SECONDS": 170},  # not more than the deadline plus the margin
+        {"REQUEST_LEASE_SECONDS": 200, "CHAT_MODEL_DEADLINE_SECONDS": 190.0},
+    ],
+)
+def test_lease_shorter_than_the_model_deadline_is_rejected(overrides) -> None:
+    with pytest.raises(ValueError, match="REQUEST_LEASE_SECONDS"):
+        Settings(**overrides)
+
+
+def test_default_lease_exceeds_the_model_deadlines() -> None:
+    assert Settings().REQUEST_LEASE_SECONDS > 140 + 30
 
 
 def test_chat_turn_persists_ordered_turns(provider: Provider) -> None:

@@ -1135,11 +1135,19 @@ class ChatOrchestrator:
                     memory_writes.reflection_candidates = list(
                         reflection_output.memories_to_store
                     )
-        except Exception:
-            # Best effort: a denied reservation or a DB error only skips the optional
-            # memory layer. Cancellation (BaseException) still propagates.
+        except HTTPException:
+            # A denied budget reservation only skips the optional memory layer.
             logger.warning(
                 "memory_layers_skipped campaign_id=%s turn_id=%s",
+                campaign_id,
+                assistant_turn_id,
+                exc_info=True,
+            )
+        except Exception:
+            # Best effort, but an unexpected error may be a bug: log it loudly.
+            # Cancellation (BaseException) still propagates.
+            logger.error(
+                "memory_layers_failed campaign_id=%s turn_id=%s",
                 campaign_id,
                 assistant_turn_id,
                 exc_info=True,
@@ -1256,6 +1264,7 @@ class ChatOrchestrator:
                 started_at=director_start_time,
                 success=False,
                 failure_reason=str(exc),
+                usage=getattr(exc, "usage", None),
             )
             raise HTTPException(status_code=502, detail="Director service failed.") from exc
         except Exception as exc:

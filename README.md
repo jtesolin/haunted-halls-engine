@@ -32,8 +32,10 @@ The engine defaults to these testing-budget limits (#101):
 Daily counters reset at midnight UTC. A *request* is one logical player action
 (a chat turn or a campaign creation); player and project request caps both count
 the durable `usage_requests` ledger, so deleting a campaign never refunds allowance
-and a turn's several model calls count once. Failed paid requests count too;
-idempotent replays and validation rejections do not. Token limits are hard caps:
+and a turn's several model calls count once. Failed paid requests count too, and a retry that
+re-executes after a failed or expired attempt counts as another request (it is a
+second paid run); a replay of an already completed idempotent request,
+in-progress 503s and validation rejections do not count. Token limits are hard caps:
 every model call reserves its estimated tokens under a global budget lock before
 it runs, and the reservation is finalized with actual usage afterwards. HTTP 429
 error contracts are unchanged. See `docs/architecture.md` ("Transactions, durable
