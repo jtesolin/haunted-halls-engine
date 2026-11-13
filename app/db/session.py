@@ -31,7 +31,10 @@ def _create_engine() -> Engine:
     engine_kwargs: dict[str, object] = {}
     if url.startswith("sqlite"):
         _ensure_sqlite_directory(url)
-        engine_kwargs["connect_args"] = {"check_same_thread": False}
+        engine_kwargs["connect_args"] = {"check_same_thread": False, "timeout": 15}
+    else:
+        engine_kwargs["pool_size"] = settings.DB_POOL_SIZE
+        engine_kwargs["max_overflow"] = settings.DB_MAX_OVERFLOW
 
     engine = create_engine(url, **engine_kwargs)
 
@@ -70,11 +73,25 @@ def get_connection() -> Connection:
 
 
 @contextmanager
-def session() -> Iterator[Repository]:
+def session(
+    *, lock_budget: bool = False, write_first_sqlite: bool = False
+) -> Iterator[Repository]:
+    """Short transaction. Never hold one across a model call.
+
+    ``lock_budget`` takes the global usage-budget lock as the first statement
+    (a write-first lock on SQLite, a row lock on PostgreSQL) so budget checks and
+    their inserts are serialized. ``write_first_sqlite`` takes it up front only on
+    SQLite (avoids a deferred read-to-write upgrade failure; the database write lock
+    is database-wide there anyway); on PostgreSQL the caller locks the budget row
+    late, right before its cap check, so snapshot reads never queue behind it.
+    """
     conn = get_connection()
     transaction = conn.begin()
     try:
-        yield Repository(conn)
+        repo = Repository(conn)
+        if lock_budget or (write_first_sqlite and conn.dialect.name == "sqlite"):
+            repo.lock_usage_budget()
+        yield repo
         if transaction.is_active:
             transaction.commit()
     except Exception:

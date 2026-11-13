@@ -4,6 +4,9 @@ from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings
 
 
+LEASE_MARGIN_SECONDS = 30
+
+
 class Settings(BaseSettings):
     # Used only by evals.runner to opt into paid live evaluation runs.
     AI_ENABLED: bool = False
@@ -53,6 +56,16 @@ class Settings(BaseSettings):
     MAX_DAILY_PROJECT_TOKENS: int = 1000000
     MAX_ESTIMATED_INPUT_TOKENS: int = 4000
 
+    # Server-side deadlines for the model phases. Keep them below the BFF timeouts
+    # (chat 150s, campaign create 90s) so the engine fails first and releases state.
+    CHAT_MODEL_DEADLINE_SECONDS: float = 140.0
+    CAMPAIGN_CREATE_MODEL_DEADLINE_SECONDS: float = 85.0
+    # TTL for per-campaign turn leases and idempotency claims. Validated to exceed the
+    # larger deadline plus LEASE_MARGIN_SECONDS (commit retries), see model_post_init.
+    REQUEST_LEASE_SECONDS: int = 300
+    DB_POOL_SIZE: int = 10
+    DB_MAX_OVERFLOW: int = 10
+
     model_config = {
         "env_file": ".env",
         "env_file_encoding": "utf-8",
@@ -61,6 +74,16 @@ class Settings(BaseSettings):
     def model_post_init(self, __context: object) -> None:
         if self.OTEL_ENABLED and not self.OTEL_GCP_PROJECT_ID:
             raise ValueError("OTEL_GCP_PROJECT_ID is required when OTEL_ENABLED is true")
+        longest_deadline = max(
+            self.CHAT_MODEL_DEADLINE_SECONDS, self.CAMPAIGN_CREATE_MODEL_DEADLINE_SECONDS
+        )
+        if self.REQUEST_LEASE_SECONDS <= longest_deadline + LEASE_MARGIN_SECONDS:
+            # A shorter lease could expire while the original call is still running,
+            # letting another worker take over and repeat paid model calls.
+            raise ValueError(
+                "REQUEST_LEASE_SECONDS must exceed the longest model deadline "
+                f"({longest_deadline}s) by more than {LEASE_MARGIN_SECONDS}s"
+            )
 
 
 settings = Settings()

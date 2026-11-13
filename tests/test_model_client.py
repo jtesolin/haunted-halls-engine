@@ -241,6 +241,101 @@ def test_generate_text_fails_when_provider_returns_no_text(monkeypatch) -> None:
         )
 
 
+def _usage_response(response: Any, input_tokens: int, output_tokens: int) -> Any:
+    response.usage = SimpleNamespace(
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        total_tokens=input_tokens + output_tokens,
+    )
+    return response
+
+
+def test_generate_text_retry_reports_the_combined_billed_usage(monkeypatch) -> None:
+    model_client = ModelClient()
+    first = _usage_response(_IncompleteResponseNoText(), 100, 50)
+    second = _usage_response(_ResponseWithText("Recovered output"), 100, 30)
+    monkeypatch.setattr(model_client, "_get_client", lambda: _FakeClient([first, second]))
+
+    result = asyncio.run(
+        model_client.generate_text(
+            messages=[{"role": "user", "content": "hello"}],
+            reasoning_effort="minimal",
+            model="gpt-test",
+            max_output_tokens=220,
+            timeout=9,
+            return_usage=True,
+        )
+    )
+
+    assert result.output == "Recovered output"
+    assert result.usage == ModelUsage(input_tokens=200, output_tokens=80, total_tokens=280)
+
+
+def test_generate_text_failed_retry_carries_the_combined_usage(monkeypatch) -> None:
+    model_client = ModelClient()
+    first = _usage_response(_IncompleteResponseNoText(), 100, 50)
+    second = _usage_response(_IncompleteResponseNoText(), 100, 50)
+    monkeypatch.setattr(model_client, "_get_client", lambda: _FakeClient([first, second]))
+
+    with pytest.raises(RuntimeError, match="returned no text output") as exc_info:
+        asyncio.run(
+            model_client.generate_text(
+                messages=[{"role": "user", "content": "hello"}],
+                reasoning_effort="minimal",
+                model="gpt-test",
+                max_output_tokens=220,
+                timeout=9,
+            )
+        )
+
+    assert exc_info.value.usage == ModelUsage(  # type: ignore[attr-defined]
+        input_tokens=200, output_tokens=100, total_tokens=300
+    )
+
+
+def test_generate_text_retry_provider_error_carries_the_first_calls_usage(monkeypatch) -> None:
+    model_client = ModelClient()
+    first = _usage_response(_IncompleteResponseNoText(), 100, 50)
+    fake_client = _FakeClient([first])
+    calls = {"n": 0}
+    original_create = fake_client.responses.create
+
+    async def create(**kwargs):
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise TimeoutError("retry timed out")
+        return await original_create(**kwargs)
+
+    monkeypatch.setattr(fake_client.responses, "create", create)
+    monkeypatch.setattr(model_client, "_get_client", lambda: fake_client)
+
+    with pytest.raises(TimeoutError) as exc_info:
+        asyncio.run(
+            model_client.generate_text(
+                messages=[{"role": "user", "content": "hello"}],
+                reasoning_effort="minimal",
+                model="gpt-test",
+                max_output_tokens=220,
+                timeout=9,
+            )
+        )
+
+    assert exc_info.value.usage == ModelUsage(  # type: ignore[attr-defined]
+        input_tokens=100, output_tokens=50, total_tokens=150
+    )
+
+
+def test_sum_usage_leaves_total_unset_when_one_side_has_no_total() -> None:
+    from app.ai.model_client import _sum_usage
+
+    combined = _sum_usage(
+        ModelUsage(input_tokens=10, output_tokens=5, total_tokens=15),
+        ModelUsage(input_tokens=20, output_tokens=8),
+    )
+
+    assert combined == ModelUsage(input_tokens=30, output_tokens=13, total_tokens=None)
+
+
 def test_extract_usage_preserves_partial_and_zero_values() -> None:
     model_client = ModelClient()
 

@@ -1729,7 +1729,8 @@ def test_observed_tethered_step_requests_are_narrated_without_movement(
             ),
             {"campaign_id": campaign_id},
         ).scalars().all()
-    assert parser_requests == [True]
+    # Billable usage from the failed first attempt is durable; game state is not.
+    assert parser_requests == [True, True]
     assert persisted["player"]["location"] == "entry_hall"
     assert persisted["story"] == state["story"]
     assert persisted["player"]["generated_abilities"] == state["player"]["generated_abilities"]

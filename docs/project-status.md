@@ -163,8 +163,11 @@ player-supplied target rather than conflating invocation and target vocabulary.
 Issue #101 raises the defaults to 300,000 counted model tokens and 100 player
 requests per user per UTC day, and 1,000,000 counted model tokens per environment
 per UTC day. Project requests remain capped at 1,000/day and campaigns at 20 turns.
-UTC reset semantics, model-usage accounting, pending-call checks, and quota error
-contracts are unchanged.
+UTC reset semantics and quota error contracts are unchanged. Issue #117 changed
+the accounting units (logical requests in a durable ledger, reservation-based hard
+token caps; see architecture.md); project requests now count logical requests, so
+the 1,000/day project request cap allows roughly three times as many turns as
+before at the same value, with the 1,000,000 token cap as the binding backstop.
 
 No quota overrides were found in the deployed production/staging Cloud Run
 services or canonical deployment workflows and Terraform in `jtesolin/haunted-halls`.

@@ -82,10 +82,12 @@ class MemoryReflectionAgent(BaseAgent):
             campaign_state=payload.campaign_state,
             recent_turns=payload.recent_turns,
         )
+        # The provider call was billed even though its text yielded no facts.
         return MemoryReflectionOutput(
             memories_to_store=[
                 MemoryCandidate(text=fact, importance=1.0, memory_type="reflection") for fact in fallback_facts
-            ]
+            ],
+            **(usage.as_output_fields() if usage is not None else {}),
         )
 
     def _build_messages(self, payload: MemoryReflectionInput) -> list[ChatCompletionMessageParam]:

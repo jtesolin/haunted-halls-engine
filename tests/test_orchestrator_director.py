@@ -758,9 +758,14 @@ def test_director_provider_failure_rolls_back_transaction_and_allows_retry(
         assert db.conn.execute(text("SELECT COUNT(*) FROM turns")).scalar_one() == 0
         assert db.conn.execute(text("SELECT COUNT(*) FROM game_events")).scalar_one() == 0
         assert db.conn.execute(text("SELECT COUNT(*) FROM campaigns")).scalar_one() == 0
-        assert (
-            db.conn.execute(text("SELECT COUNT(*) FROM model_requests")).scalar_one() == 0
-        )
+        # Game state rolled back, but billable usage (starter, parser, failed
+        # director) is durable and finalized.
+        usage_rows = db.conn.execute(
+            text("SELECT agent_name, success, status FROM model_requests ORDER BY id")
+        ).all()
+        assert len(usage_rows) == 3
+        assert all(row[2] == "completed" for row in usage_rows)
+        assert [row[1] for row in usage_rows].count(0) == 1
         idempotency_row = db.get_chat_request_idempotency(user_id, idempotency_key)
         assert idempotency_row is None or idempotency_row["status"] != "completed"
 
@@ -1045,7 +1050,7 @@ def test_director_none_decision_materializes_and_persists_fresh_state_once(
     state for Narrator, memory maintenance, and persistence this turn -- and
     must be reloaded (not rerolled) on a later turn.
     """
-    monkeypatch.setattr(settings, "INTERNAL_ENGINE_SERVICE_TOKEN", "test-token")
+    monkeypatch.setattr(settings, "INTERNAL_ENGINE_SERVICE_TOKEN", "test-internal-engine-service-token-0000000000000000000000000000000000000000000000")
 
     monkeypatch.setattr(
         orchestrator_module.orchestrator.action_parser_agent,

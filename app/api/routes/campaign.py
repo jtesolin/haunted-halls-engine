@@ -42,7 +42,7 @@ async def create_campaign(
 
 
 @router.get("/campaign/{campaign_id}", response_model=CampaignDetail)
-async def get_campaign(
+def get_campaign(
     campaign_id: str,
     _user_context: AuthenticatedUserContext = Depends(
         require_authenticated_user_context
@@ -79,7 +79,7 @@ async def get_campaign(
 
 
 @router.delete("/campaign/{campaign_id}", status_code=204)
-async def delete_campaign(
+def delete_campaign(
     campaign_id: str,
     _user_context: AuthenticatedUserContext = Depends(
         require_authenticated_user_context
@@ -95,7 +95,7 @@ async def delete_campaign(
 
 
 @router.get("/campaigns", response_model=list[CampaignSummary])
-async def list_campaigns(
+def list_campaigns(
     _user_context: AuthenticatedUserContext = Depends(
         require_authenticated_user_context
     ),
@@ -122,7 +122,7 @@ async def list_campaigns(
 
 
 @router.get("/character/{character_id}", response_model=CharacterDetail)
-async def get_character(
+def get_character(
     character_id: str,
     _user_context: AuthenticatedUserContext = Depends(
         require_authenticated_user_context
@@ -177,7 +177,7 @@ async def get_character(
 
 
 @router.get("/characters", response_model=CharacterList)
-async def list_characters(
+def list_characters(
     _user_context: AuthenticatedUserContext = Depends(
         require_authenticated_user_context
     ),

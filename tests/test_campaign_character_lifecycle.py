@@ -256,6 +256,9 @@ def _snapshot() -> list[tuple[str, str, str]]:
         ]
 
 
+_BACKFILL_REVISION = "0005_backfill_characters"
+
+
 def _alembic_revision() -> str:
     with get_engine().connect() as conn:
         return conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
@@ -269,7 +272,7 @@ def test_backfill_rerun_is_idempotent(tmp_path) -> None:
         command.upgrade(cfg, "0004_chat_idempotency")
         with get_engine().begin() as conn:
             _seed_user_and_campaigns(conn, ["campaign_a", "campaign_b"])
-        command.upgrade(cfg, "head")
+        command.upgrade(cfg, _BACKFILL_REVISION)
         first = _snapshot()
         assert all(row[2].strip() for row in first)
         assert [row[0] for row in first] == [
@@ -278,7 +281,7 @@ def test_backfill_rerun_is_idempotent(tmp_path) -> None:
         ]
         # Re-run the real migration against the already-backfilled data.
         command.stamp(cfg, "0004_chat_idempotency")
-        command.upgrade(cfg, "head")
+        command.upgrade(cfg, _BACKFILL_REVISION)
         assert _snapshot() == first
     finally:
         settings.DATABASE_URL = original
@@ -306,7 +309,7 @@ def test_backfill_character_id_collision_fails_safely_and_clearly(tmp_path) -> N
         before = _snapshot()
 
         with pytest.raises(RuntimeError, match="campaign_b") as excinfo:
-            command.upgrade(cfg, "head")
+            command.upgrade(cfg, _BACKFILL_REVISION)
         assert "campaign_c" not in str(excinfo.value)
         # Fails before changing anything: no partial backfill (campaign_c is
         # untouched) and the revision is not advanced.
@@ -319,7 +322,7 @@ def test_backfill_character_id_collision_fails_safely_and_clearly(tmp_path) -> N
             conn.execute(
                 text("DELETE FROM characters WHERE character_id = 'character_campaign_b'")
             )
-        command.upgrade(cfg, "head")
+        command.upgrade(cfg, _BACKFILL_REVISION)
         assert {row[1] for row in _snapshot()} == {
             "campaign_a",
             "campaign_b",

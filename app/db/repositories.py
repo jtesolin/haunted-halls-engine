@@ -1,15 +1,14 @@
 from __future__ import annotations
 
-import hashlib
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 from datetime import timezone
 from typing import Any, Optional
 from uuid import uuid4
 
-from sqlalchemy import and_, case, delete, func, insert, select, update
+from sqlalchemy import and_, case, delete, func, insert, or_, select, update
 from sqlalchemy.engine import Connection
-from sqlalchemy.exc import IntegrityError, OperationalError
+from sqlalchemy.exc import IntegrityError
 
 from app.core.config import settings
 from app.db.models import (
@@ -32,6 +31,8 @@ from app.db.schema import (
     model_requests,
     summaries,
     turns,
+    usage_budget_lock,
+    usage_requests,
 )
 from app.memory.retriever import (
     build_embedding,
@@ -63,6 +64,73 @@ class Repository:
     def _now_utc_iso(self) -> str:
         return datetime.now(timezone.utc).isoformat()
 
+    @staticmethod
+    def now_naive_utc_iso(offset_seconds: float = 0) -> str:
+        """Naive-UTC ISO timestamp; the single format used for accounting and leases."""
+        return (datetime.utcnow() + timedelta(seconds=offset_seconds)).isoformat()
+
+    def lock_usage_budget(self) -> None:
+        """Write-first global lock for budget checks (held until the transaction ends)."""
+        self.conn.execute(
+            update(usage_budget_lock)
+            .where(usage_budget_lock.c.id == 1)
+            .values(n=usage_budget_lock.c.n + 1)
+        )
+
+    def lock_internal_user(self, user_id: str) -> None:
+        """Per-user write-first lock without touching any key column."""
+        self.conn.execute(
+            update(internal_users)
+            .where(internal_users.c.user_id == user_id)
+            .values(updated_at=internal_users.c.updated_at)
+        )
+
+    def add_usage_request(self, owner_user_id: str, kind: str) -> None:
+        self.conn.execute(
+            insert(usage_requests).values(
+                owner_user_id=owner_user_id,
+                kind=kind,
+                created_at=self.now_naive_utc_iso(),
+            )
+        )
+
+    def acquire_turn_lease(
+        self, campaign_id: str, owner_user_id: str, token: str, ttl_seconds: int
+    ) -> bool:
+        result = self.conn.execute(
+            update(campaigns)
+            .where(
+                and_(
+                    campaigns.c.campaign_id == campaign_id,
+                    campaigns.c.owner_user_id == owner_user_id,
+                    or_(
+                        campaigns.c.turn_lease_token.is_(None),
+                        campaigns.c.turn_lease_expires_at.is_(None),
+                        campaigns.c.turn_lease_expires_at < self.now_naive_utc_iso(),
+                    ),
+                )
+            )
+            .values(
+                turn_lease_token=token,
+                turn_lease_expires_at=self.now_naive_utc_iso(ttl_seconds),
+            )
+        )
+        return result.rowcount == 1
+
+    def release_turn_lease(self, campaign_id: str, token: str) -> bool:
+        """Token-fenced release. False means the lease was lost or the campaign is gone."""
+        result = self.conn.execute(
+            update(campaigns)
+            .where(
+                and_(
+                    campaigns.c.campaign_id == campaign_id,
+                    campaigns.c.turn_lease_token == token,
+                )
+            )
+            .values(turn_lease_token=None, turn_lease_expires_at=None)
+        )
+        return result.rowcount == 1
+
     def get_chat_request_idempotency(
         self, owner_user_id: str, idempotency_key: str
     ):
@@ -84,36 +152,17 @@ class Repository:
         request_fingerprint: str,
         requested_campaign_id: str | None,
         requested_character_id: str | None,
+        owner_token: str,
+        lease_seconds: int,
     ) -> ChatRequestIdempotencyClaim:
         """Attempt to durably acquire the idempotency claim for this request.
 
-        Returns a :class:`ChatRequestIdempotencyClaim` whose ``acquired`` flag
-        is True only when this call's own INSERT won the unique constraint.
-        Every other outcome (a unique violation because another transaction
-        already owns the row, or a locked-database retry signal) yields
-        ``acquired=False`` alongside whatever row is currently visible (which
-        may be ``None`` if it cannot be safely observed). Callers must never
-        treat a visible ``in_progress`` row as license to execute unless
-        ``acquired`` is True.
+        ``acquired`` is True only when this call's INSERT won the unique
+        constraint, or when it took over an ``in_progress`` claim whose lease
+        expired (a crashed worker). Completion and release are fenced by
+        ``owner_token`` so a superseded worker can never overwrite the new
+        owner. Callers must never execute unless ``acquired`` is True.
         """
-        if self.conn.dialect.name == "postgresql":
-            lock_key = f"{owner_user_id}:{idempotency_key}".encode("utf-8")
-            lock_id = int.from_bytes(
-                hashlib.blake2b(lock_key, digest_size=8).digest(),
-                byteorder="big",
-                signed=True,
-            )
-            lock_acquired = self.conn.execute(
-                select(func.pg_try_advisory_xact_lock(lock_id))
-            ).scalar_one()
-            if not lock_acquired:
-                return ChatRequestIdempotencyClaim(
-                    acquired=False,
-                    row=self.get_chat_request_idempotency(
-                        owner_user_id, idempotency_key
-                    ),
-                )
-
         acquired = False
         try:
             with self.conn.begin_nested():
@@ -126,15 +175,33 @@ class Repository:
                         requested_character_id=requested_character_id,
                         status="in_progress",
                         created_at=self._now_utc_iso(),
+                        owner_token=owner_token,
+                        lease_expires_at=self.now_naive_utc_iso(lease_seconds),
                     )
                 )
             acquired = True
         except IntegrityError:
-            acquired = False
-        except OperationalError as exc:
-            if "database is locked" in str(exc).lower():
-                return ChatRequestIdempotencyClaim(acquired=False, row=None)
-            raise
+            takeover = self.conn.execute(
+                update(chat_request_idempotency)
+                .where(
+                    and_(
+                        chat_request_idempotency.c.owner_user_id == owner_user_id,
+                        chat_request_idempotency.c.idempotency_key == idempotency_key,
+                        chat_request_idempotency.c.request_fingerprint == request_fingerprint,
+                        chat_request_idempotency.c.status == "in_progress",
+                        or_(
+                            chat_request_idempotency.c.lease_expires_at.is_(None),
+                            chat_request_idempotency.c.lease_expires_at
+                            < self.now_naive_utc_iso(),
+                        ),
+                    )
+                )
+                .values(
+                    owner_token=owner_token,
+                    lease_expires_at=self.now_naive_utc_iso(lease_seconds),
+                )
+            )
+            acquired = takeover.rowcount == 1
         row = self.get_chat_request_idempotency(owner_user_id, idempotency_key)
         return ChatRequestIdempotencyClaim(acquired=acquired, row=row)
 
@@ -147,6 +214,7 @@ class Repository:
         reply: str,
         campaign_id: str,
         turn_id: str,
+        owner_token: str,
     ) -> None:
         """Mark an owned in-progress claim as completed.
 
@@ -165,6 +233,7 @@ class Repository:
                     chat_request_idempotency.c.idempotency_key == idempotency_key,
                     chat_request_idempotency.c.request_fingerprint == request_fingerprint,
                     chat_request_idempotency.c.status == "in_progress",
+                    chat_request_idempotency.c.owner_token == owner_token,
                 )
             )
             .values(
@@ -186,6 +255,7 @@ class Repository:
         owner_user_id: str,
         idempotency_key: str,
         request_fingerprint: str,
+        owner_token: str,
     ) -> None:
         """Release an owned claim when execution fails before completion."""
         self.conn.execute(
@@ -195,6 +265,7 @@ class Repository:
                     chat_request_idempotency.c.idempotency_key == idempotency_key,
                     chat_request_idempotency.c.request_fingerprint == request_fingerprint,
                     chat_request_idempotency.c.status == "in_progress",
+                    chat_request_idempotency.c.owner_token == owner_token,
                 )
             )
         )
@@ -602,13 +673,11 @@ class Repository:
     def count_user_requests_since(self, owner_user_id: str, since_iso: str) -> int:
         total = self.conn.execute(
             select(func.count())
-            .select_from(turns)
-            .join(campaigns, turns.c.campaign_id == campaigns.c.campaign_id)
+            .select_from(usage_requests)
             .where(
                 and_(
-                    campaigns.c.owner_user_id == owner_user_id,
-                    turns.c.role == "user",
-                    turns.c.created_at >= since_iso,
+                    usage_requests.c.owner_user_id == owner_user_id,
+                    usage_requests.c.created_at >= since_iso,
                 )
             )
         ).scalar_one()
@@ -617,8 +686,8 @@ class Repository:
     def count_project_requests_since(self, since_iso: str) -> int:
         total = self.conn.execute(
             select(func.count())
-            .select_from(model_requests)
-            .where(model_requests.c.created_at >= since_iso)
+            .select_from(usage_requests)
+            .where(usage_requests.c.created_at >= since_iso)
         ).scalar_one()
         return int(total or 0)
 
@@ -656,11 +725,6 @@ class Repository:
             )
         ).scalar_one()
         return int(total or 0)
-
-    def sum_user_estimated_input_tokens_since(
-        self, owner_user_id: str, since_iso: str
-    ) -> int:
-        return self.sum_user_model_tokens_since(owner_user_id, since_iso)
 
     def sum_project_model_tokens_since(self, since_iso: str) -> int:
         total = self.conn.execute(
@@ -731,14 +795,76 @@ class Repository:
             )
         )
 
+    def reserve_model_request(
+        self,
+        *,
+        request_id: str,
+        owner_user_id: str,
+        campaign_id: str,
+        turn_id: str,
+        agent_name: str,
+        model: str,
+        estimated_input_tokens: int,
+        estimated_output_tokens: int,
+    ) -> None:
+        """Insert an in-flight row; NULL actuals make it count at its estimate."""
+        self.conn.execute(
+            insert(model_requests).values(
+                request_id=request_id,
+                owner_user_id=owner_user_id,
+                campaign_id=campaign_id,
+                turn_id=turn_id,
+                agent_name=agent_name,
+                model=model,
+                estimated_input_tokens=estimated_input_tokens,
+                estimated_output_tokens=estimated_output_tokens,
+                latency_ms=0,
+                success=False,
+                status="reserved",
+                created_at=self.now_naive_utc_iso(),
+            )
+        )
+
+    def finalize_model_request(
+        self,
+        request_id: str,
+        *,
+        latency_ms: int,
+        success: bool,
+        failure_reason: str | None = None,
+        actual_input_tokens: int | None = None,
+        cached_input_tokens: int | None = None,
+        cache_write_input_tokens: int | None = None,
+        actual_output_tokens: int | None = None,
+        reasoning_output_tokens: int | None = None,
+        actual_total_tokens: int | None = None,
+    ) -> None:
+        self.conn.execute(
+            update(model_requests)
+            .where(model_requests.c.request_id == request_id)
+            .values(
+                status="completed",
+                success=success,
+                failure_reason=failure_reason,
+                latency_ms=latency_ms,
+                actual_input_tokens=actual_input_tokens,
+                cached_input_tokens=cached_input_tokens,
+                cache_write_input_tokens=cache_write_input_tokens,
+                actual_output_tokens=actual_output_tokens,
+                reasoning_output_tokens=reasoning_output_tokens,
+                actual_total_tokens=actual_total_tokens,
+            )
+        )
+
     def create_turn(
         self,
         campaign_id: str,
         turn_id: str,
         role: str,
         content: str,
+        created_at: str | None = None,
     ) -> TurnDBModel:
-        created_at = datetime.utcnow().isoformat()
+        created_at = created_at or datetime.utcnow().isoformat()
         self.conn.execute(
             insert(turns).values(
                 turn_id=turn_id,
@@ -759,9 +885,11 @@ class Repository:
         turn_id: str,
         type: GameEventType,
         payload: Optional[GameEventPayload] = None,
+        payload_json: Optional[str] = None,
     ) -> GameEventDBModel:
         created_at = datetime.utcnow().isoformat()
-        payload_json = payload.model_dump_json() if payload is not None else None
+        if payload_json is None and payload is not None:
+            payload_json = payload.model_dump_json()
         self.conn.execute(
             insert(game_events).values(
                 event_id=event_id,

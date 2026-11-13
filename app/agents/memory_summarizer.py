@@ -68,7 +68,10 @@ class MemorySummarizerAgent(BaseAgent):
             return MemorySummarizerOutput(summary_text=summary)
 
         fallback_summary = self._build_fallback_summary(payload)
-        return MemorySummarizerOutput(summary_text=fallback_summary)
+        # The provider call was billed even though its text was blank.
+        return MemorySummarizerOutput(
+            summary_text=fallback_summary, **(usage.as_output_fields() if usage is not None else {})
+        )
 
     def _build_messages(self, payload: MemorySummarizerInput) -> list[ChatCompletionMessageParam]:
         messages = [

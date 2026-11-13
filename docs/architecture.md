@@ -156,6 +156,83 @@ it to call `GET /api/character/{character_id}` for the active campaign.
   rows exist for a campaign, the earliest by `created_at`, tie-broken by
   ascending row id, is returned deterministically in both detail and list.
 
+## Transactions, durable usage and concurrency
+
+Issue #117. A chat turn or campaign creation never holds a database
+transaction or pooled connection across a model call. It runs in three phases:
+
+1. **Begin (one short transaction):** idempotency claim or replay, request
+   validation, per-campaign turn lease, read snapshot (state, recent turns,
+   memory, summary, user-turn count), then the global budget row lock (taken
+   last on PostgreSQL so snapshot work never queues behind it; up front on
+   SQLite), the request-cap check and one `usage_requests` row (the logical
+   request).
+2. **Model phases (no transaction open):** action parser, deterministic tool
+   execution (offloaded with `asyncio.to_thread`; it may block on MCP), Director,
+   Narrator and best-effort summary/reflection run over in-memory state, under a
+   server-side deadline (`CHAT_MODEL_DEADLINE_SECONDS`=140,
+   `CAMPAIGN_CREATE_MODEL_DEADLINE_SECONDS`=85) shorter than the BFF timeouts
+   (150s / 90s). Memory layers are skipped when the deadline is spent.
+3. **Commit (one short transaction):** fenced lease release (first statement),
+   campaign/character creation (re-checking the campaign cap under a per-user
+   lock), both turns, all events, state update, memory/summary writes and
+   idempotency completion commit atomically or not at all. A failed turn
+   persists no turns, events or state; the claim and lease are released.
+
+**Durable usage.** Each model call inserts a `model_requests` row with
+`status='reserved'` (counted at its estimate; actuals NULL) under the global
+budget lock after checking the daily player and project token caps, then
+finalizes it with actual usage or the failure in its own transaction. Usage
+therefore survives any later failure. A failure with no provider usage keeps
+NULL actuals and keeps counting at the estimate; counts are never fabricated. A
+crash, cancellation or deadline leaves the row reserved; it keeps counting at its
+estimate and there is no reaper (conservative, never under-counted).
+
+**Units.** *Request* = one executed chat turn or campaign creation attempt,
+recorded in `usage_requests` (not cascade-deleted). Player and project request
+caps count it. A retry that re-executes after a failed or expired attempt is a
+second paid run and counts again; replays of a completed idempotent request,
+in-progress 503s and validation rejections do not. *Model call* = one `model_requests` row. *Tokens* = the sum of those rows
+(estimate fallback). *Campaigns* and *turns* are gameplay limits.
+
+**Hard vs soft.** Request caps are hard (checked and recorded under the global
+lock). Token caps are hard against what is known at admission: each call reserves
+its estimated input plus its provider-enforced `max_output_tokens` before it runs,
+and the row is reconciled to the provider's actual usage when it finishes, so
+later checks see actuals. Overshoot has two bounded sources: an input-token
+under-estimate on calls that are in flight together, and the model client's rare
+incomplete-then-retry path (a second billed call for one reservation, at most one
+extra input plus max output). Both are bounded by the number of concurrent calls
+and do not accumulate, because finalized rows report the combined actual usage.
+The campaign cap is exact in persistence (re-checked at commit
+under a per-user lock) but concurrent over-limit creations may waste model spend
+bounded by the token caps. The turn limit is exact: one turn per campaign is in
+flight (`campaigns.turn_lease_*`, fenced by token, TTL `REQUEST_LEASE_SECONDS`).
+A concurrent turn gets 503. Residual uncertainty: token estimates can differ from
+provider billing (reconciled at finalization). Rolling deploy: requests served by
+the previous image between migration 0006 and traffic cutover persist turns but no
+`usage_requests` rows, so they stay invisible to the request counters for the rest
+of that UTC day (bounded by the overlap window); token caps are unaffected because
+the previous image still writes `model_requests`. Idempotency claims
+carry `owner_token`/`lease_expires_at`; an expired claim from a crashed worker
+can be taken over and the stale worker's completion is fenced out.
+
+Behavior notes: semantic-memory writes now commit inside the final transaction,
+so a failure there fails the turn (after paid usage, which is durable) instead of
+being swallowed. Accepted risks: a handler cancelled while its begin transaction is still running
+leaves the claim and campaign lease held until `REQUEST_LEASE_SECONDS` (retries get
+503 meanwhile). If an idempotency-claim takeover begins exactly as
+a stalled previous owner commits, the two transactions lock the claim and
+campaign rows in opposite order and PostgreSQL may abort one; the commit side is
+retried and the begin side returns a retryable error, with no data loss.
+Migration 0006's downgrade drops the request ledger and its backfill counts only
+existing user turns (earlier campaign creations and failed requests are absent
+from that day's totals).
+
+The frontend contract is unchanged: status codes and bodies are as before. A
+concurrent turn on the same campaign returns 503 (retryable) and the server
+deadline can return 502 slightly earlier than before.
+
 ## World-authority boundary
 
 Player `ParsedAction` values and the player `ToolExecutor` remain limited to

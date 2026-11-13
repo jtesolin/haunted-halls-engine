@@ -23,12 +23,12 @@ def _user_scoped_headers(client: TestClient, provider_subject: str) -> dict[str,
             "display_name": "Owner Test",
             "avatar_url": "https://example.com/avatar.png",
         },
-        headers={"Authorization": "Bearer test-token"},
+        headers={"Authorization": "Bearer test-internal-engine-service-token-0000000000000000000000000000000000000000000000"},
     )
     assert resolve_response.status_code == 200
     user_id = resolve_response.json()["user_id"]
     return {
-        "Authorization": "Bearer test-token",
+        "Authorization": "Bearer test-internal-engine-service-token-0000000000000000000000000000000000000000000000",
         INTERNAL_USER_ID_HEADER_NAME: user_id,
     }
 
@@ -40,7 +40,7 @@ def _sqlite_database_path() -> str:
 
 
 def test_campaign_creation_persists_owner_from_authenticated_user_context() -> None:
-    settings.INTERNAL_ENGINE_SERVICE_TOKEN = "test-token"
+    settings.INTERNAL_ENGINE_SERVICE_TOKEN = "test-internal-engine-service-token-0000000000000000000000000000000000000000000000"
     client = TestClient(app)
     headers = _user_scoped_headers(client, "campaign-owner")
 
@@ -64,7 +64,7 @@ def test_campaign_creation_persists_owner_from_authenticated_user_context() -> N
 
 
 def test_campaign_creation_uses_current_schema_columns() -> None:
-    settings.INTERNAL_ENGINE_SERVICE_TOKEN = "test-token"
+    settings.INTERNAL_ENGINE_SERVICE_TOKEN = "test-internal-engine-service-token-0000000000000000000000000000000000000000000000"
     client = TestClient(app)
     headers = _user_scoped_headers(client, "campaign-owner-body")
 
