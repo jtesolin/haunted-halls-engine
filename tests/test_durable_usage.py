@@ -720,6 +720,85 @@ def test_memory_layer_cadence_matches_committed_user_turn_count(
     assert ("reflection" in calls) is reflection
 
 
+def test_budget_lock_is_taken_after_snapshot_on_postgres_and_first_on_sqlite(
+    provider: Provider, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client = TestClient(app)
+    headers, user_id = _user(client, "lock-order")
+    campaign_id = _new_campaign(client, headers)
+    order: list[str] = []
+    for name in ("lock_usage_budget", "acquire_turn_lease", "get_latest_summary", "add_usage_request"):
+        real = getattr(Repository, name)
+
+        def spy(self, *args, _real=real, _name=name, **kwargs):
+            order.append(_name)
+            return _real(self, *args, **kwargs)
+
+        monkeypatch.setattr(Repository, name, spy)
+    order.clear()
+
+    orchestrator._begin_chat(
+        request=ChatRequest(message="look", campaign_id=campaign_id),
+        owner_user_id=user_id,
+        campaign_id=campaign_id,
+        auto_create_campaign=False,
+        idempotency_key=None,
+        request_fingerprint="f",
+        token="t",
+    )
+
+    first_lock = order.index("lock_usage_budget")
+    if get_engine().dialect.name == "sqlite":
+        assert first_lock == 0  # write-first on SQLite
+    else:
+        # the budget row lock is a leaf lock taken after lease and snapshot reads
+        assert first_lock > order.index("acquire_turn_lease")
+        assert first_lock > order.index("get_latest_summary")
+    assert order.index("add_usage_request") > order.index("lock_usage_budget")
+    assert order.count("lock_usage_budget") == (2 if get_engine().dialect.name == "sqlite" else 1)
+
+
+def test_summary_cadence_end_to_end_through_begin(
+    provider: Provider, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client = TestClient(app)
+    headers, user_id = _user(client, "cadence-e2e")
+    settings.MEMORY_SUMMARY_EVERY_TURNS = 2
+    settings.MEMORY_REFLECTION_EVERY_TURNS = 1000
+
+    async def fake_summarize(**kwargs):
+        return SimpleNamespace(
+            summary_text="the story so far",
+            input_tokens=1, cached_input_tokens=None, cache_write_input_tokens=None,
+            output_tokens=1, reasoning_output_tokens=None, total_tokens=2,
+        )
+
+    monkeypatch.setattr(orchestrator.memory_summarizer_agent, "summarize", fake_summarize)
+    campaign_id = _new_campaign(client, headers)
+
+    def summaries() -> int:
+        return _scalar("SELECT COUNT(*) FROM summaries WHERE campaign_id = :c", c=campaign_id)
+
+    assert _chat(client, headers, campaign_id).status_code == 200
+    assert summaries() == 0
+    assert _chat(client, headers, campaign_id).status_code == 200
+    assert summaries() == 1
+
+
+def test_user_turn_is_stamped_in_the_commit_and_sorts_before_its_reply(
+    provider: Provider,
+) -> None:
+    client = TestClient(app)
+    headers, _ = _user(client, "turn-stamps")
+    campaign_id = _new_campaign(client, headers)
+    assert _chat(client, headers, campaign_id).status_code == 200
+    assert _chat(client, headers, campaign_id).status_code == 200
+
+    with session() as db:
+        _, turns, _ = db.get_campaign_with_turns(campaign_id, limit=10)
+    assert [t.role for t in turns] == ["assistant", "user", "assistant", "user", "assistant"]
+
+
 def test_chat_turn_persists_ordered_turns(provider: Provider) -> None:
     client = TestClient(app)
     headers, _ = _user(client, "atomic-turn")

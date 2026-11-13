@@ -161,10 +161,12 @@ it to call `GET /api/character/{character_id}` for the active campaign.
 Issue #117. A chat turn or campaign creation never holds a database
 transaction or pooled connection across a model call. It runs in three phases:
 
-1. **Begin (one short transaction, write-first under the global budget lock):**
-   idempotency claim or replay, request validation, per-campaign turn lease,
-   read snapshot (state, recent turns, memory, summary, user-turn count),
-   request-cap check, and one `usage_requests` row (the logical request).
+1. **Begin (one short transaction):** idempotency claim or replay, request
+   validation, per-campaign turn lease, read snapshot (state, recent turns,
+   memory, summary, user-turn count), then the global budget row lock (taken
+   last on PostgreSQL so snapshot work never queues behind it; up front on
+   SQLite), the request-cap check and one `usage_requests` row (the logical
+   request).
 2. **Model phases (no transaction open):** action parser, deterministic tool
    execution (offloaded with `asyncio.to_thread`; it may block on MCP), Director,
    Narrator and best-effort summary/reflection run over in-memory state, under a
@@ -204,7 +206,9 @@ can be taken over and the stale worker's completion is fenced out.
 
 Behavior notes: semantic-memory writes now commit inside the final transaction,
 so a failure there fails the turn (after paid usage, which is durable) instead of
-being swallowed. Accepted risk: if an idempotency-claim takeover begins exactly as
+being swallowed. Accepted risks: a handler cancelled while its begin transaction is still running
+leaves the claim and campaign lease held until `REQUEST_LEASE_SECONDS` (retries get
+503 meanwhile). If an idempotency-claim takeover begins exactly as
 a stalled previous owner commits, the two transactions lock the claim and
 campaign rows in opposite order and PostgreSQL may abort one; the commit side is
 retried and the begin side returns a retryable error, with no data loss.

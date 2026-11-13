@@ -73,18 +73,23 @@ def get_connection() -> Connection:
 
 
 @contextmanager
-def session(*, lock_budget: bool = False) -> Iterator[Repository]:
+def session(
+    *, lock_budget: bool = False, write_first_sqlite: bool = False
+) -> Iterator[Repository]:
     """Short transaction. Never hold one across a model call.
 
     ``lock_budget`` takes the global usage-budget lock as the first statement
     (a write-first lock on SQLite, a row lock on PostgreSQL) so budget checks and
-    their inserts are serialized.
+    their inserts are serialized. ``write_first_sqlite`` takes it up front only on
+    SQLite (avoids a deferred read-to-write upgrade failure; the database write lock
+    is database-wide there anyway); on PostgreSQL the caller locks the budget row
+    late, right before its cap check, so snapshot reads never queue behind it.
     """
     conn = get_connection()
     transaction = conn.begin()
     try:
         repo = Repository(conn)
-        if lock_budget:
+        if lock_budget or (write_first_sqlite and conn.dialect.name == "sqlite"):
             repo.lock_usage_budget()
         yield repo
         if transaction.is_active:

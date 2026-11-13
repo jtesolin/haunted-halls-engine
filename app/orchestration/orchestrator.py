@@ -7,7 +7,7 @@ import json
 import logging
 import time
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, cast
 from uuid import uuid4
 
@@ -382,7 +382,7 @@ class ChatOrchestrator:
         token: str,
     ) -> "ChatResponse | _ChatSnapshot":
         """Phase 1: one short transaction. Claims, leases, snapshot and request count."""
-        with session(lock_budget=True) as db:
+        with session(write_first_sqlite=True) as db:
             if idempotency_key is not None:
                 existing_request = db.get_chat_request_idempotency(
                     owner_user_id, idempotency_key
@@ -460,6 +460,9 @@ class ChatOrchestrator:
             )
             prior_user_turns = db.count_campaign_turns(campaign_id, owner_user_id)
 
+            # Leaf lock, taken last so claim/lease/snapshot work never queues behind it;
+            # the cap check and the usage_requests insert stay serialized under it.
+            db.lock_usage_budget()
             validate_daily_request_limit(db, owner_user_id)
             validate_project_request_limit(db)
             db.add_usage_request(owner_user_id, "chat")
@@ -517,7 +520,6 @@ class ChatOrchestrator:
         request_fingerprint: str,
         player_turn_id: str,
         assistant_turn_id: str,
-        received_at: str,
         message: str,
         reply: str,
         outcome: "_TurnOutcome",
@@ -551,18 +553,22 @@ class ChatOrchestrator:
             )
             db.ensure_campaign_character(campaign_id, generate_character_name())
 
+        # Stamped in the commit transaction (not at request start) so a request that
+        # waited on the campaign lease can never sort before the previous reply.
+        user_at = datetime.utcnow()
         db.create_turn(
             turn_id=player_turn_id,
             campaign_id=campaign_id,
             role="user",
             content=message,
-            created_at=received_at,
+            created_at=user_at.isoformat(),
         )
         db.create_turn(
             turn_id=assistant_turn_id,
             campaign_id=campaign_id,
             role="assistant",
             content=reply,
+            created_at=(user_at + timedelta(microseconds=1)).isoformat(),
         )
         for turn_id, event_type, payload_json in outcome.events:
             db.add_event(
@@ -625,7 +631,6 @@ class ChatOrchestrator:
         player_turn_id = f"turn_{uuid4().hex}"
         assistant_turn_id = f"turn_{uuid4().hex}"
         model = ModelPolicy.narrator_model()
-        received_at = datetime.utcnow().isoformat()
         token = uuid4().hex
 
         begun = await asyncio.to_thread(
@@ -699,7 +704,6 @@ class ChatOrchestrator:
                 request_fingerprint=request_fingerprint,
                 player_turn_id=player_turn_id,
                 assistant_turn_id=assistant_turn_id,
-                received_at=received_at,
                 message=request.message,
                 reply=outcome.reply,
                 outcome=outcome,
@@ -709,7 +713,8 @@ class ChatOrchestrator:
             )
         except BaseException:
             # Usage is already durable; drop the claim/lease so the client may retry
-            # (BaseException also covers cancellation; TTL expiry is the backstop).
+            # (BaseException also covers cancellation; TTL expiry is the backstop, also
+            # for a cancellation that lands while the begin thread is still running).
             try:
                 await asyncio.to_thread(
                     self._release_chat_claims,
@@ -1130,9 +1135,15 @@ class ChatOrchestrator:
                     memory_writes.reflection_candidates = list(
                         reflection_output.memories_to_store
                     )
-        except HTTPException:
-            # A denied budget reservation only skips the optional memory layer.
-            pass
+        except Exception:
+            # Best effort: a denied reservation or a DB error only skips the optional
+            # memory layer. Cancellation (BaseException) still propagates.
+            logger.warning(
+                "memory_layers_skipped campaign_id=%s turn_id=%s",
+                campaign_id,
+                assistant_turn_id,
+                exc_info=True,
+            )
         return memory_writes
 
     def _authoritative_state_for_director(self, campaign_state: str) -> dict[str, Any]:
