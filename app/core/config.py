@@ -53,6 +53,15 @@ class Settings(BaseSettings):
     MAX_DAILY_PROJECT_TOKENS: int = 1000000
     MAX_ESTIMATED_INPUT_TOKENS: int = 4000
 
+    # Server-side deadlines for the model phases. Keep them below the BFF timeouts
+    # (chat 150s, campaign create 90s) so the engine fails first and releases state.
+    CHAT_MODEL_DEADLINE_SECONDS: float = 140.0
+    CAMPAIGN_CREATE_MODEL_DEADLINE_SECONDS: float = 85.0
+    # TTL for per-campaign turn leases and idempotency claims. Must exceed the deadlines.
+    REQUEST_LEASE_SECONDS: int = 300
+    DB_POOL_SIZE: int = 10
+    DB_MAX_OVERFLOW: int = 10
+
     model_config = {
         "env_file": ".env",
         "env_file_encoding": "utf-8",

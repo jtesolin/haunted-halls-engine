@@ -111,7 +111,7 @@ def _resolved_internal_user_id(client: TestClient, provider_subject: str) -> str
 
 
 def test_chat_echoes_message() -> None:
-    settings.INTERNAL_ENGINE_SERVICE_TOKEN = "test-token"
+    settings.INTERNAL_ENGINE_SERVICE_TOKEN = "test-internal-engine-service-token-0000000000000000000000000000000000000000000000"
     client = TestClient(app)
     headers = _user_scoped_headers(client, "chat-echo")
 
@@ -458,6 +458,8 @@ def test_existing_non_owned_in_progress_claim_never_executes(monkeypatch) -> Non
             request_fingerprint=fingerprint,
             requested_campaign_id=request.campaign_id,
             requested_character_id=request.character_id,
+            owner_token="another-worker",
+            lease_seconds=300,
         )
     assert pre_existing_claim.acquired is True
     assert pre_existing_claim.row is not None
@@ -517,7 +519,7 @@ def test_chat_requires_authorization() -> None:
 
 
 def test_campaign_routes_list_without_legacy_identity_param() -> None:
-    settings.INTERNAL_ENGINE_SERVICE_TOKEN = "test-token"
+    settings.INTERNAL_ENGINE_SERVICE_TOKEN = "test-internal-engine-service-token-0000000000000000000000000000000000000000000000"
     client = TestClient(app)
     headers = _user_scoped_headers(client, "campaign-anonymous")
 
@@ -527,7 +529,7 @@ def test_campaign_routes_list_without_legacy_identity_param() -> None:
 
 
 def test_create_campaign_returns_hydrated_campaign() -> None:
-    settings.INTERNAL_ENGINE_SERVICE_TOKEN = "test-token"
+    settings.INTERNAL_ENGINE_SERVICE_TOKEN = "test-internal-engine-service-token-0000000000000000000000000000000000000000000000"
     client = TestClient(app)
     headers = _user_scoped_headers(client, "campaign-create")
 
@@ -549,7 +551,7 @@ def test_create_campaign_returns_hydrated_campaign() -> None:
 
 
 def test_create_campaign_uses_narrator_for_opening_and_title(monkeypatch) -> None:
-    settings.INTERNAL_ENGINE_SERVICE_TOKEN = "test-token"
+    settings.INTERNAL_ENGINE_SERVICE_TOKEN = "test-internal-engine-service-token-0000000000000000000000000000000000000000000000"
     prompts: list[str] = []
 
     async def fake_generate_text(*, messages, **kwargs) -> str:
@@ -586,7 +588,7 @@ def test_create_campaign_uses_narrator_for_opening_and_title(monkeypatch) -> Non
 
 
 def test_create_campaign_persists_authoritative_entry_hall_state_ai_disabled() -> None:
-    settings.INTERNAL_ENGINE_SERVICE_TOKEN = "test-token"
+    settings.INTERNAL_ENGINE_SERVICE_TOKEN = "test-internal-engine-service-token-0000000000000000000000000000000000000000000000"
     client = TestClient(app)
     headers = _user_scoped_headers(client, "campaign-genesis-ai-disabled")
 
@@ -612,7 +614,7 @@ def test_create_campaign_persists_authoritative_entry_hall_state_ai_disabled() -
 def test_create_campaign_persists_authoritative_entry_hall_state_ai_enabled(
     monkeypatch,
 ) -> None:
-    settings.INTERNAL_ENGINE_SERVICE_TOKEN = "test-token"
+    settings.INTERNAL_ENGINE_SERVICE_TOKEN = "test-internal-engine-service-token-0000000000000000000000000000000000000000000000"
     client = TestClient(app)
     headers = _user_scoped_headers(client, "campaign-genesis-ai-enabled")
 
@@ -638,7 +640,7 @@ def test_create_campaign_persists_authoritative_entry_hall_state_ai_enabled(
 def test_create_campaign_opening_narrator_receives_grounded_scene_context(
     monkeypatch,
 ) -> None:
-    settings.INTERNAL_ENGINE_SERVICE_TOKEN = "test-token"
+    settings.INTERNAL_ENGINE_SERVICE_TOKEN = "test-internal-engine-service-token-0000000000000000000000000000000000000000000000"
     captured_message_batches: list[list[dict]] = []
 
     async def fake_generate_text(*, messages, **kwargs) -> str:
@@ -676,7 +678,7 @@ def test_create_campaign_opening_narrator_receives_grounded_scene_context(
 def test_create_campaign_title_uses_same_scene_context_no_raw_state(
     monkeypatch,
 ) -> None:
-    settings.INTERNAL_ENGINE_SERVICE_TOKEN = "test-token"
+    settings.INTERNAL_ENGINE_SERVICE_TOKEN = "test-internal-engine-service-token-0000000000000000000000000000000000000000000000"
     captured_message_batches: list[list[dict]] = []
 
     async def fake_generate_text(*, messages, **kwargs) -> str:
@@ -700,7 +702,7 @@ def test_create_campaign_title_uses_same_scene_context_no_raw_state(
 
 
 def test_first_action_does_not_reroll_starting_inventory(monkeypatch) -> None:
-    settings.INTERNAL_ENGINE_SERVICE_TOKEN = "test-token"
+    settings.INTERNAL_ENGINE_SERVICE_TOKEN = "test-internal-engine-service-token-0000000000000000000000000000000000000000000000"
     client = TestClient(app)
     headers = _user_scoped_headers(client, "campaign-first-action-no-reroll")
 
@@ -741,7 +743,7 @@ def test_first_action_does_not_reroll_starting_inventory(monkeypatch) -> None:
 
 
 def test_delete_campaign_removes_player_campaign() -> None:
-    settings.INTERNAL_ENGINE_SERVICE_TOKEN = "test-token"
+    settings.INTERNAL_ENGINE_SERVICE_TOKEN = "test-internal-engine-service-token-0000000000000000000000000000000000000000000000"
     client = TestClient(app)
     headers = _user_scoped_headers(client, "campaign-delete")
 
@@ -768,7 +770,7 @@ def test_delete_campaign_removes_player_campaign() -> None:
 
 
 def test_delete_campaign_returns_404_for_missing_or_unowned_campaign() -> None:
-    settings.INTERNAL_ENGINE_SERVICE_TOKEN = "test-token"
+    settings.INTERNAL_ENGINE_SERVICE_TOKEN = "test-internal-engine-service-token-0000000000000000000000000000000000000000000000"
     client = TestClient(app)
     headers = _user_scoped_headers(client, "campaign-missing")
 
@@ -791,7 +793,7 @@ def test_delete_campaign_requires_authorization() -> None:
 
 
 def test_chat_request_count_tracks_user_turns_only(monkeypatch) -> None:
-    settings.INTERNAL_ENGINE_SERVICE_TOKEN = "test-token"
+    settings.INTERNAL_ENGINE_SERVICE_TOKEN = "test-internal-engine-service-token-0000000000000000000000000000000000000000000000"
     settings.OPENAI_API_KEY = "test-key"
     client = TestClient(app)
     headers = _user_scoped_headers(client, "chat-request-count")
@@ -897,7 +899,7 @@ def test_usage_aggregation_uses_provider_tokens_and_estimates_missing_usage() ->
 
 
 def test_runtime_logs_provider_requests() -> None:
-    settings.INTERNAL_ENGINE_SERVICE_TOKEN = "test-token"
+    settings.INTERNAL_ENGINE_SERVICE_TOKEN = "test-internal-engine-service-token-0000000000000000000000000000000000000000000000"
     client = TestClient(app)
     headers = _user_scoped_headers(client, "chat-ai-disabled-no-requests")
 
@@ -918,7 +920,7 @@ def test_runtime_logs_provider_requests() -> None:
 
 
 def test_chat_daily_request_limit_rejects_before_persisting_side_effects() -> None:
-    settings.INTERNAL_ENGINE_SERVICE_TOKEN = "test-token"
+    settings.INTERNAL_ENGINE_SERVICE_TOKEN = "test-internal-engine-service-token-0000000000000000000000000000000000000000000000"
     original_limit = settings.MAX_DAILY_PLAYER_REQUESTS
     settings.MAX_DAILY_PLAYER_REQUESTS = 0
     client = TestClient(app)
@@ -991,7 +993,7 @@ def test_chat_daily_request_limit_rejects_before_persisting_side_effects() -> No
 
 
 def test_model_call_budget_reserves_max_output_tokens_for_user_and_project() -> None:
-    settings.INTERNAL_ENGINE_SERVICE_TOKEN = "test-token"
+    settings.INTERNAL_ENGINE_SERVICE_TOKEN = "test-internal-engine-service-token-0000000000000000000000000000000000000000000000"
     original_user_limit = settings.MAX_DAILY_PLAYER_TOKENS
     original_project_limit = settings.MAX_DAILY_PROJECT_TOKENS
     settings.MAX_DAILY_PLAYER_TOKENS = 100
@@ -1057,7 +1059,7 @@ def test_model_call_budget_reserves_max_output_tokens_for_user_and_project() -> 
 
 
 def test_chat_daily_token_limit_returns_structured_error() -> None:
-    settings.INTERNAL_ENGINE_SERVICE_TOKEN = "test-token"
+    settings.INTERNAL_ENGINE_SERVICE_TOKEN = "test-internal-engine-service-token-0000000000000000000000000000000000000000000000"
     original_limit = settings.MAX_DAILY_PLAYER_TOKENS
     settings.MAX_DAILY_PLAYER_TOKENS = 0
     client = TestClient(app)
@@ -1076,7 +1078,7 @@ def test_chat_daily_token_limit_returns_structured_error() -> None:
 
 
 def test_chat_campaign_turn_limit_returns_structured_error(monkeypatch) -> None:
-    settings.INTERNAL_ENGINE_SERVICE_TOKEN = "test-token"
+    settings.INTERNAL_ENGINE_SERVICE_TOKEN = "test-internal-engine-service-token-0000000000000000000000000000000000000000000000"
     monkeypatch.setattr(settings, "MAX_TURNS_PER_CAMPAIGN", 0)
     client = TestClient(app)
     headers = _user_scoped_headers(client, "chat-turn-limit")
@@ -1098,7 +1100,7 @@ def test_chat_campaign_turn_limit_returns_structured_error(monkeypatch) -> None:
 
 
 def test_create_campaign_limit_returns_structured_error(monkeypatch) -> None:
-    settings.INTERNAL_ENGINE_SERVICE_TOKEN = "test-token"
+    settings.INTERNAL_ENGINE_SERVICE_TOKEN = "test-internal-engine-service-token-0000000000000000000000000000000000000000000000"
     monkeypatch.setattr(settings, "MAX_CAMPAIGNS_PER_PLAYER", 0)
     monkeypatch.setattr("app.guardrails.usage_limits.UsageLimits.MAX_CAMPAIGNS_PER_PLAYER", 0)
     client = TestClient(app)
@@ -1881,8 +1883,14 @@ def test_auto_created_chat_rechecks_parser_budget_after_starter_generation(
     campaign_id: str | None,
 ) -> None:
     monkeypatch.setattr(settings, "OPENAI_API_KEY", "test-key")
-    monkeypatch.setattr(settings, "MAX_DAILY_PROJECT_REQUESTS", 1)
     generated = starter_ability_generation()
+    # The cap fits the starter reservation exactly, so only the refreshed usage
+    # (the starter's large actual total) can reject the parser reservation.
+    starter_pending = (
+        orchestrator_module.orchestrator.starter_ability_generator.estimate_provider_input_tokens()
+        + 800
+    )
+    monkeypatch.setattr(settings, "MAX_DAILY_PROJECT_TOKENS", starter_pending)
     owner_user_id = _resolved_internal_user_id(
         TestClient(app), "auto-created-parser-refreshed-budget"
     )
@@ -1892,7 +1900,9 @@ def test_auto_created_chat_rechecks_parser_budget_after_starter_generation(
         assert return_usage is True
         return ModelCallResult(
             output=generated,
-            usage=ModelUsage(input_tokens=11, output_tokens=22, total_tokens=33),
+            usage=ModelUsage(
+                input_tokens=11, output_tokens=22, total_tokens=starter_pending - 1
+            ),
         )
 
     async def fail_if_parser_executes(**kwargs):  # noqa: ANN003, ANN202
@@ -1909,7 +1919,7 @@ def test_auto_created_chat_rechecks_parser_budget_after_starter_generation(
         fail_if_parser_executes,
     )
 
-    with pytest.raises(HTTPException, match="Daily project request limit reached"):
+    with pytest.raises(HTTPException, match="Daily project token limit reached"):
         asyncio.run(
             orchestrator_module.orchestrator.handle_chat(
                 ChatRequest(message="look around", campaign_id=campaign_id),
@@ -1943,7 +1953,7 @@ def test_auto_created_chat_rechecks_parser_budget_after_starter_generation(
     assert bool(row["success"]) is True
     assert row["actual_input_tokens"] == 11
     assert row["actual_output_tokens"] == 22
-    assert row["actual_total_tokens"] == 33
+    assert row["actual_total_tokens"] == starter_pending - 1
 
 
 def test_ai_disabled_still_runs_parser_and_tools() -> None:

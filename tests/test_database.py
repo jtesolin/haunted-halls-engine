@@ -24,6 +24,8 @@ EXPECTED_TABLES = {
     "summaries",
     "memories",
     "chat_request_idempotency",
+    "usage_requests",
+    "usage_budget_lock",
 }
 
 
@@ -32,7 +34,7 @@ def test_fresh_database_has_full_alembic_schema() -> None:
     with get_engine().connect() as connection:
         assert set(inspect(connection).get_table_names()) == EXPECTED_TABLES
         revision = connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-    assert revision == "0005_backfill_characters"
+    assert revision == "0006_durable_usage_leases"
 
 
 def test_session_commits_and_rolls_back() -> None:

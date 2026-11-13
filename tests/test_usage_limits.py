@@ -125,20 +125,10 @@ def test_request_and_campaign_limits_reject_only_at_cap(
 ) -> None:
     db, user_id = usage_repository
     for index in range(limit):
-        if scope == "project":
-            db.log_model_request(
-                request_id=f"request-{index}",
-                owner_user_id=user_id,
-                campaign_id="usage-campaign",
-                turn_id=f"turn-{index}",
-                agent_name="Narrator",
-                model="test-model",
-                estimated_input_tokens=0,
-                actual_total_tokens=0,
-                success=True,
-            )
-        else:
+        if scope == "campaign":
             db.create_turn("usage-campaign", f"turn-{index}", "user", "look")
+        else:
+            db.add_usage_request(user_id, "chat")
 
         if index == limit - 2:
             if scope == "player":

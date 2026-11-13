@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from sqlalchemy import Boolean as BooleanType
 from sqlalchemy import Column, Float as FloatType, ForeignKey, Integer as IntegerType
-from sqlalchemy import MetaData, String as StringType, Table, Text as TextType
+from sqlalchemy import Index, MetaData, String as StringType, Table, Text as TextType
 from sqlalchemy import UniqueConstraint
 
 
@@ -53,6 +53,10 @@ campaigns = Table(
     String("owner_user_id", ForeignKey("internal_users.user_id", ondelete="RESTRICT")),
     String("name", nullable=False), Text("description"), Text("state"),
     Text("created_at", nullable=False),
+    # Single in-flight turn per campaign; fenced by token, expires so a crashed
+    # worker cannot block the campaign forever.
+    String("turn_lease_token"),
+    Text("turn_lease_expires_at"),
 )
 
 characters = Table(
@@ -89,6 +93,28 @@ model_requests = Table(
     Integer("latency_ms", nullable=False),
     Boolean("success", nullable=False), Text("failure_reason"), Float("cost_estimate"),
     Text("created_at", nullable=False),
+    # reserved = in-flight budget (counted at its estimate); completed = finalized.
+    String("status", nullable=False, server_default="completed"),
+)
+
+# Durable logical player requests (a chat turn or a campaign creation). Not tied to
+# campaigns, so deleting a campaign never refunds request allowance.
+usage_requests = Table(
+    "usage_requests", metadata,
+    Integer("id", primary_key=True, autoincrement=True),
+    String("owner_user_id", ForeignKey("internal_users.user_id", ondelete="RESTRICT"), nullable=False),
+    String("kind", nullable=False),
+    Text("created_at", nullable=False),
+    Index("ix_usage_requests_owner_created", "owner_user_id", "created_at"),
+    Index("ix_usage_requests_created", "created_at"),
+)
+
+# One seeded row; updating it is the portable write-first lock that serializes
+# budget checks (PostgreSQL row lock, SQLite database write lock).
+usage_budget_lock = Table(
+    "usage_budget_lock", metadata,
+    Integer("id", primary_key=True, autoincrement=False),
+    Integer("n", nullable=False, server_default="0"),
 )
 
 game_events = Table(
@@ -128,5 +154,7 @@ chat_request_idempotency = Table(
     Text("reply"),
     Text("created_at", nullable=False),
     Text("completed_at"),
+    String("owner_token"),
+    Text("lease_expires_at"),
     UniqueConstraint("owner_user_id", "idempotency_key", name="uq_chat_request_idempotency_owner_key"),
 )

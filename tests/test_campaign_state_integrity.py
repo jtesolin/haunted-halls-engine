@@ -123,7 +123,7 @@ def _corrupt_campaign_state(campaign_id: str, corrupted_state: str) -> None:
 
 
 def test_chat_fails_with_500_on_corrupted_persisted_state(caplog: Any) -> None:
-    settings.INTERNAL_ENGINE_SERVICE_TOKEN = "test-token"
+    settings.INTERNAL_ENGINE_SERVICE_TOKEN = "test-internal-engine-service-token-0000000000000000000000000000000000000000000000"
     client = TestClient(app)
     headers = _user_scoped_headers(client, "corrupt-state-user")
 
@@ -211,7 +211,7 @@ def test_chat_fails_with_500_on_corrupted_state_even_when_parse_status_ambiguous
     """Corrupted persisted state must fail before parser/narrator paths, even
     when the parsed action status is non-`ok` (e.g. `ambiguous`) and would
     otherwise bypass `ToolExecutor._state_from_text()` entirely."""
-    settings.INTERNAL_ENGINE_SERVICE_TOKEN = "test-token"
+    settings.INTERNAL_ENGINE_SERVICE_TOKEN = "test-internal-engine-service-token-0000000000000000000000000000000000000000000000"
     client = TestClient(app)
     headers = _user_scoped_headers(client, "corrupt-state-ambiguous-user")
 
@@ -295,7 +295,7 @@ def test_chat_fails_with_500_on_corrupted_state_even_when_parse_status_ambiguous
 
 
 def test_chat_fails_with_500_on_invalid_persisted_generated_abilities() -> None:
-    settings.INTERNAL_ENGINE_SERVICE_TOKEN = "test-token"
+    settings.INTERNAL_ENGINE_SERVICE_TOKEN = "test-internal-engine-service-token-0000000000000000000000000000000000000000000000"
     client = TestClient(app)
     headers = _user_scoped_headers(client, "corrupt-generated-abilities-user")
     state = build_fresh_campaign_state()
@@ -327,7 +327,7 @@ def test_chat_fails_with_500_on_invalid_persisted_generated_abilities() -> None:
 
 
 def test_chat_ownership_unaffected_by_corruption_handling() -> None:
-    settings.INTERNAL_ENGINE_SERVICE_TOKEN = "test-token"
+    settings.INTERNAL_ENGINE_SERVICE_TOKEN = "test-internal-engine-service-token-0000000000000000000000000000000000000000000000"
     client = TestClient(app)
     owner_headers = _user_scoped_headers(client, "owner-user-corrupt")
     other_headers = _user_scoped_headers(client, "other-user-corrupt")

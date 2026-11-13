@@ -29,10 +29,16 @@ The engine defaults to these testing-budget limits (#101):
 | `MAX_DAILY_PROJECT_REQUESTS` | 1,000 |
 | `MAX_TURNS_PER_CAMPAIGN` | 20 |
 
-Daily counters reset at midnight UTC. Player requests count user turns; project
-requests count model requests. Token limits use the existing counted model usage
-and pending-call budget checks; accounting and HTTP 429 error contracts are unchanged.
-Environment variables (or local `.env` values) can override these defaults.
+Daily counters reset at midnight UTC. A *request* is one logical player action
+(a chat turn or a campaign creation); player and project request caps both count
+the durable `usage_requests` ledger, so deleting a campaign never refunds allowance
+and a turn's several model calls count once. Failed paid requests count too;
+idempotent replays and validation rejections do not. Token limits are hard caps:
+every model call reserves its estimated tokens under a global budget lock before
+it runs, and the reservation is finalized with actual usage afterwards. HTTP 429
+error contracts are unchanged. See `docs/architecture.md` ("Transactions, durable
+usage and concurrency"). Environment variables (or local `.env` values) can
+override these defaults.
 
 Production/staging Cloud Run services and the canonical deployment workflows and
 Terraform configuration in `jtesolin/haunted-halls` were checked for quota overrides:

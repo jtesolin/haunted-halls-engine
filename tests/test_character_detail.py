@@ -26,17 +26,17 @@ def _headers(client: TestClient, subject: str) -> dict[str, str]:
             "display_name": "Detail Test",
             "avatar_url": None,
         },
-        headers={"Authorization": "Bearer test-token"},
+        headers={"Authorization": "Bearer test-internal-engine-service-token-0000000000000000000000000000000000000000000000"},
     )
     assert response.status_code == 200
     return {
-        "Authorization": "Bearer test-token",
+        "Authorization": "Bearer test-internal-engine-service-token-0000000000000000000000000000000000000000000000",
         INTERNAL_USER_ID_HEADER_NAME: response.json()["user_id"],
     }
 
 
 def _client() -> TestClient:
-    settings.INTERNAL_ENGINE_SERVICE_TOKEN = "test-token"
+    settings.INTERNAL_ENGINE_SERVICE_TOKEN = "test-internal-engine-service-token-0000000000000000000000000000000000000000000000"
     return TestClient(app)
 
 

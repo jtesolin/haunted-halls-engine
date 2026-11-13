@@ -156,6 +156,55 @@ it to call `GET /api/character/{character_id}` for the active campaign.
   rows exist for a campaign, the earliest by `created_at`, tie-broken by
   ascending row id, is returned deterministically in both detail and list.
 
+## Transactions, durable usage and concurrency
+
+Issue #117. A chat turn or campaign creation never holds a database
+transaction or pooled connection across a model call. It runs in three phases:
+
+1. **Begin (one short transaction, write-first under the global budget lock):**
+   idempotency claim or replay, request validation, per-campaign turn lease,
+   read snapshot (state, recent turns, memory, summary, user-turn count),
+   request-cap check, and one `usage_requests` row (the logical request).
+2. **Model phases (no transaction open):** action parser, deterministic tool
+   execution (offloaded with `asyncio.to_thread`; it may block on MCP), Director,
+   Narrator and best-effort summary/reflection run over in-memory state, under a
+   server-side deadline (`CHAT_MODEL_DEADLINE_SECONDS`=140,
+   `CAMPAIGN_CREATE_MODEL_DEADLINE_SECONDS`=85) shorter than the BFF timeouts
+   (150s / 90s). Memory layers are skipped when the deadline is spent.
+3. **Commit (one short transaction):** fenced lease release (first statement),
+   campaign/character creation (re-checking the campaign cap under a per-user
+   lock), both turns, all events, state update, memory/summary writes and
+   idempotency completion commit atomically or not at all. A failed turn
+   persists no turns, events or state; the claim and lease are released.
+
+**Durable usage.** Each model call inserts a `model_requests` row with
+`status='reserved'` (counted at its estimate; actuals NULL) under the global
+budget lock after checking the daily player and project token caps, then
+finalizes it with actual usage or the failure in its own transaction. Usage
+therefore survives any later failure. A failure with no provider usage keeps
+NULL actuals and keeps counting at the estimate; counts are never fabricated. A
+crash or deadline leaves the row reserved, which is conservative.
+
+**Units.** *Request* = one chat turn or campaign creation, recorded in
+`usage_requests` (not cascade-deleted). Player and project request caps count
+it. *Model call* = one `model_requests` row. *Tokens* = the sum of those rows
+(estimate fallback). *Campaigns* and *turns* are gameplay limits.
+
+**Hard vs soft.** Token and request caps are hard (checked and recorded under
+the global lock). The campaign cap is exact in persistence (re-checked at commit
+under a per-user lock) but concurrent over-limit creations may waste model spend
+bounded by the token caps. The turn limit is exact: one turn per campaign is in
+flight (`campaigns.turn_lease_*`, fenced by token, TTL `REQUEST_LEASE_SECONDS`).
+A concurrent turn gets 503. Residual uncertainty: token estimates can differ from
+provider billing (reconciled at finalization), and request caps under-count while
+an old image still serves traffic during a rolling deploy. Idempotency claims
+carry `owner_token`/`lease_expires_at`; an expired claim from a crashed worker
+can be taken over and the stale worker's completion is fenced out.
+
+The frontend contract is unchanged: status codes and bodies are as before. A
+concurrent turn on the same campaign returns 503 (retryable) and the server
+deadline can return 502 slightly earlier than before.
+
 ## World-authority boundary
 
 Player `ParsedAction` values and the player `ToolExecutor` remain limited to

@@ -1,4 +1,3 @@
-import os
 import secrets
 from dataclasses import dataclass
 
@@ -41,7 +40,7 @@ def get_internal_engine_service_token() -> str:
             "INTERNAL_ENGINE_SERVICE_TOKEN must be at least 32 bytes of random entropy"
         )
 
-    if not os.getenv("PYTEST_CURRENT_TEST") and len(token) < 64:
+    if len(token) < 64:
         raise RuntimeError(
             "INTERNAL_ENGINE_SERVICE_TOKEN must be at least 32 bytes of random entropy"
         )
