@@ -199,9 +199,11 @@ in-progress 503s and validation rejections do not. *Model call* = one `model_req
 lock). Token caps are hard against what is known at admission: each call reserves
 its estimated input plus its provider-enforced `max_output_tokens` before it runs,
 and the row is reconciled to the provider's actual usage when it finishes, so
-later checks see actuals. The only source of overshoot is an input-token
-under-estimate on calls that are in flight together; it is bounded by the number
-of concurrent calls times (actual minus reserved input) and does not accumulate.
+later checks see actuals. Overshoot has two bounded sources: an input-token
+under-estimate on calls that are in flight together, and the model client's rare
+incomplete-then-retry path (a second billed call for one reservation, at most one
+extra input plus max output). Both are bounded by the number of concurrent calls
+and do not accumulate, because finalized rows report the combined actual usage.
 The campaign cap is exact in persistence (re-checked at commit
 under a per-user lock) but concurrent over-limit creations may waste model spend
 bounded by the token caps. The turn limit is exact: one turn per campaign is in

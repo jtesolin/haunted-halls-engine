@@ -921,6 +921,33 @@ def test_starter_validation_failure_keeps_provider_usage(
     assert (int(row[0]), row[1]) == (0, 77)
 
 
+def test_narrator_provider_error_with_usage_keeps_it_on_the_ledger_row(
+    provider: Provider, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client = TestClient(app)
+    headers, user_id = _user(client, "narrator-error-usage")
+    campaign_id = _new_campaign(client, headers)
+
+    async def blank_after_retry(**kwargs):
+        error = RuntimeError("OpenAI returned no text output.")
+        error.usage = ModelUsage(input_tokens=200, output_tokens=100, total_tokens=300)  # type: ignore[attr-defined]
+        raise error
+
+    monkeypatch.setattr(orchestrator.narrator_agent, "generate", blank_after_retry)
+
+    assert _chat(client, headers, campaign_id).status_code == 502
+    with session() as db:
+        row = db.conn.execute(
+            text(
+                "SELECT success, actual_total_tokens FROM model_requests "
+                "WHERE owner_user_id = :o AND turn_id LIKE 'turn_%' AND agent_name = 'Narrator' "
+                "ORDER BY id DESC LIMIT 1"
+            ),
+            {"o": user_id},
+        ).one()
+    assert (int(row[0]), row[1]) == (0, 300)
+
+
 def test_summarizer_and_reflection_fallbacks_keep_provider_usage(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

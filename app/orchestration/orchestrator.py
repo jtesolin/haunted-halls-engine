@@ -1003,6 +1003,7 @@ class ChatOrchestrator:
                 started_at=start_time,
                 success=False,
                 failure_reason=str(exc),
+                usage=getattr(exc, "usage", None),
             )
             raise HTTPException(status_code=502, detail="AI service failed.") from exc
         await self._finalize_model_call(
@@ -1083,6 +1084,7 @@ class ChatOrchestrator:
                         started_at=started,
                         success=False,
                         failure_reason=str(exc),
+                        usage=getattr(exc, "usage", None),
                     )
                 else:
                     await self._finalize_model_call(
@@ -1124,6 +1126,7 @@ class ChatOrchestrator:
                         started_at=started,
                         success=False,
                         failure_reason=str(exc),
+                        usage=getattr(exc, "usage", None),
                     )
                 else:
                     await self._finalize_model_call(
@@ -1551,6 +1554,7 @@ class ChatOrchestrator:
                 started_at=start_time,
                 success=False,
                 failure_reason=str(exc),
+                usage=getattr(exc, "usage", None),
             )
             raise HTTPException(status_code=502, detail="AI service failed.") from exc
         await self._finalize_model_call(

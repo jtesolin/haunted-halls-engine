@@ -37,6 +37,27 @@ class ModelUsage:
         }
 
 
+def _sum_usage(first: ModelUsage | None, second: ModelUsage | None) -> ModelUsage | None:
+    if first is None or second is None:
+        return first or second
+
+    def add(a: int | None, b: int | None) -> int | None:
+        return None if a is None and b is None else (a or 0) + (b or 0)
+
+    return ModelUsage(
+        input_tokens=add(first.input_tokens, second.input_tokens),
+        cached_input_tokens=add(first.cached_input_tokens, second.cached_input_tokens),
+        cache_write_input_tokens=add(
+            first.cache_write_input_tokens, second.cache_write_input_tokens
+        ),
+        output_tokens=add(first.output_tokens, second.output_tokens),
+        reasoning_output_tokens=add(
+            first.reasoning_output_tokens, second.reasoning_output_tokens
+        ),
+        total_tokens=add(first.total_tokens, second.total_tokens),
+    )
+
+
 @dataclass
 class ModelCallResult(Generic[ModelOutputT]):
     output: ModelOutputT | None
@@ -127,10 +148,13 @@ class ModelClient:
                 **retry_kwargs,
             )
             content = self._extract_response_text(response)
-            usage = self._extract_usage(response)
+            # Both calls were billed: report their combined usage.
+            usage = _sum_usage(usage, self._extract_usage(response))
 
         if not content:
-            raise RuntimeError("OpenAI returned no text output.")
+            error = RuntimeError("OpenAI returned no text output.")
+            error.usage = usage  # type: ignore[attr-defined]
+            raise error
         result = ModelCallResult(output=content, usage=usage)
         return result if return_usage else content
 
