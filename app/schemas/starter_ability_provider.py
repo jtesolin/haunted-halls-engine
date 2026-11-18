@@ -7,6 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.schemas.character_progression import ProgressionTrackId
 from app.schemas.generated_abilities import AbilitySenseFilter, TraversalMethod
+from app.schemas.scenario import ScenarioProviderOutput
 
 
 class StarterUtilityOperation(StrEnum):
@@ -61,3 +62,6 @@ class StarterAbilityProviderGeneration(BaseModel):
         | StarterAbilityUtilityProviderOutput
         | StarterAbilityTraversalProviderOutput
     )
+    # Generated in the same call (no extra model call); optional so a missing or
+    # unusable scenario falls back to the engine's deterministic one.
+    scenario: ScenarioProviderOutput | None = None

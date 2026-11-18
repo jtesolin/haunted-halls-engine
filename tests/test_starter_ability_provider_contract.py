@@ -181,8 +181,8 @@ def _assert_provider_schema_is_minimal_and_closed(
     assert _find_schema_keywords(schema, unsupported_keywords) == set()
     assert schema["type"] == "object"
     assert schema["additionalProperties"] is False
-    assert set(schema["properties"]) == {"first_ability", "second_ability"}
-    assert set(schema["required"]) == {"first_ability", "second_ability"}
+    assert set(schema["properties"]) == {"first_ability", "second_ability", "scenario"}
+    assert set(schema["required"]) == {"first_ability", "second_ability", "scenario"}
     variants = [
         _resolve_schema_reference(variant, schema)
         for variant in schema["properties"]["first_ability"]["anyOf"]

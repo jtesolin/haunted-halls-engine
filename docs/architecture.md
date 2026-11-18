@@ -156,6 +156,20 @@ it to call `GET /api/character/{character_id}` for the active campaign.
   rows exist for a campaign, the earliest by `created_at`, tie-broken by
   ascending row id, is returned deterministically in both detail and list.
 
+## Campaign scenario ownership and Story Director seam
+
+`app/game/scenario.py` solely owns `state["scenario"]` (separate from the
+authored quest namespace `state["story"]`): validation, the bounded Narrator
+context (`build_story_context`), marker parsing (`extract_story_update`) and
+progress (`apply_story_update`). Player-known fields are premise, objective,
+stakes, revealed beats and a concluded outcome; the hidden truth, unrevealed
+clues and outcome catalogue are given only to the Narrator and are never
+returned by an API. Progress is applied in memory and written with the turn's
+single atomic state update, so failed turns never advance the story; no
+transaction spans a model call. A terminal outcome is sticky: later markers are
+ignored and play continues as an epilogue. A future Story Director should
+replace those three functions behind the same interface, not add parallel state.
+
 ## Transactions, durable usage and concurrency
 
 Issue #117. A chat turn or campaign creation never holds a database

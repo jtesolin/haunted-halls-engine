@@ -38,6 +38,7 @@ class NarratorAgentInput(BaseModel):
     tool_result: ToolExecutionResult | None = None
     current_turn_reveal: NarratorNarrativeReveal | None = None
     current_turn_reward: NarratorProgressionReward | None = None
+    story_context: str | None = None
 
 
 class NarratorAgentOutput(BaseModel):
@@ -80,6 +81,7 @@ class NarratorAgent(BaseAgent):
             tool_result=payload.tool_result,
             current_turn_reveal=payload.current_turn_reveal,
             current_turn_reward=payload.current_turn_reward,
+            story_context=payload.story_context,
         )
         result = await model_client.generate_text(
             messages=messages,
@@ -116,6 +118,7 @@ class NarratorAgent(BaseAgent):
         tool_result: ToolExecutionResult | None,
         current_turn_reveal: NarratorNarrativeReveal | None,
         current_turn_reward: NarratorProgressionReward | None,
+        story_context: str | None = None,
     ) -> list[ChatCompletionMessageParam]:
         messages: list[ChatCompletionMessageParam] = [
             {
@@ -159,6 +162,15 @@ class NarratorAgent(BaseAgent):
                 ),
             }
         )
+
+        if story_context:
+            messages.append(
+                {
+                    "role": "user",
+                    "content": "Campaign story (guidance; HIDDEN items must not be revealed before the player discovers them):\n"
+                    + story_context,
+                }
+            )
 
         if parsed_action is not None:
             messages.append(

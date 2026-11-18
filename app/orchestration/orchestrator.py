@@ -35,6 +35,13 @@ from app.db.models import TurnDBModel
 from app.db.repositories import ChatRequestIdempotencyOwnershipError, Repository
 from app.db.session import session
 from app.game.character_names import generate_character_name
+from app.game.scenario import (
+    apply_story_update,
+    build_fallback_scenario,
+    build_story_context,
+    ensure_scenario,
+    extract_story_update,
+)
 from app.game.campaign_state import (
     InvalidCampaignStateError,
     build_fresh_campaign_state,
@@ -328,6 +335,7 @@ class ChatOrchestrator:
                     scene_context=scene_context,
                     recent_turns=recent_turns,
                     message=self._build_campaign_opening_request(),
+                    story_context=build_story_context(initial_state),
                 )
                 campaign_name = await self._generate_campaign_title(
                     owner_user_id=owner_user_id,
@@ -930,8 +938,16 @@ class ChatOrchestrator:
         current_turn_reward = reward_result.narrator_reward
         reward_state_changed = reward_result.changed
 
+        try:
+            scenario_state_changed = ensure_scenario(updated_state)
+        except InvalidCampaignStateError as exc:
+            raise HTTPException(
+                status_code=500, detail="Campaign state could not be processed."
+            ) from exc
+
         authoritative_state_changed = (
-            bool(tool_result.state_delta)
+            scenario_state_changed
+            or bool(tool_result.state_delta)
             or initial_state is not None
             or campaign_state == "No campaign state yet."
             or story_state_changed
@@ -956,8 +972,10 @@ class ChatOrchestrator:
         current_turn_reward = director_step_result.current_turn_reward
 
         scene_context = build_narrator_scene_context(campaign_state)
+        story_context = build_story_context(json.loads(campaign_state))
         narrator_payload = NarratorAgentInput(
             player_message=request.message,
+            story_context=story_context,
             scene_context=scene_context,
             recent_turns=recent_turns,
             relevant_memories=memory_context,
@@ -1009,7 +1027,13 @@ class ChatOrchestrator:
             usage=narrator_output,
         )
 
-        writes.reply = narrator_output.reply_text
+        # Story progress is applied in memory only; it is persisted with the
+        # turn's single atomic write, so a failed turn never advances the story.
+        writes.reply, story_update = extract_story_update(narrator_output.reply_text)
+        final_state = json.loads(campaign_state)
+        if apply_story_update(final_state, story_update):
+            writes.set_state(player_turn_id, final_state)
+            campaign_state = json.dumps(final_state)
         writes.campaign_state = campaign_state
         writes.parsed_action = parsed_action
         writes.tool_result = tool_result
@@ -1406,6 +1430,9 @@ class ChatOrchestrator:
             turn_id=turn_id,
         )
         initial_state = build_fresh_campaign_state()
+        initial_state["scenario"] = (
+            generated_abilities.scenario or build_fallback_scenario()
+        )
         ensure_character_progression_state(initial_state)
         initial_state["player"]["generated_abilities"] = [
             ability.model_dump(mode="json") for ability in generated_abilities.abilities
@@ -1491,7 +1518,9 @@ class ChatOrchestrator:
         await self._finalize_model_call(
             request_id, started_at=start_time, success=True, usage=usage
         )
-        return StarterAbilityGeneration(abilities=list(starter_abilities))
+        return StarterAbilityGeneration(
+            abilities=list(starter_abilities), scenario=generated.output.scenario
+        )
 
     async def _generate_narrator_response(
         self,
@@ -1504,11 +1533,13 @@ class ChatOrchestrator:
         scene_context: NarratorSceneContext,
         recent_turns: list[dict[str, str]],
         message: str,
+        story_context: str | None = None,
     ) -> str:
         narrator_payload = NarratorAgentInput(
             player_message=message,
             scene_context=scene_context,
             recent_turns=recent_turns,
+            story_context=story_context,
         )
         estimated_input_tokens = self._estimate_payload_tokens(narrator_payload)
         request_id = await self._reserve_model_call(
@@ -1550,7 +1581,8 @@ class ChatOrchestrator:
         await self._finalize_model_call(
             request_id, started_at=start_time, success=True, usage=narrator_output
         )
-        return narrator_output.reply_text
+        # The opening cannot report progress; discard any marker.
+        return extract_story_update(narrator_output.reply_text)[0]
 
     async def _generate_campaign_title(
         self, *, owner_user_id: str, campaign_id: str, turn_id: str, opening: str
