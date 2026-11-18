@@ -175,8 +175,11 @@ Preview Terraform also uses the defaults; no preview services were deployed when
 checked. The limits become effective with the updated engine image deployment
 and production promotion. Isolated preview databases retain separate project
 counters; this is not an aggregate preview-wide or hard dollar budget.
-Quota-accounting redesign (#102) and campaign title generation (#103) remain
-separate follow-ups.
+Quota-accounting redesign (#102) remains a separate follow-up. Campaign title
+generation (#103) now uses a dedicated `CampaignTitleGenerator` agent (nano model,
+minimal reasoning, 64-token output cap, opening text only) instead of a second
+full Narrator call; it is reserved/finalized per call like every other model call
+and recorded under its own `CampaignTitleGenerator` agent name.
 
 ## Preview environment status
 

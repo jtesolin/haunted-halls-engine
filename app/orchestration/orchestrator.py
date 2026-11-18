@@ -23,6 +23,7 @@ from app.agents.director import (
     DirectorProviderError,
 )
 from app.agents.memory_reflection import MemoryReflectionAgent, MemoryReflectionInput
+from app.agents.campaign_title import CampaignTitleGenerator, CampaignTitleInput
 from app.agents.memory_summarizer import MemorySummarizerAgent, MemorySummarizerInput
 from app.agents.narrator import (
     NarratorAgent,
@@ -234,6 +235,7 @@ class ChatOrchestrator:
     def __init__(self) -> None:
         self.action_parser_agent = ActionParserAgent()
         self.narrator_agent = NarratorAgent()
+        self.campaign_title_generator = CampaignTitleGenerator()
         self.memory_summarizer_agent = MemorySummarizerAgent()
         self.memory_reflection_agent = MemoryReflectionAgent()
         self.tool_executor = ToolExecutor()
@@ -327,17 +329,11 @@ class ChatOrchestrator:
                     recent_turns=recent_turns,
                     message=self._build_campaign_opening_request(),
                 )
-                campaign_name = self._normalize_campaign_title(
-                    await self._generate_narrator_response(
-                        owner_user_id=owner_user_id,
-                        campaign_id=campaign_id,
-                        turn_id=assistant_turn_id,
-                        agent_name=agent_name,
-                        model=model,
-                        scene_context=scene_context,
-                        recent_turns=recent_turns,
-                        message=self._build_campaign_title_request(opening_prompt),
-                    )
+                campaign_name = await self._generate_campaign_title(
+                    owner_user_id=owner_user_id,
+                    campaign_id=campaign_id,
+                    turn_id=assistant_turn_id,
+                    opening=opening_prompt,
                 )
         except TimeoutError as exc:
             raise HTTPException(status_code=502, detail="AI service timed out.") from exc
@@ -1397,12 +1393,6 @@ class ChatOrchestrator:
             "presence, or item state."
         )
 
-    def _build_campaign_title_request(self, opening_prompt: str) -> str:
-        return (
-            "Based on the campaign opening below, provide only a short haunted campaign title with no quotes "
-            f"and no extra commentary.\n\n{opening_prompt}"
-        )
-
     async def _build_initial_campaign_state(
         self,
         *,
@@ -1561,6 +1551,48 @@ class ChatOrchestrator:
             request_id, started_at=start_time, success=True, usage=narrator_output
         )
         return narrator_output.reply_text
+
+    async def _generate_campaign_title(
+        self, *, owner_user_id: str, campaign_id: str, turn_id: str, opening: str
+    ) -> str:
+        payload = CampaignTitleInput(opening=opening)
+        model = ModelPolicy.campaign_title_model()
+        request_id = await self._reserve_model_call(
+            owner_user_id=owner_user_id,
+            campaign_id=campaign_id,
+            turn_id=turn_id,
+            agent_name=self.campaign_title_generator.name,
+            model=model,
+            estimated_input_tokens=self._estimate_payload_tokens(payload),
+            max_output_tokens=TokenBudget.campaign_title_max_output_tokens(),
+        )
+        start_time = time.perf_counter()
+        try:
+            output = await self.campaign_title_generator.generate(payload=payload, model=model)
+        except Exception as exc:
+            logger.error(
+                "campaign_title_provider_failed owner_user_id=%s campaign_id=%s turn_id=%s model=%s latency_ms=%s error_type=%s error_message=%s",
+                owner_user_id,
+                campaign_id,
+                turn_id,
+                model,
+                int((time.perf_counter() - start_time) * 1000),
+                type(exc).__name__,
+                str(exc),
+                exc_info=True,
+            )
+            await self._finalize_model_call(
+                request_id,
+                started_at=start_time,
+                success=False,
+                failure_reason=str(exc),
+                usage=getattr(exc, "usage", None),
+            )
+            raise HTTPException(status_code=502, detail="AI service failed.") from exc
+        await self._finalize_model_call(
+            request_id, started_at=start_time, success=True, usage=output
+        )
+        return self._normalize_campaign_title(output.title)
 
     def _normalize_campaign_title(self, value: str) -> str:
         candidate = value.strip().strip('"').strip("'").strip()
