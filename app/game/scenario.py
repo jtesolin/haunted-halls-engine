@@ -54,6 +54,12 @@ def _ident(value: Any, name: str) -> str:
     return value
 
 
+def _flag(value: Any) -> bool:
+    if not isinstance(value, bool):
+        raise ValueError("Scenario beat revealed flag is not a boolean.")
+    return value
+
+
 def _validate(raw: Any) -> dict[str, Any]:
     """Return a normalized scenario dict or raise ValueError."""
     if not isinstance(raw, dict):
@@ -67,7 +73,7 @@ def _validate(raw: Any) -> dict[str, Any]:
         {
             "id": _ident(b.get("id"), "beat id"),
             "clue": _text(b.get("clue"), "beat clue"),
-            "revealed": b.get("revealed", False) is True,
+            "revealed": _flag(b.get("revealed", False)),
         }
         for b in beats_raw
         if isinstance(b, dict)
@@ -85,6 +91,8 @@ def _validate(raw: Any) -> dict[str, Any]:
     outcome_id = raw.get("outcome_id")
     if status not in (STATUS_ACTIVE, STATUS_CONCLUDED):
         raise ValueError("Scenario status is invalid.")
+    if outcome_id is not None and not isinstance(outcome_id, str):
+        raise ValueError("Scenario outcome id is not a string.")
     if (status == STATUS_CONCLUDED) != (outcome_id is not None) or (
         outcome_id is not None and outcome_id not in {o["id"] for o in outcomes}
     ):
@@ -139,7 +147,11 @@ def build_fallback_scenario() -> dict[str, Any]:
 
 
 def read_scenario(state: dict[str, Any]) -> dict[str, Any] | None:
-    """Validated scenario, None if absent; malformed persisted data fails closed."""
+    """Validated scenario, None if absent.
+
+    Structurally malformed data raises InvalidCampaignStateError; absent optional
+    fields (status, revealed) take defaults and `version` is normalized.
+    """
     raw = state.get("scenario")
     if raw is None:
         return None
@@ -237,13 +249,13 @@ def redact_state_for_memory(campaign_state: str) -> str:
 
     Memory agents persist text that is later fed back to the Narrator without
     HIDDEN labels, so hidden truth, undiscovered clues and the outcome
-    catalogue must never reach them. Non-JSON / unvalidated input is returned
-    with any scenario dropped entirely.
+    catalogue must never reach them. Unparseable input becomes `{}` and an
+    invalid scenario is dropped entirely.
     """
     try:
         state = json.loads(campaign_state)
     except (TypeError, ValueError):
-        return campaign_state
+        return "{}"  # unparseable: nothing safe to forward
     if not isinstance(state, dict) or "scenario" not in state:
         return campaign_state
     try:

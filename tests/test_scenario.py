@@ -339,3 +339,69 @@ def test_worst_case_story_context_is_bounded() -> None:
     state["scenario"]["premise"] = "x" * 201
     with pytest.raises(InvalidCampaignStateError):
         build_story_context(state)
+
+
+def test_malformed_persisted_values_fail_closed() -> None:
+    for patch in ({"status": "concluded", "outcome_id": ["rest"]}, {"status": "concluded", "outcome_id": {"a": 1}}):
+        state = _scenario_state()
+        state["scenario"].update(patch)
+        with pytest.raises(InvalidCampaignStateError):
+            read_scenario(state)
+    state = _scenario_state()
+    state["scenario"]["beats"][0]["revealed"] = "true"
+    with pytest.raises(InvalidCampaignStateError):
+        read_scenario(state)
+
+
+def test_redaction_of_unparseable_state_forwards_nothing() -> None:
+    assert redact_state_for_memory('{"scenario": {"hidden_truth": "leak"') == "{}"
+
+
+def test_last_marker_wins() -> None:
+    _, update = extract_story_update("A [[STORY beats=rope]] B\n[[STORY beats=ledger outcome=toll]]")
+    assert update.beats == ["ledger"] and update.outcome == "toll"
+
+
+@pytest.mark.parametrize("beats,outcomes,ok", [(1, 2, False), (2, 2, True), (4, 3, True), (5, 3, False), (2, 1, False), (2, 4, False)])
+def test_beat_and_outcome_count_bounds(beats: int, outcomes: int, ok: bool) -> None:
+    provider = _provider(
+        beats=[ScenarioBeatProviderOutput(beat_id=f"b{i}", clue="c") for i in range(beats)],
+        outcomes=[ScenarioOutcomeProviderOutput(outcome_id=f"o{i}", summary="s") for i in range(outcomes)],
+    )
+    if ok:
+        scenario_from_provider(provider)
+    else:
+        with pytest.raises(ValueError):
+            scenario_from_provider(provider)
+
+
+def test_opening_marker_discarded_and_marker_only_opening_rejected(monkeypatch, owner) -> None:
+    monkeypatch.setattr(
+        orchestrator_module.orchestrator, "narrator_agent",
+        _Narrator("You wake in a cold hall.\n[[STORY beats=rope outcome=rest]]"),
+    )
+    detail = asyncio.run(orchestrator_module.orchestrator.create_campaign(CampaignCreateRequest(), owner))
+    assert detail.messages[0].content == "You wake in a cold hall."
+    scenario = _state(detail.campaign_id, owner)["scenario"]
+    assert scenario["status"] == "active" and not any(b["revealed"] for b in scenario["beats"])
+
+    monkeypatch.setattr(orchestrator_module.orchestrator, "narrator_agent", _Narrator("[[STORY beats=rope]]"))
+    with pytest.raises(HTTPException) as err:
+        asyncio.run(orchestrator_module.orchestrator.create_campaign(CampaignCreateRequest(), owner))
+    assert err.value.status_code == 502
+
+
+def test_reflection_payload_excludes_hidden_scenario(monkeypatch, owner) -> None:
+    captured: list[str] = []
+    orch = orchestrator_module.orchestrator
+
+    async def reflect(*, payload, model=None):
+        captured.append(payload.campaign_state)
+        raise RuntimeError("stop")
+
+    monkeypatch.setattr(orch.memory_reflection_agent, "reflect", reflect)
+    monkeypatch.setattr(orchestrator_module.settings, "MEMORY_REFLECTION_EVERY_TURNS", 1, raising=False)
+    campaign_id = _campaign(owner, _scenario_state())
+    _chat(campaign_id, owner, _Narrator("Quiet."), monkeypatch)
+    assert captured, "reflection was not invoked"
+    assert all("The sexton never left." not in c and "ledger" not in c for c in captured)

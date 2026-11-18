@@ -1586,7 +1586,10 @@ class ChatOrchestrator:
             request_id, started_at=start_time, success=True, usage=narrator_output
         )
         # The opening cannot report progress; discard any marker.
-        return extract_story_update(narrator_output.reply_text)[0]
+        opening = extract_story_update(narrator_output.reply_text)[0]
+        if not opening.strip():
+            raise HTTPException(status_code=502, detail="AI service failed.")
+        return opening
 
     async def _generate_campaign_title(
         self, *, owner_user_id: str, campaign_id: str, turn_id: str, opening: str
