@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import asyncio
 import json
+from typing import Any
 from uuid import uuid4
 
 import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
-from app.agents.starter_abilities import StarterAbilityGenerator
 from app.ai.model_client import ModelCallResult, ModelUsage
 from app.db.session import session
 from app.game.campaign_state import InvalidCampaignStateError, build_fresh_campaign_state
@@ -39,8 +39,8 @@ from tests.test_chat import _resolved_internal_user_id
 pytestmark = pytest.mark.usefixtures("fake_runtime_model_provider")
 
 
-def _provider(**overrides) -> ScenarioProviderOutput:
-    data = dict(
+def _provider(**overrides: Any) -> ScenarioProviderOutput:
+    data: dict[str, Any] = dict(
         premise="A bell tolls in the cellar.",
         objective="Find who rings it.",
         stakes="The bell tolls for you next.",
@@ -114,7 +114,8 @@ def _scenario_state() -> dict:
 
 
 def test_provider_scenario_validates_and_bad_output_is_rejected() -> None:
-    assert read_scenario({"scenario": scenario_from_provider(_provider())})["status"] == "active"
+    parsed = read_scenario({"scenario": scenario_from_provider(_provider())})
+    assert parsed is not None and parsed["status"] == "active"
     for bad in (
         _provider(premise=" "),
         _provider(beats=[ScenarioBeatProviderOutput(beat_id="Bad Id", clue="x"),
@@ -127,11 +128,11 @@ def test_provider_scenario_validates_and_bad_output_is_rejected() -> None:
 
 
 def test_unusable_provider_scenario_falls_back_and_creation_persists_it(monkeypatch, owner) -> None:
-    async def generate(self, return_usage=False):
+    async def generate(return_usage=False):
         generation = starter_ability_generation()
         return ModelCallResult(output=generation, usage=ModelUsage(input_tokens=1, output_tokens=1, total_tokens=2))
 
-    monkeypatch.setattr(StarterAbilityGenerator, "generate", generate)
+    monkeypatch.setattr(orchestrator_module.orchestrator.starter_ability_generator, "generate", generate)
     detail = asyncio.run(orchestrator_module.orchestrator.create_campaign(CampaignCreateRequest(), owner))
     assert _state(detail.campaign_id, owner)["scenario"] == build_fallback_scenario()
 
@@ -139,25 +140,27 @@ def test_unusable_provider_scenario_falls_back_and_creation_persists_it(monkeypa
 def test_generated_scenario_is_persisted_at_creation_without_extra_call_and_not_exposed(monkeypatch, owner) -> None:
     generated = starter_ability_generation().model_copy(update={"scenario": scenario_from_provider(_provider())})
 
-    async def generate(self, return_usage=False):
+    async def generate(return_usage=False):
         return ModelCallResult(output=generated, usage=ModelUsage(input_tokens=1, output_tokens=1, total_tokens=2))
 
-    monkeypatch.setattr(StarterAbilityGenerator, "generate", generate)
+    monkeypatch.setattr(orchestrator_module.orchestrator.starter_ability_generator, "generate", generate)
     narrator = _Narrator("You hear a bell. What now?")
     monkeypatch.setattr(orchestrator_module.orchestrator, "narrator_agent", narrator)
     detail = asyncio.run(orchestrator_module.orchestrator.create_campaign(CampaignCreateRequest(), owner))
 
     assert _state(detail.campaign_id, owner)["scenario"]["objective"] == "Find who rings it."
-    assert "Find who rings it." in narrator.payloads[0].story_context
+    assert "Find who rings it." in (narrator.payloads[0].story_context or "")
     assert "sexton" not in detail.model_dump_json()
 
 
 def test_context_hides_secrets_after_conclusion_and_is_bounded() -> None:
     state = _scenario_state()
     context = build_story_context(state)
+    assert context is not None
     assert "The sexton never left." in context and "HIDDEN" in context
     apply_story_update(state, StoryUpdate(beats=["rope"], outcome="rest"))
     done = build_story_context(state)
+    assert done is not None
     assert "STORY CONCLUDED (rest)" in done and "The sexton never left." not in done
     assert "HIDDEN" not in done and "A ledger of the dead." not in done
     assert len(context) < 2500
@@ -183,7 +186,7 @@ def test_successful_turn_persists_progress_and_reload_preserves_it(monkeypatch, 
     # Next turn (a "reload") sees the persisted discovery in its story context.
     narrator = _Narrator("Quiet.")
     _chat(campaign_id, owner, narrator, monkeypatch)
-    assert "A frayed bell rope." in narrator.payloads[0].story_context.split("HIDDEN undiscovered")[0]
+    assert "A frayed bell rope." in (narrator.payloads[0].story_context or "").split("HIDDEN undiscovered")[0]
 
 
 @pytest.mark.parametrize("outcome", ["rest", "toll", "negotiated_exit"])
@@ -206,7 +209,7 @@ def test_after_conclusion_later_markers_are_ignored_and_play_continues(monkeypat
     assert _chat(campaign_id, owner, narrator, monkeypatch) == "Peace."
     scenario = _state(campaign_id, owner)["scenario"]
     assert scenario["outcome_id"] == "rest" and not scenario["beats"][1]["revealed"]
-    assert "STORY CONCLUDED" in narrator.payloads[0].story_context
+    assert "STORY CONCLUDED" in (narrator.payloads[0].story_context or "")
 
 
 def test_failed_turn_does_not_advance_story(monkeypatch, owner) -> None:
@@ -232,7 +235,7 @@ def test_legacy_campaign_gets_scenario_lazily_and_malformed_fails_closed(monkeyp
     narrator = _Narrator("The house stirs.")
     _chat(campaign_id, owner, narrator, monkeypatch)
     assert _state(campaign_id, owner)["scenario"]["status"] == "active"
-    assert "Player objective" in narrator.payloads[0].story_context
+    assert "Player objective" in (narrator.payloads[0].story_context or "")
 
     broken = build_fresh_campaign_state()
     broken["scenario"] = {"status": "active"}
