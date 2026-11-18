@@ -7,6 +7,7 @@ class ModelPolicy:
     NARRATOR: Literal["gpt-5-nano"] = "gpt-5-nano"
     ACTION_PARSER: Literal["gpt-5-nano"] = "gpt-5-nano"
     SUMMARIZER: Literal["gpt-5-nano"] = "gpt-5-nano"
+    CAMPAIGN_TITLE: Literal["gpt-5-nano"] = "gpt-5-nano"
     MEMORY_REFLECTION: Literal["gpt-5.4-nano"] = "gpt-5.4-nano"
     DIRECTOR: Literal["gpt-5.4-nano"] = "gpt-5.4-nano"
 
@@ -14,6 +15,7 @@ class ModelPolicy:
     STARTER_ABILITY_REASONING_EFFORT: ReasoningEffort = "minimal"
     ACTION_PARSER_REASONING_EFFORT: ReasoningEffort = "minimal"
     SUMMARIZER_REASONING_EFFORT: ReasoningEffort = "minimal"
+    CAMPAIGN_TITLE_REASONING_EFFORT: ReasoningEffort = "minimal"
     MEMORY_REFLECTION_REASONING_EFFORT: ReasoningEffort = "none"
     DIRECTOR_REASONING_EFFORT: ReasoningEffort = "none"
 
@@ -28,6 +30,10 @@ class ModelPolicy:
     @classmethod
     def summarizer_model(cls) -> str:
         return cls.SUMMARIZER
+
+    @classmethod
+    def campaign_title_model(cls) -> str:
+        return cls.CAMPAIGN_TITLE
 
     @classmethod
     def memory_reflection_model(cls) -> str:
@@ -52,6 +58,10 @@ class ModelPolicy:
     @classmethod
     def summarizer_reasoning_effort(cls) -> ReasoningEffort:
         return cls.SUMMARIZER_REASONING_EFFORT
+
+    @classmethod
+    def campaign_title_reasoning_effort(cls) -> ReasoningEffort:
+        return cls.CAMPAIGN_TITLE_REASONING_EFFORT
 
     @classmethod
     def memory_reflection_reasoning_effort(cls) -> ReasoningEffort:

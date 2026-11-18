@@ -8,6 +8,7 @@ class TokenBudget:
     ACTION_PARSER_MAX_OUTPUT_TOKENS = 320
     STARTER_ABILITY_MAX_OUTPUT_TOKENS = 800
     SUMMARIZER_MAX_OUTPUT_TOKENS = 180
+    CAMPAIGN_TITLE_MAX_OUTPUT_TOKENS = 64
     MEMORY_REFLECTION_MAX_OUTPUT_TOKENS = 180
     DIRECTOR_MAX_OUTPUT_TOKENS = 128
 
@@ -26,6 +27,10 @@ class TokenBudget:
     @classmethod
     def summarizer_max_output_tokens(cls) -> int:
         return cls.SUMMARIZER_MAX_OUTPUT_TOKENS
+
+    @classmethod
+    def campaign_title_max_output_tokens(cls) -> int:
+        return cls.CAMPAIGN_TITLE_MAX_OUTPUT_TOKENS
 
     @classmethod
     def memory_reflection_max_output_tokens(cls) -> int:

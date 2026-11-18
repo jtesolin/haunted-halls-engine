@@ -23,7 +23,7 @@ from app.game.abilities import generated_ability_definitions
 from app.game.campaign_state import build_fresh_campaign_state
 from app.game.character_progression import ensure_character_progression_state, unlock_ability
 from app.guardrails.model_policy import ModelPolicy
-from app.guardrails.token_budget import estimate_tokens
+from app.guardrails.token_budget import TokenBudget, estimate_tokens
 from app.main import app
 from app.orchestration import orchestrator as orchestrator_module
 from app.schemas.campaign import CampaignCreateRequest
@@ -550,16 +550,13 @@ def test_create_campaign_returns_hydrated_campaign() -> None:
     assert "What do you do first?" in data["messages"][0]["content"]
 
 
-def test_create_campaign_uses_narrator_for_opening_and_title(monkeypatch) -> None:
+def test_create_campaign_uses_narrator_for_opening_and_title_generator_for_title(monkeypatch) -> None:
     settings.INTERNAL_ENGINE_SERVICE_TOKEN = "test-internal-engine-service-token-0000000000000000000000000000000000000000000000"
     prompts: list[str] = []
 
     async def fake_generate_text(*, messages, **kwargs) -> str:
         prompts.append(messages[-1]["content"])
-        if (
-            "provide only a short haunted campaign title"
-            in messages[-1]["content"].lower()
-        ):
+        if "short campaign title" in messages[0]["content"].lower():
             return "Whispers in the West Wing"
         return "The candles hiss awake in the corridor. Where do you step first?"
 
@@ -645,7 +642,7 @@ def test_create_campaign_opening_narrator_receives_grounded_scene_context(
 
     async def fake_generate_text(*, messages, **kwargs) -> str:
         captured_message_batches.append(list(messages))
-        if "provide only a short haunted campaign title" in messages[-1]["content"].lower():
+        if "short campaign title" in messages[0]["content"].lower():
             return "Whispers in the West Wing"
         return "The candles hiss awake in the corridor. Where do you step first?"
 
@@ -675,30 +672,45 @@ def test_create_campaign_opening_narrator_receives_grounded_scene_context(
         assert item_name in combined_content
 
 
-def test_create_campaign_title_uses_same_scene_context_no_raw_state(
-    monkeypatch,
-) -> None:
+def test_create_campaign_title_uses_lightweight_request(monkeypatch) -> None:
     settings.INTERNAL_ENGINE_SERVICE_TOKEN = "test-internal-engine-service-token-0000000000000000000000000000000000000000000000"
-    captured_message_batches: list[list[dict]] = []
+    calls: list[dict] = []
+    opening = "The candles hiss awake in the corridor. Where do you step first?"
 
-    async def fake_generate_text(*, messages, **kwargs) -> str:
-        captured_message_batches.append(list(messages))
-        if "provide only a short haunted campaign title" in messages[-1]["content"].lower():
+    async def fake_generate_text(*, messages, **kwargs):
+        calls.append({"messages": list(messages), **kwargs})
+        if "short campaign title" in messages[0]["content"].lower():
             return "Whispers in the West Wing"
-        return "The candles hiss awake in the corridor. Where do you step first?"
+        return opening
 
     monkeypatch.setattr(narrator_module.model_client, "generate_text", fake_generate_text)
     client = TestClient(app)
-    headers = _user_scoped_headers(client, "campaign-title-scene-context")
+    headers = _user_scoped_headers(client, "campaign-title-lightweight")
 
     response = client.post("/api/campaign", json={}, headers=headers)
     assert response.status_code == 201
 
-    assert len(captured_message_batches) == 2
-    title_messages = captured_message_batches[1]
-    combined_content = "\n".join(str(m["content"]) for m in title_messages)
-    assert "Campaign state:" not in combined_content
-    assert '"id": "entry_hall"' in combined_content
+    assert len(calls) == 2
+    title_call = calls[1]
+    assert [m["role"] for m in title_call["messages"]] == ["developer", "user"]
+    assert opening in title_call["messages"][1]["content"]
+    combined = "\n".join(str(m["content"]) for m in title_call["messages"])
+    assert "entry_hall" not in combined
+    assert estimate_tokens(combined) < 500
+    assert title_call["model"] == ModelPolicy.campaign_title_model()
+    assert title_call["reasoning_effort"] == ModelPolicy.campaign_title_reasoning_effort()
+    assert title_call["max_output_tokens"] == TokenBudget.campaign_title_max_output_tokens()
+    assert title_call["max_output_tokens"] < TokenBudget.narrator_max_output_tokens()
+
+    with session() as db:
+        agents = db.conn.execute(
+            text(
+                "SELECT agent_name FROM model_requests WHERE campaign_id = :c ORDER BY id"
+            ),
+            {"c": response.json()["campaign_id"]},
+        ).scalars().all()
+    assert "CampaignTitleGenerator" in agents
+    assert agents.count("Narrator") == 1
 
 
 def test_first_action_does_not_reroll_starting_inventory(monkeypatch) -> None:
