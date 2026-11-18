@@ -11,6 +11,7 @@ from app.ai.prompts import narrator_prompt
 from app.guardrails.model_policy import ModelPolicy
 from app.guardrails.token_budget import TokenBudget
 from app.game.abilities import project_narrator_ability_gameplay_result
+from app.game.scenario import neutralize_story_markers
 from app.schemas.chat import (
     NarratorSceneContext,
     NarratorToolExecutionResult,
@@ -299,4 +300,14 @@ class NarratorAgent(BaseAgent):
                 "content": message,
             }
         )
-        return messages
+        # Untrusted text (player message, recent turns, memory) must not forge story markers.
+        safe: list[ChatCompletionMessageParam] = []
+        for m in messages:
+            content = m.get("content")
+            if m.get("role") != "developer" and isinstance(content, str):
+                m = cast(
+                    ChatCompletionMessageParam,
+                    {**m, "content": neutralize_story_markers(content)},
+                )
+            safe.append(m)
+        return safe

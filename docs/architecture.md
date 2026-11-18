@@ -163,7 +163,7 @@ authored quest namespace `state["story"]`): validation, the bounded Narrator
 context (`build_story_context`), marker parsing (`extract_story_update`) and
 progress (`apply_story_update`). Player-known fields are premise, objective,
 stakes, revealed beats and a concluded outcome; the hidden truth, unrevealed
-clues and outcome catalogue are given only to the Narrator and are never
+clues and outcome catalogue are given only to the Narrator (memory agents receive a redacted, player-known projection) and are never
 returned by an API. Progress is applied in memory and written with the turn's
 single atomic state update, so failed turns never advance the story; no
 transaction spans a model call. A terminal outcome is sticky: later markers are

@@ -19,6 +19,7 @@ commits (the caller writes it with the turn's single atomic state update).
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass, field
 from typing import Any
@@ -31,10 +32,14 @@ STATUS_ACTIVE = "active"
 STATUS_CONCLUDED = "concluded"
 
 _ID = re.compile(r"^[a-z][a-z0-9_]{0,39}$")
-_MAX_TEXT = 300
-_MIN_BEATS, _MAX_BEATS = 2, 5
-_MIN_OUTCOMES, _MAX_OUTCOMES = 2, 4
-_MARKER = re.compile(r"\[\[\s*STORY\b([^\]]*)\]\]", re.IGNORECASE)
+_MAX_TEXT = 200
+_MIN_BEATS, _MAX_BEATS = 2, 4
+_MIN_OUTCOMES, _MAX_OUTCOMES = 2, 3
+# One line; closed by `]]` (extra `]` swallowed) or, if truncated, by end of line.
+_MARKER = re.compile(r"\[\[\s*STORY\b[^\n]*?(?:\]\]+|$)", re.IGNORECASE | re.MULTILINE)
+_BEAT_LIST = re.compile(r"beats\s*=\s*([A-Za-z0-9_]+(?:\s*,\s*[A-Za-z0-9_]+)*)", re.IGNORECASE)
+_OUTCOME = re.compile(r"outcome\s*=\s*([A-Za-z0-9_]+)", re.IGNORECASE)
+_FORGED = re.compile(r"\[\[(\s*STORY)", re.IGNORECASE)
 
 
 def _text(value: Any, name: str) -> str:
@@ -191,9 +196,9 @@ def extract_story_update(reply: str) -> tuple[str, StoryUpdate]:
     update = StoryUpdate()
     matches = list(_MARKER.finditer(reply))
     if matches:
-        body = matches[-1].group(1)
-        beats = re.search(r"beats\s*=\s*([A-Za-z0-9_,\s]*)", body)
-        outcome = re.search(r"outcome\s*=\s*([A-Za-z0-9_]+)", body)
+        body = matches[-1].group(0)
+        beats = _BEAT_LIST.search(body)
+        outcome = _OUTCOME.search(body)
         if beats:
             update.beats = [b.strip().lower() for b in beats.group(1).split(",") if b.strip()]
         if outcome:
@@ -220,3 +225,43 @@ def apply_story_update(state: dict[str, Any], update: StoryUpdate) -> bool:
     return changed
 
 
+
+
+def neutralize_story_markers(text: str) -> str:
+    """Defang `[[STORY` in untrusted text so a player cannot forge progress."""
+    return _FORGED.sub(r"[ [\1", text)
+
+
+def redact_state_for_memory(campaign_state: str) -> str:
+    """Campaign state JSON with only player-known scenario fields.
+
+    Memory agents persist text that is later fed back to the Narrator without
+    HIDDEN labels, so hidden truth, undiscovered clues and the outcome
+    catalogue must never reach them. Non-JSON / unvalidated input is returned
+    with any scenario dropped entirely.
+    """
+    try:
+        state = json.loads(campaign_state)
+    except (TypeError, ValueError):
+        return campaign_state
+    if not isinstance(state, dict) or "scenario" not in state:
+        return campaign_state
+    try:
+        scenario = _validate(state["scenario"])
+    except ValueError:
+        scenario = None
+    if scenario is None:
+        del state["scenario"]
+    else:
+        known: dict[str, Any] = {
+            "premise": scenario["premise"],
+            "objective": scenario["objective"],
+            "stakes": scenario["stakes"],
+            "discovered_clues": [b["clue"] for b in scenario["beats"] if b["revealed"]],
+        }
+        if scenario["status"] == STATUS_CONCLUDED:
+            known["outcome"] = next(
+                o["summary"] for o in scenario["outcomes"] if o["id"] == scenario["outcome_id"]
+            )
+        state["scenario"] = known
+    return json.dumps(state)

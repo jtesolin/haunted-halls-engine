@@ -79,10 +79,10 @@ class StarterAbilityGenerator(BaseAgent):
                     "underwater access, hazard immunity, teleportation, or phasing. "
                     "Also fill the scenario field with a compact persistent story for this campaign: "
                     "premise (inciting hook), objective (what the player is trying to do), stakes, "
-                    "hidden_truth (the secret conflict behind it), 3 beats (beat_id snake_case plus a "
-                    "short clue the player can discover through exploration), and 3 outcomes "
+                    "hidden_truth (the secret conflict behind it), 2-4 beats (beat_id snake_case plus a "
+                    "short clue the player can discover through exploration), and 2-3 outcomes "
                     "(outcome_id snake_case plus summary: include success, failure and a compromise). "
-                    "Keep every text under 250 characters. Do not script required steps or reference "
+                    "Keep every text under 160 characters. Do not script required steps or reference "
                     "specific rooms, items or NPCs as mandatory."
                 ),
             }

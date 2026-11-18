@@ -41,6 +41,7 @@ from app.game.scenario import (
     build_story_context,
     ensure_scenario,
     extract_story_update,
+    redact_state_for_memory,
 )
 from app.game.campaign_state import (
     InvalidCampaignStateError,
@@ -1030,6 +1031,9 @@ class ChatOrchestrator:
         # Story progress is applied in memory only; it is persisted with the
         # turn's single atomic write, so a failed turn never advances the story.
         writes.reply, story_update = extract_story_update(narrator_output.reply_text)
+        if not writes.reply.strip():
+            # Marker-only (or empty) narration must not be persisted as a turn.
+            raise HTTPException(status_code=502, detail="AI service failed.")
         final_state = json.loads(campaign_state)
         if apply_story_update(final_state, story_update):
             writes.set_state(player_turn_id, final_state)
@@ -1079,7 +1083,7 @@ class ChatOrchestrator:
                 summarizer_payload = MemorySummarizerInput(
                     previous_summary=current_summary,
                     recent_turns=recent_turns,
-                    campaign_state=outcome.campaign_state,
+                    campaign_state=redact_state_for_memory(outcome.campaign_state),
                     latest_reply=outcome.reply,
                 )
                 summary_estimated_tokens = self._estimate_payload_tokens(summarizer_payload)
@@ -1121,7 +1125,7 @@ class ChatOrchestrator:
                 reflection_model = ModelPolicy.memory_reflection_model()
                 reflection_payload = MemoryReflectionInput(
                     recent_turns=recent_turns,
-                    campaign_state=outcome.campaign_state,
+                    campaign_state=redact_state_for_memory(outcome.campaign_state),
                     current_summary=current_summary,
                 )
                 reflection_estimated_tokens = self._estimate_payload_tokens(reflection_payload)
