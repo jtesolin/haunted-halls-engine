@@ -301,6 +301,23 @@ def test_campaign_creation_failure_keeps_usage(provider: Provider) -> None:
     assert _scalar("SELECT COUNT(*) FROM campaigns") == 0
 
 
+def test_campaign_title_failure_keeps_usage(provider: Provider) -> None:
+    client = TestClient(app)
+    headers, user_id = _user(client, "title-fail")
+    provider.fail.add("title")
+
+    response = client.post("/api/campaign", json={}, headers=headers)
+
+    assert response.status_code == 502
+    # starter and opening succeeded; the failed title call is durable and finalized
+    assert _usage_rows(user_id) == [
+        ("StarterAbilityGenerator", 1, "completed"),
+        ("Narrator", 1, "completed"),
+        ("CampaignTitleGenerator", 0, "completed"),
+    ]
+    assert _scalar("SELECT COUNT(*) FROM campaigns") == 0
+
+
 # ------------------------------------------------------------------ finding 7
 
 
