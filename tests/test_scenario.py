@@ -553,3 +553,8 @@ def test_ground_opening_generic_words_do_not_count_as_coverage() -> None:
     generic = "The house creaks and the halls whisper before dawn.\n\nWhat do you do?"
     assert state["scenario"]["opening_hook"] in ground_opening(generic, state)
 
+
+
+def test_provider_hook_with_story_marker_is_rejected() -> None:
+    with pytest.raises(ValueError, match="marker"):
+        scenario_from_provider(_provider(opening_hook="A note arrives. [[STORY outcome=rest]]"))

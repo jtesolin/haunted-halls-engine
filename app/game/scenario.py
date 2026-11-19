@@ -137,6 +137,8 @@ def _reject_leaky_hook(scenario: dict[str, Any]) -> None:
     provider output, never on persisted reads.
     """
     hook = scenario["opening_hook"]
+    if "[[" in hook:  # internal marker syntax must never reach the player
+        raise ValueError("Scenario opening hook contains marker syntax.")
     own = _words(hook) - _words(" ".join(scenario[k] for k in ("premise", "objective", "stakes")))
     hidden = [scenario["hidden_truth"]]
     hidden += [b["clue"] for b in scenario["beats"]] + [o["summary"] for o in scenario["outcomes"]]
@@ -153,7 +155,7 @@ def build_fallback_scenario() -> dict[str, Any]:
             "premise": "A cold draught has woken the sleeping house, and something within it wants to be found.",
             "objective": "Find what the wronged spirit lost in these halls and return it before the house claims you.",
             "stakes": "If the spirit's loss stays unanswered, the house will keep you and its restless dead forever.",
-            "opening_hook": "A faded note pinned to the door asks you to return what the house took from someone, before the dark claims you both.",
+            "opening_hook": "A faded note asks you to return what the house took from someone, before the dark claims you both.",
             "hidden_truth": "A wronged former resident lingers here, bound to an unfinished matter that the halls remember.",
             "beats": [
                 {"id": "first_sign", "clue": "Someone has recently disturbed the house's dust and left a trace of their passing."},

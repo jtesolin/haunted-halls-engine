@@ -174,15 +174,15 @@ replace those three functions behind the same interface, not add parallel state.
 
 At creation the Narrator opening request carries the persisted scenario's
 player-known objective, stakes and `opening_hook` (an optional scenario field
-saying how the player learns of the objective: a request, message or witnessed
-event, generated in the same structured call; legacy scenarios lack it and need
+saying how the player learns of the objective: a scene-independent found or
+received note, message, memory or sound, generated in the same structured call; legacy scenarios lack it and need
 no migration). The Narrator is told to build the scene around the hook using
 only entities present in the authoritative scene, never as a "your task is"
 directive. `ground_opening` is a zero-model-call backstop: if the opening shares
 fewer than min(2, N) distinctive words (4+ letters, generic words excluded) with
 both the objective and the hook, the hook (authored as in-world prose, generated only as a scene-independent note, message, memory or sound so it names no entity the scene may lack) is
 inserted before the closing paragraph (prepended for a single-paragraph opening so the invitation stays last); hookless scenarios are left unchanged.
-The hook is shown verbatim, so provider output whose hook copies or closely overlaps hidden truth, beat clues or outcome summaries is rejected (lexical check; scenario falls back). Tradeoff: no extra model call keeps cost/latency bounded, but the check is
+The hook is shown verbatim, so provider output whose hook copies or closely overlaps hidden truth, beat clues or outcome summaries is rejected, as is story-marker syntax (lexical check; scenario falls back). Tradeoff: no extra model call keeps cost/latency bounded, but the check is
 lexical and cannot prove coherence or actionability, which are prompt-enforced
 and verified at staging; a semantic validate/regenerate call is the upgrade if
 staging shows false passes. Hidden truth, beats and outcomes are never
