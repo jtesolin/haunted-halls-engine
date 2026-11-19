@@ -1511,3 +1511,13 @@ def test_invalid_persisted_generated_definition_raises_campaign_state_error_ever
             ),
             campaign_state=json.dumps(state),
         )
+
+
+def test_starter_generation_prompt_constrains_opening_hook_to_scene_independent_delivery() -> None:
+    prompt = "\n".join(
+        str(message.get("content", "")) for message in StarterAbilityGenerator().build_provider_request()
+    ).lower()
+    assert "opening_hook" in prompt
+    assert "found or received note, message, memory or sound" in prompt
+    assert "never a specific person, creature or prop" in prompt
+    assert "witnessed event" not in prompt

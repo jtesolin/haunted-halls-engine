@@ -243,7 +243,7 @@ def build_opening_directive(state: dict[str, Any]) -> str:
     hook = scenario.get("opening_hook")
     delivery = (
         f" Build the opening around this in-world hook, using only people and props present in "
-        f"the authoritative scene (otherwise deliver it as a found note or a witnessed event): {hook}"
+        f"the authoritative scene (otherwise deliver it as a found note, message or sound): {hook}"
         if hook
         else " Have the player learn it through a plausible in-world cause (a request, message or "
         "witnessed event) from someone or something in the scene."
