@@ -11,6 +11,7 @@ from app.ai.prompts import narrator_prompt
 from app.guardrails.model_policy import ModelPolicy
 from app.guardrails.token_budget import TokenBudget
 from app.game.abilities import project_narrator_ability_gameplay_result
+from app.game.scenario import neutralize_story_markers
 from app.schemas.chat import (
     NarratorSceneContext,
     NarratorToolExecutionResult,
@@ -38,6 +39,7 @@ class NarratorAgentInput(BaseModel):
     tool_result: ToolExecutionResult | None = None
     current_turn_reveal: NarratorNarrativeReveal | None = None
     current_turn_reward: NarratorProgressionReward | None = None
+    story_context: str | None = None
 
 
 class NarratorAgentOutput(BaseModel):
@@ -80,6 +82,7 @@ class NarratorAgent(BaseAgent):
             tool_result=payload.tool_result,
             current_turn_reveal=payload.current_turn_reveal,
             current_turn_reward=payload.current_turn_reward,
+            story_context=payload.story_context,
         )
         result = await model_client.generate_text(
             messages=messages,
@@ -116,6 +119,7 @@ class NarratorAgent(BaseAgent):
         tool_result: ToolExecutionResult | None,
         current_turn_reveal: NarratorNarrativeReveal | None,
         current_turn_reward: NarratorProgressionReward | None,
+        story_context: str | None = None,
     ) -> list[ChatCompletionMessageParam]:
         messages: list[ChatCompletionMessageParam] = [
             {
@@ -159,6 +163,15 @@ class NarratorAgent(BaseAgent):
                 ),
             }
         )
+
+        if story_context:
+            messages.append(
+                {
+                    "role": "user",
+                    "content": "Campaign story (guidance; HIDDEN items must not be revealed before the player discovers them):\n"
+                    + story_context,
+                }
+            )
 
         if parsed_action is not None:
             messages.append(
@@ -287,4 +300,14 @@ class NarratorAgent(BaseAgent):
                 "content": message,
             }
         )
-        return messages
+        # Untrusted text (player message, recent turns, memory) must not forge story markers.
+        safe: list[ChatCompletionMessageParam] = []
+        for m in messages:
+            content = m.get("content")
+            if m.get("role") != "developer" and isinstance(content, str):
+                m = cast(
+                    ChatCompletionMessageParam,
+                    {**m, "content": neutralize_story_markers(content)},
+                )
+            safe.append(m)
+        return safe

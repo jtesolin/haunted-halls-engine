@@ -1,7 +1,7 @@
 """Bounded persisted contracts for campaign-specific generated abilities."""
 
 from enum import StrEnum
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -205,6 +205,8 @@ class StarterAbilityGeneration(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     abilities: list[GeneratedAbilityDefinition] = Field(min_length=2, max_length=2)
+    # Validated persisted-form scenario from the same provider call, or None.
+    scenario: dict[str, Any] | None = None
 
 
 class AbilityGameplayStatus(StrEnum):

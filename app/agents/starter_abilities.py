@@ -7,6 +7,7 @@ from openai.types.chat import ChatCompletionMessageParam
 from app.agents.base import BaseAgent
 from app.ai.model_client import ModelCallResult, ModelUsage, model_client
 from app.game.abilities import validate_starter_ability_definitions
+from app.game.scenario import scenario_from_provider
 from app.guardrails.model_policy import ModelPolicy
 from app.guardrails.token_budget import TokenBudget, estimate_tokens
 from app.schemas.generated_abilities import (
@@ -75,7 +76,14 @@ class StarterAbilityGenerator(BaseAgent):
                     "ascent/descent; spider climb only continuous supporting surfaces; jump only "
                     "authored gaps/elevations within three metres; water walking only authored "
                     "water surfaces between landings. No free flight, ongoing effects, swimming, "
-                    "underwater access, hazard immunity, teleportation, or phasing."
+                    "underwater access, hazard immunity, teleportation, or phasing. "
+                    "Also fill the scenario field with a compact persistent story for this campaign: "
+                    "premise (inciting hook), objective (what the player is trying to do), stakes, "
+                    "hidden_truth (the secret conflict behind it), 2-4 beats (beat_id snake_case plus a "
+                    "short clue the player can discover through exploration), and 2-3 outcomes "
+                    "(outcome_id snake_case plus summary: include success, failure and a compromise). "
+                    "Keep every text under 160 characters. Do not script required steps or reference "
+                    "specific rooms, items or NPCs as mandatory."
                 ),
             }
         ]
@@ -152,7 +160,13 @@ class StarterAbilityGenerator(BaseAgent):
             for choice in (provider_output.first_ability, provider_output.second_ability)
         ]
         validate_starter_ability_definitions(abilities)
-        return StarterAbilityGeneration(abilities=abilities)
+        scenario = None
+        if provider_output.scenario is not None:
+            try:
+                scenario = scenario_from_provider(provider_output.scenario)
+            except ValueError:
+                scenario = None  # unusable story: caller uses the fallback scenario
+        return StarterAbilityGeneration(abilities=abilities, scenario=scenario)
 
     def _to_domain_ability(
         self,

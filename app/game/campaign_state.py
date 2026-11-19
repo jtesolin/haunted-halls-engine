@@ -161,6 +161,10 @@ def build_fresh_campaign_state() -> dict[str, Any]:
         },
         "facts": [],
     }
+    # Local import: scenario.py imports InvalidCampaignStateError from this module.
+    from app.game.scenario import build_fallback_scenario
+
+    state["scenario"] = build_fallback_scenario()
     items = ensure_items_state(state)
     state["npcs"] = default_npcs_state()
     items.update(random_starting_inventory_items())

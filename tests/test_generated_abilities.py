@@ -338,7 +338,7 @@ def test_starter_generation_uses_dedicated_bounded_reasoning_policy(monkeypatch)
     assert captured["reasoning_effort"] == "minimal"
     assert captured["reasoning_effort"] == ModelPolicy.starter_ability_reasoning_effort()
     assert captured["reasoning_effort"] != ModelPolicy.narrator_reasoning_effort()
-    assert captured["max_output_tokens"] == 800
+    assert captured["max_output_tokens"] == 1600
     assert captured["max_output_tokens"] == TokenBudget.starter_ability_max_output_tokens()
 
 

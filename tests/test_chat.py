@@ -1903,7 +1903,7 @@ def test_auto_created_chat_rechecks_parser_budget_after_starter_generation(
     # (the starter's large actual total) can reject the parser reservation.
     starter_pending = (
         orchestrator_module.orchestrator.starter_ability_generator.estimate_provider_input_tokens()
-        + 800
+        + 1600
     )
     monkeypatch.setattr(settings, "MAX_DAILY_PROJECT_TOKENS", starter_pending)
     owner_user_id = _resolved_internal_user_id(
