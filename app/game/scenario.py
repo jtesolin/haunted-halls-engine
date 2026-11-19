@@ -97,12 +97,14 @@ def _validate(raw: Any) -> dict[str, Any]:
         outcome_id is not None and outcome_id not in {o["id"] for o in outcomes}
     ):
         raise ValueError("Scenario outcome is inconsistent with status.")
+    hook = raw.get("opening_hook")  # optional: absent on scenarios persisted before #125
     return {
         "version": SCENARIO_VERSION,
         "status": status,
         "premise": _text(raw.get("premise"), "premise"),
         "objective": _text(raw.get("objective"), "objective"),
         "stakes": _text(raw.get("stakes"), "stakes"),
+        **({"opening_hook": _text(hook, "opening hook")} if hook is not None else {}),
         "hidden_truth": _text(raw.get("hidden_truth"), "hidden truth"),
         "beats": beats,
         "outcomes": outcomes,
@@ -117,6 +119,7 @@ def scenario_from_provider(output: ScenarioProviderOutput) -> dict[str, Any]:
             "premise": output.premise,
             "objective": output.objective,
             "stakes": output.stakes,
+            "opening_hook": output.opening_hook,  # required for new scenarios; blank -> fallback
             "hidden_truth": output.hidden_truth,
             "beats": [{"id": b.beat_id, "clue": b.clue} for b in output.beats],
             "outcomes": [{"id": o.outcome_id, "summary": o.summary} for o in output.outcomes],
@@ -131,6 +134,7 @@ def build_fallback_scenario() -> dict[str, Any]:
             "premise": "A cold draught has woken the sleeping house, and something within it wants to be found.",
             "objective": "Find what the wronged spirit lost in these halls and return it before the house claims you.",
             "stakes": "If the spirit's loss stays unanswered, the house will keep you and its restless dead forever.",
+            "opening_hook": "A faded note pinned to the door asks you to return what the house took from someone, before the dark claims you both.",
             "hidden_truth": "A wronged former resident lingers here, bound to an unfinished matter that the halls remember.",
             "beats": [
                 {"id": "first_sign", "clue": "Someone has recently disturbed the house's dust and left a trace of their passing."},
@@ -213,14 +217,24 @@ def _words(text: str) -> set[str]:
 
 
 def build_opening_directive(state: dict[str, Any]) -> str:
-    """Player-known objective/stakes the creation-time opening must state in-world."""
+    """Player-known setup the creation-time opening must dramatize in-world."""
     scenario = read_scenario(state)
     if scenario is None:
         return ""
+    hook = scenario.get("opening_hook")
+    delivery = (
+        f" Build the opening around this in-world hook, using only people and props present in "
+        f"the authoritative scene (otherwise deliver it as a found note or a witnessed event): {hook}"
+        if hook
+        else " Have the player learn it through a plausible in-world cause (a request, message or "
+        "witnessed event) from someone or something in the scene."
+    )
     return (
-        " The opening must tell the player, in-world and without scripting steps, their concrete "
-        f"objective ({scenario['objective']}) and what is at stake ({scenario['stakes']}). "
-        "Never reveal hidden truths, undiscovered clues or possible outcomes."
+        " The opening must make the player aware of their concrete objective "
+        f"({scenario['objective']}) and what is at stake ({scenario['stakes']}) as part of the "
+        "scene, never as a narrator instruction like 'your task is'; do not script steps."
+        + delivery
+        + " Never reveal hidden truths, undiscovered clues or possible outcomes."
     )
 
 
@@ -230,19 +244,22 @@ def _covered(opening: str, text: str) -> bool:
 
 
 def ground_opening(opening: str, state: dict[str, Any]) -> str:
-    """Deterministic backstop: append whichever of objective/stakes the opening omits.
+    """Deterministic backstop: if the opening conveys neither objective nor hook, insert the hook.
 
-    shortcut: lexical overlap check (>=2 shared words each), not semantic; upgrade
-    only if staging shows false passes. Objective actionability is prompt-enforced,
-    not validated.
+    The hook is authored as in-world narration, so it is inserted before the closing
+    paragraph (the player invitation) rather than spliced on as a meta directive. Scenarios
+    without a hook (legacy) are left unchanged.
+
+    shortcut: lexical overlap check (>=2 shared words), not semantic, and zero extra model
+    calls; upgrade to a validating/regenerating model call only if staging shows
+    incoherent or false-pass openings.
     """
     scenario = read_scenario(state)
-    if scenario is None:
+    hook = scenario.get("opening_hook") if scenario else None
+    if scenario is None or not hook or _covered(opening, scenario["objective"]) or _covered(opening, hook):
         return opening
-    missing = [scenario[k] for k in ("objective", "stakes") if not _covered(opening, scenario[k])]
-    if not missing:
-        return opening
-    return f"{opening.rstrip()}\n\nYour purpose: {' '.join(missing)}"
+    head, sep, tail = opening.rstrip().rpartition("\n\n")
+    return f"{head}\n\n{hook}\n\n{tail}" if sep else f"{opening.rstrip()}\n\n{hook}"
 
 
 @dataclass

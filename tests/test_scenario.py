@@ -48,6 +48,7 @@ def _provider(**overrides: Any) -> ScenarioProviderOutput:
         premise="A bell tolls in the cellar.",
         objective="Find who rings it.",
         stakes="The bell tolls for you next.",
+        opening_hook="A widow slips you a note: find who rings the bell tonight.",
         hidden_truth="The sexton never left.",
         beats=[
             ScenarioBeatProviderOutput(beat_id="rope", clue="A frayed bell rope."),
@@ -414,16 +415,39 @@ def test_opening_directive_and_grounding_use_only_player_known_fields() -> None:
     state = _scenario_state()
     directive = build_opening_directive(state)
     assert "Find who rings it." in directive and "The bell tolls for you next." in directive
-    assert "sexton" not in directive and "frayed" not in directive  # hidden/beat text
+    assert "widow slips you a note" in directive  # hook drives the in-world delivery
+    assert "sexton never" not in directive and "frayed" not in directive  # hidden/beat text
 
-    vague = "Echoes drift through the hall. What do you do first?"
+    vague = "Echoes drift through the hall.\n\nWhat do you do first?"
     grounded = ground_opening(vague, state)
-    assert grounded.startswith(vague) and "Your purpose: Find who rings it." in grounded
-    assert "sexton" not in grounded and "ledger" not in grounded
+    hook = state["scenario"]["opening_hook"]
+    assert grounded == f"Echoes drift through the hall.\n\n{hook}\n\nWhat do you do first?"
+    assert "Your purpose" not in grounded and "your task" not in grounded.lower()
+    assert "never left" not in grounded and "ledger" not in grounded
+    assert ground_opening("Echoes drift. What now?", state).endswith(hook)  # single paragraph
 
     concrete = "You must find who rings the bell before it tolls for you."
     assert ground_opening(concrete, state) == concrete
     assert ground_opening(vague, {}) == vague  # no scenario: unchanged
+
+
+def test_legacy_scenario_without_hook_is_valid_and_never_spliced() -> None:
+    state = _scenario_state()
+    del state["scenario"]["opening_hook"]
+    assert "opening_hook" not in (read_scenario(state) or {})
+    assert "widow" not in build_opening_directive(state)
+    vague = "Echoes drift.\n\nWhat now?"
+    assert ground_opening(vague, state) == vague
+
+
+def test_blank_provider_hook_falls_back_to_invalid_scenario() -> None:
+    with pytest.raises(ValueError):
+        scenario_from_provider(_provider(opening_hook=" "))
+
+
+def test_fallback_scenario_has_in_world_hook() -> None:
+    hook = build_fallback_scenario()["opening_hook"]
+    assert "your purpose" not in hook.lower() and "your task" not in hook.lower()
 
 
 def test_fallback_scenario_objective_is_concrete() -> None:
@@ -466,7 +490,8 @@ def test_creation_grounds_vague_opening_and_feeds_scenario_to_title(monkeypatch,
                                       cache_write_input_tokens=0, output_tokens=1,
                                       reasoning_output_tokens=0, total_tokens=2))()
 
-    narrator = _Narrator("Echoes drift through the hall. What do you do first?")
+    state_hook = scenario_from_provider(_provider())["opening_hook"]
+    narrator = _Narrator("Echoes drift through the hall.\n\nWhat do you do first?")
     orch = orchestrator_module.orchestrator
     monkeypatch.setattr(orch.starter_ability_generator, "generate", generate)
     monkeypatch.setattr(orch, "narrator_agent", narrator)
@@ -475,7 +500,7 @@ def test_creation_grounds_vague_opening_and_feeds_scenario_to_title(monkeypatch,
 
     assert detail.name == "Who Rings the Bell"
     assert "Find who rings it." in narrator.payloads[0].player_message
-    assert "Your purpose: Find who rings it." in detail.messages[0].content
+    assert state_hook in detail.messages[0].content and "Your purpose" not in detail.messages[0].content
     assert titles[0].opening == detail.messages[0].content  # title sees grounded opening
     assert titles[0].premise == "A bell tolls in the cellar."
     assert titles[0].objective == "Find who rings it."
@@ -483,27 +508,9 @@ def test_creation_grounds_vague_opening_and_feeds_scenario_to_title(monkeypatch,
     assert "sexton" not in persisted  # hidden truth never reaches the API response
 
 
-def test_ground_opening_fallback_scenario_boundary_and_generic_words() -> None:
+def test_ground_opening_generic_words_do_not_count_as_coverage() -> None:
     state = build_fresh_campaign_state()
     state["scenario"] = build_fallback_scenario()
-    generic = "The house creaks and the halls whisper before dawn. What do you do?"
-    assert "Your purpose:" in ground_opening(generic, state)  # generic words only
-    one = "A spirit stirs; you wonder about it. What do you do?"
-    assert "Your purpose:" in ground_opening(one, state)  # one distinctive word
-    two = "You resolve to find what the wronged spirit lost and return it."
-    out = ground_opening(two, state)  # objective covered, stakes still appended
-    assert "wronged spirit lost in these halls" not in out and "restless dead" in out
+    generic = "The house creaks and the halls whisper before dawn.\n\nWhat do you do?"
+    assert state["scenario"]["opening_hook"] in ground_opening(generic, state)
 
-
-def test_ground_opening_checks_objective_and_stakes_independently() -> None:
-    state = _scenario_state()  # objective "Find who rings it.", stakes "The bell tolls for you next."
-    obj_only = "You must find who rings the bell. What do you do?"
-    out = ground_opening(obj_only, state)
-    assert "The bell tolls for you next." in out and "Find who rings it." not in out
-    both = "Find who rings the bell, or it tolls for you next."
-    assert ground_opening(both, state) == both
-    neither = "Echoes drift. What now?"
-    out = ground_opening(neither, state)
-    assert "Find who rings it." in out and "The bell tolls for you next." in out
-    state["scenario"]["objective"] = "Bring them home."  # no distinctive words
-    assert "Bring them home." in ground_opening(both, state)

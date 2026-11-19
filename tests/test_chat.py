@@ -580,7 +580,7 @@ def test_create_campaign_uses_narrator_for_opening_and_title_generator_for_title
     assert data["name"] == "Whispers in the West Wing"
     content = data["messages"][0]["content"]
     assert content.startswith("The candles hiss awake in the corridor. Where do you step first?")
-    assert "Your purpose:" in content
+    assert "Your purpose" not in content
 
 
 def test_create_campaign_persists_authoritative_entry_hall_state_ai_disabled() -> None:

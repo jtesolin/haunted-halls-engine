@@ -129,7 +129,10 @@ Director agent, extra per-turn model call, API field, or frontend change.
 Issue #123: the creation opening is grounded in the scenario's player-known
 objective and stakes (Narrator directive plus a deterministic backstop that
 appends whichever the opening omits, no extra model call), and the campaign
-title is a one-time, scenario-grounded generation. Scenario fallback is logged
+title is a one-time, scenario-grounded generation. Issue #125: scenarios gain an optional player-known `opening_hook`; the opening
+is built around it and the backstop now inserts the in-world hook instead of a
+"Your purpose:" suffix (see architecture.md). Staging must verify narrative
+coherence, not word overlap. Scenario fallback is logged
 as `campaign_scenario_fallback` with reason `missing|invalid` and no story
 content. Objective actionability is prompt-enforced, not validated.
 
