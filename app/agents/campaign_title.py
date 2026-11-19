@@ -12,13 +12,15 @@ from app.guardrails.token_budget import TokenBudget
 
 _TITLE_PROMPT = (
     "Write a short campaign title (a few words) for a haunted-house text adventure, "
-    "based on the opening scene the user provides. Reply with the title only: "
-    "no quotes and no extra commentary."
+    "naming this specific story (its premise and objective), not the starting room or "
+    "its furnishings. Reply with the title only: no quotes and no extra commentary."
 )
 
 
 class CampaignTitleInput(BaseModel):
     opening: str
+    premise: str | None = None
+    objective: str | None = None
 
 
 class CampaignTitleOutput(BaseModel):
@@ -57,6 +59,15 @@ class CampaignTitleGenerator(BaseAgent):
             list[ChatCompletionMessageParam],
             [
                 {"role": "developer", "content": _TITLE_PROMPT},
-                {"role": "user", "content": f"Write the campaign title for this opening scene:\n{payload.opening}"},
+                {"role": "user", "content": self._user_content(payload)},
             ],
         )
+
+    @staticmethod
+    def _user_content(payload: CampaignTitleInput) -> str:
+        story = "".join(
+            f"{label}: {value}\n"
+            for label, value in (("Premise", payload.premise), ("Objective", payload.objective))
+            if value
+        )
+        return f"Write the campaign title.\n{story}Opening scene:\n{payload.opening}"

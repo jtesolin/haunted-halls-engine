@@ -129,8 +129,8 @@ def build_fallback_scenario() -> dict[str, Any]:
     return _validate(
         {
             "premise": "A cold draught has woken the sleeping house, and something within it wants to be found.",
-            "objective": "Learn what is haunting the halls and bring it to rest, or learn to live with it.",
-            "stakes": "If the haunting is left to fester, the house will keep you and its restless dead forever.",
+            "objective": "Find what the wronged spirit lost in these halls and return it before the house claims you.",
+            "stakes": "If the spirit's loss stays unanswered, the house will keep you and its restless dead forever.",
             "hidden_truth": "A wronged former resident lingers here, bound to an unfinished matter that the halls remember.",
             "beats": [
                 {"id": "first_sign", "clue": "Someone has recently disturbed the house's dust and left a trace of their passing."},
@@ -195,6 +195,40 @@ def build_story_context(state: dict[str, Any]) -> str | None:
     lines.append("HIDDEN possible outcomes (id: summary); others that fit the player's choices are fine:")
     lines += [f"- {o['id']}: {o['summary']}" for o in scenario["outcomes"]]
     return "\n".join(lines)
+
+
+_WORD = re.compile(r"[a-z]{4,}")
+
+
+def _words(text: str) -> set[str]:
+    return set(_WORD.findall(text.lower()))
+
+
+def build_opening_directive(state: dict[str, Any]) -> str:
+    """Player-known objective/stakes the creation-time opening must state in-world."""
+    scenario = read_scenario(state)
+    if scenario is None:
+        return ""
+    return (
+        " The opening must tell the player, in-world and without scripting steps, their concrete "
+        f"objective ({scenario['objective']}) and what is at stake ({scenario['stakes']}). "
+        "Never reveal hidden truths, undiscovered clues or possible outcomes."
+    )
+
+
+def ground_opening(opening: str, state: dict[str, Any]) -> str:
+    """Deterministic backstop: append player-known objective/stakes if the opening omits them.
+
+    shortcut: lexical overlap check (>=2 shared words), not semantic; upgrade only
+    if staging shows false passes.
+    """
+    scenario = read_scenario(state)
+    if scenario is None:
+        return opening
+    objective_words = _words(scenario["objective"])
+    if len(objective_words & _words(opening)) >= min(2, len(objective_words)):
+        return opening
+    return f"{opening.rstrip()}\n\nYour purpose: {scenario['objective']} {scenario['stakes']}"
 
 
 @dataclass

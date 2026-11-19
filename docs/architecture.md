@@ -170,6 +170,17 @@ transaction spans a model call. A terminal outcome is sticky: later markers are
 ignored and play continues as an epilogue. A future Story Director should
 replace those three functions behind the same interface, not add parallel state.
 
+### Opening objective and campaign title (#123)
+
+At creation the Narrator opening request carries the persisted scenario's
+player-known objective and stakes; `ground_opening` then deterministically
+appends a "Your purpose:" line if the opening shares fewer than two words with
+the objective (no extra model call). Hidden truth, beats and outcomes are never
+used. The campaign title is assigned **once at creation** (never renamed later)
+from the scenario premise, objective and opening, instructed to name the story
+rather than the room. Scenario fallback is logged as
+`campaign_scenario_fallback ... reason=missing|invalid` (no story content).
+
 ## Transactions, durable usage and concurrency
 
 Issue #117. A chat turn or campaign creation never holds a database

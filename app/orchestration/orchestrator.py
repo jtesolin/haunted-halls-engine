@@ -38,6 +38,8 @@ from app.game.character_names import generate_character_name
 from app.game.scenario import (
     apply_story_update,
     build_fallback_scenario,
+    build_opening_directive,
+    ground_opening,
     build_story_context,
     ensure_scenario,
     extract_story_update,
@@ -335,14 +337,18 @@ class ChatOrchestrator:
                     model=model,
                     scene_context=scene_context,
                     recent_turns=recent_turns,
-                    message=self._build_campaign_opening_request(),
+                    message=self._build_campaign_opening_request(initial_state),
                     story_context=build_story_context(initial_state),
                 )
+                opening_prompt = ground_opening(opening_prompt, initial_state)
+                scenario = initial_state["scenario"]
                 campaign_name = await self._generate_campaign_title(
                     owner_user_id=owner_user_id,
                     campaign_id=campaign_id,
                     turn_id=assistant_turn_id,
                     opening=opening_prompt,
+                    premise=scenario["premise"],
+                    objective=scenario["objective"],
                 )
         except TimeoutError as exc:
             raise HTTPException(status_code=502, detail="AI service timed out.") from exc
@@ -1413,12 +1419,13 @@ class ChatOrchestrator:
             )
         return None
 
-    def _build_campaign_opening_request(self) -> str:
+    def _build_campaign_opening_request(self, state: dict[str, Any]) -> str:
         return (
             "Using the authoritative current scene provided, write the opening scene for this "
             "haunted halls campaign. Establish immediate tension and end with a clear invitation "
             "for the player's first action. Do not invent contradictory rooms, exits, NPC "
             "presence, or item state."
+            + build_opening_directive(state)
         )
 
     async def _build_initial_campaign_state(
@@ -1433,6 +1440,14 @@ class ChatOrchestrator:
             campaign_id=campaign_id,
             turn_id=turn_id,
         )
+        if generated_abilities.scenario is None:
+            logger.warning(
+                "campaign_scenario_fallback owner_user_id=%s campaign_id=%s turn_id=%s reason=%s",
+                owner_user_id,
+                campaign_id,
+                turn_id,
+                generated_abilities.scenario_fallback_reason or "missing",
+            )
         initial_state = build_fresh_campaign_state()
         initial_state["scenario"] = (
             generated_abilities.scenario or build_fallback_scenario()
@@ -1523,7 +1538,9 @@ class ChatOrchestrator:
             request_id, started_at=start_time, success=True, usage=usage
         )
         return StarterAbilityGeneration(
-            abilities=list(starter_abilities), scenario=generated.output.scenario
+            abilities=list(starter_abilities),
+            scenario=generated.output.scenario,
+            scenario_fallback_reason=generated.output.scenario_fallback_reason,
         )
 
     async def _generate_narrator_response(
@@ -1592,9 +1609,16 @@ class ChatOrchestrator:
         return opening
 
     async def _generate_campaign_title(
-        self, *, owner_user_id: str, campaign_id: str, turn_id: str, opening: str
+        self,
+        *,
+        owner_user_id: str,
+        campaign_id: str,
+        turn_id: str,
+        opening: str,
+        premise: str | None = None,
+        objective: str | None = None,
     ) -> str:
-        payload = CampaignTitleInput(opening=opening)
+        payload = CampaignTitleInput(opening=opening, premise=premise, objective=objective)
         model = ModelPolicy.campaign_title_model()
         request_id = await self._reserve_model_call(
             owner_user_id=owner_user_id,
