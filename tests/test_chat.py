@@ -578,10 +578,9 @@ def test_create_campaign_uses_narrator_for_opening_and_title_generator_for_title
     assert len(prompts) == 2
     assert "write the opening scene for this haunted halls campaign" in prompts[0].lower()
     assert data["name"] == "Whispers in the West Wing"
-    assert (
-        data["messages"][0]["content"]
-        == "The candles hiss awake in the corridor. Where do you step first?"
-    )
+    content = data["messages"][0]["content"]
+    assert content.startswith("The candles hiss awake in the corridor. Where do you step first?")
+    assert "Your purpose:" in content
 
 
 def test_create_campaign_persists_authoritative_entry_hall_state_ai_disabled() -> None:

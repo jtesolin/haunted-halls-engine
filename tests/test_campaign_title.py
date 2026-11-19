@@ -45,3 +45,13 @@ def test_title_generator_blank_output_keeps_usage(monkeypatch) -> None:
 
     assert output.title == ""
     assert output.total_tokens == 5
+
+
+def test_title_prompt_includes_premise_and_objective_and_avoids_room_naming() -> None:
+    full = CampaignTitleGenerator._user_content(
+        CampaignTitleInput(opening="An Entry Hall.", premise="A bell tolls.", objective="Find who rings it.")
+    )
+    assert "Premise: A bell tolls." in full and "Objective: Find who rings it." in full
+    assert "Opening scene:\nAn Entry Hall." in full
+    assert "not the starting room" in title_module._TITLE_PROMPT
+    assert "Premise" not in CampaignTitleGenerator._user_content(CampaignTitleInput(opening="x"))

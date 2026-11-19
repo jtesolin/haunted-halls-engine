@@ -78,7 +78,10 @@ class StarterAbilityGenerator(BaseAgent):
                     "water surfaces between landings. No free flight, ongoing effects, swimming, "
                     "underwater access, hazard immunity, teleportation, or phasing. "
                     "Also fill the scenario field with a compact persistent story for this campaign: "
-                    "premise (inciting hook), objective (what the player is trying to do), stakes, "
+                    "premise (inciting hook), objective (one concrete action toward a tangible goal, such as "
+                    "rescue someone, retrieve an object, escape a danger or stop an antagonist; never "
+                    "just explore or learn what is happening), stakes (what is lost, and to whom, if "
+                    "the player fails), "
                     "hidden_truth (the secret conflict behind it), 2-4 beats (beat_id snake_case plus a "
                     "short clue the player can discover through exploration), and 2-3 outcomes "
                     "(outcome_id snake_case plus summary: include success, failure and a compromise). "
@@ -161,12 +164,16 @@ class StarterAbilityGenerator(BaseAgent):
         ]
         validate_starter_ability_definitions(abilities)
         scenario = None
+        reason: str | None = "missing"
         if provider_output.scenario is not None:
             try:
                 scenario = scenario_from_provider(provider_output.scenario)
+                reason = None
             except ValueError:
-                scenario = None  # unusable story: caller uses the fallback scenario
-        return StarterAbilityGeneration(abilities=abilities, scenario=scenario)
+                reason = "invalid"  # unusable story: caller uses the fallback scenario
+        return StarterAbilityGeneration(
+            abilities=abilities, scenario=scenario, scenario_fallback_reason=reason
+        )
 
     def _to_domain_ability(
         self,

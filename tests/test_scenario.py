@@ -18,6 +18,8 @@ from app.game.scenario import (
     StoryUpdate,
     apply_story_update,
     build_fallback_scenario,
+    build_opening_directive,
+    ground_opening,
     build_story_context,
     ensure_scenario,
     extract_story_update,
@@ -381,7 +383,8 @@ def test_opening_marker_discarded_and_marker_only_opening_rejected(monkeypatch, 
         _Narrator("You wake in a cold hall.\n[[STORY beats=rope outcome=rest]]"),
     )
     detail = asyncio.run(orchestrator_module.orchestrator.create_campaign(CampaignCreateRequest(), owner))
-    assert detail.messages[0].content == "You wake in a cold hall."
+    assert detail.messages[0].content.startswith("You wake in a cold hall.")
+    assert "[[STORY" not in detail.messages[0].content
     scenario = _state(detail.campaign_id, owner)["scenario"]
     assert scenario["status"] == "active" and not any(b["revealed"] for b in scenario["beats"])
 
@@ -405,3 +408,102 @@ def test_reflection_payload_excludes_hidden_scenario(monkeypatch, owner) -> None
     _chat(campaign_id, owner, _Narrator("Quiet."), monkeypatch)
     assert captured, "reflection was not invoked"
     assert all("The sexton never left." not in c and "ledger" not in c for c in captured)
+
+
+def test_opening_directive_and_grounding_use_only_player_known_fields() -> None:
+    state = _scenario_state()
+    directive = build_opening_directive(state)
+    assert "Find who rings it." in directive and "The bell tolls for you next." in directive
+    assert "sexton" not in directive and "frayed" not in directive  # hidden/beat text
+
+    vague = "Echoes drift through the hall. What do you do first?"
+    grounded = ground_opening(vague, state)
+    assert grounded.startswith(vague) and "Your purpose: Find who rings it." in grounded
+    assert "sexton" not in grounded and "ledger" not in grounded
+
+    concrete = "You must find who rings the bell before it tolls for you."
+    assert ground_opening(concrete, state) == concrete
+    assert ground_opening(vague, {}) == vague  # no scenario: unchanged
+
+
+def test_fallback_scenario_objective_is_concrete() -> None:
+    objective = build_fallback_scenario()["objective"].lower()
+    assert objective.startswith("find") and "return" in objective
+
+
+def test_fallback_reason_logged_without_story_content(monkeypatch, owner) -> None:
+    async def generate(return_usage=False):
+        return ModelCallResult(
+            output=starter_ability_generation().model_copy(update={"scenario_fallback_reason": "invalid"}),
+            usage=ModelUsage(input_tokens=1, output_tokens=1, total_tokens=2),
+        )
+
+    monkeypatch.setattr(orchestrator_module.orchestrator.starter_ability_generator, "generate", generate)
+    logged: list[str] = []
+    monkeypatch.setattr(
+        orchestrator_module.logger, "warning", lambda msg, *args, **kw: logged.append(msg % args)
+    )
+    asyncio.run(orchestrator_module.orchestrator.create_campaign(CampaignCreateRequest(), owner))
+    records = [m for m in logged if "campaign_scenario_fallback" in m]
+    assert len(records) == 1 and "reason=invalid" in records[0]
+    assert build_fallback_scenario()["hidden_truth"] not in records[0]
+
+
+def test_creation_grounds_vague_opening_and_feeds_scenario_to_title(monkeypatch, owner) -> None:
+    generation = starter_ability_generation().model_copy(update={"scenario": scenario_from_provider(_provider())})
+
+    async def generate(return_usage=False):
+        return ModelCallResult(output=generation, usage=ModelUsage(input_tokens=1, output_tokens=1, total_tokens=2))
+
+    titles = []
+
+    class _Title:
+        name = "CampaignTitleGenerator"
+
+        async def generate(self, *, payload, model=None):
+            titles.append(payload)
+            return type("T", (), dict(title='"Who Rings the Bell"', input_tokens=1, cached_input_tokens=0,
+                                      cache_write_input_tokens=0, output_tokens=1,
+                                      reasoning_output_tokens=0, total_tokens=2))()
+
+    narrator = _Narrator("Echoes drift through the hall. What do you do first?")
+    orch = orchestrator_module.orchestrator
+    monkeypatch.setattr(orch.starter_ability_generator, "generate", generate)
+    monkeypatch.setattr(orch, "narrator_agent", narrator)
+    monkeypatch.setattr(orch, "campaign_title_generator", _Title())
+    detail = asyncio.run(orch.create_campaign(CampaignCreateRequest(), owner))
+
+    assert detail.name == "Who Rings the Bell"
+    assert "Find who rings it." in narrator.payloads[0].player_message
+    assert "Your purpose: Find who rings it." in detail.messages[0].content
+    assert titles[0].opening == detail.messages[0].content  # title sees grounded opening
+    assert titles[0].premise == "A bell tolls in the cellar."
+    assert titles[0].objective == "Find who rings it."
+    persisted = json.dumps(detail.model_dump(mode="json"))
+    assert "sexton" not in persisted  # hidden truth never reaches the API response
+
+
+def test_ground_opening_fallback_scenario_boundary_and_generic_words() -> None:
+    state = build_fresh_campaign_state()
+    state["scenario"] = build_fallback_scenario()
+    generic = "The house creaks and the halls whisper before dawn. What do you do?"
+    assert "Your purpose:" in ground_opening(generic, state)  # generic words only
+    one = "A spirit stirs; you wonder about it. What do you do?"
+    assert "Your purpose:" in ground_opening(one, state)  # one distinctive word
+    two = "You resolve to find what the wronged spirit lost and return it."
+    out = ground_opening(two, state)  # objective covered, stakes still appended
+    assert "wronged spirit lost in these halls" not in out and "restless dead" in out
+
+
+def test_ground_opening_checks_objective_and_stakes_independently() -> None:
+    state = _scenario_state()  # objective "Find who rings it.", stakes "The bell tolls for you next."
+    obj_only = "You must find who rings the bell. What do you do?"
+    out = ground_opening(obj_only, state)
+    assert "The bell tolls for you next." in out and "Find who rings it." not in out
+    both = "Find who rings the bell, or it tolls for you next."
+    assert ground_opening(both, state) == both
+    neither = "Echoes drift. What now?"
+    out = ground_opening(neither, state)
+    assert "Find who rings it." in out and "The bell tolls for you next." in out
+    state["scenario"]["objective"] = "Bring them home."  # no distinctive words
+    assert "Bring them home." in ground_opening(both, state)

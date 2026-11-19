@@ -207,6 +207,8 @@ class StarterAbilityGeneration(BaseModel):
     abilities: list[GeneratedAbilityDefinition] = Field(min_length=2, max_length=2)
     # Validated persisted-form scenario from the same provider call, or None.
     scenario: dict[str, Any] | None = None
+    # Why `scenario` is None ("missing" | "invalid"); never contains story content.
+    scenario_fallback_reason: str | None = None
 
 
 class AbilityGameplayStatus(StrEnum):

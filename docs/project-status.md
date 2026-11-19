@@ -126,6 +126,13 @@ play continues as an epilogue; it is distinct from campaign deletion. See the
 state-ownership/seam notes in [architecture.md](architecture.md). No Story
 Director agent, extra per-turn model call, API field, or frontend change.
 
+Issue #123: the creation opening is grounded in the scenario's player-known
+objective and stakes (Narrator directive plus a deterministic backstop that
+appends whichever the opening omits, no extra model call), and the campaign
+title is a one-time, scenario-grounded generation. Scenario fallback is logged
+as `campaign_scenario_fallback` with reason `missing|invalid` and no story
+content. Objective actionability is prompt-enforced, not validated.
+
 ## Current Phase 8 status
 
 **8F4 is implemented; Phase 8 and #52 remain open.** `keen_eye` remains the
@@ -191,7 +198,7 @@ and production promotion. Isolated preview databases retain separate project
 counters; this is not an aggregate preview-wide or hard dollar budget.
 Quota-accounting redesign (#102) remains a separate follow-up. Campaign title
 generation (#103) now uses a dedicated `CampaignTitleGenerator` agent (nano model,
-minimal reasoning, 64-token output cap, opening text only) instead of a second
+minimal reasoning, 64-token output cap, premise, objective and opening text (#123; set once at creation) instead of a second
 full Narrator call; it is reserved/finalized per call like every other model call
 and recorded under its own `CampaignTitleGenerator` agent name.
 

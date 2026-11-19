@@ -129,8 +129,8 @@ def build_fallback_scenario() -> dict[str, Any]:
     return _validate(
         {
             "premise": "A cold draught has woken the sleeping house, and something within it wants to be found.",
-            "objective": "Learn what is haunting the halls and bring it to rest, or learn to live with it.",
-            "stakes": "If the haunting is left to fester, the house will keep you and its restless dead forever.",
+            "objective": "Find what the wronged spirit lost in these halls and return it before the house claims you.",
+            "stakes": "If the spirit's loss stays unanswered, the house will keep you and its restless dead forever.",
             "hidden_truth": "A wronged former resident lingers here, bound to an unfinished matter that the halls remember.",
             "beats": [
                 {"id": "first_sign", "clue": "Someone has recently disturbed the house's dust and left a trace of their passing."},
@@ -195,6 +195,54 @@ def build_story_context(state: dict[str, Any]) -> str | None:
     lines.append("HIDDEN possible outcomes (id: summary); others that fit the player's choices are fine:")
     lines += [f"- {o['id']}: {o['summary']}" for o in scenario["outcomes"]]
     return "\n".join(lines)
+
+
+_WORD = re.compile(r"[a-z]{4,}")
+
+
+# Generic words that say nothing about a specific objective.
+_STOP = frozenset(
+    "find what these this that with from your have been will before after into over "
+    "return learn house halls hall home room rooms them they their there where which "
+    "when while must keep bring".split()
+)
+
+
+def _words(text: str) -> set[str]:
+    return set(_WORD.findall(text.lower())) - _STOP
+
+
+def build_opening_directive(state: dict[str, Any]) -> str:
+    """Player-known objective/stakes the creation-time opening must state in-world."""
+    scenario = read_scenario(state)
+    if scenario is None:
+        return ""
+    return (
+        " The opening must tell the player, in-world and without scripting steps, their concrete "
+        f"objective ({scenario['objective']}) and what is at stake ({scenario['stakes']}). "
+        "Never reveal hidden truths, undiscovered clues or possible outcomes."
+    )
+
+
+def _covered(opening: str, text: str) -> bool:
+    words = _words(text)
+    return bool(words) and len(words & _words(opening)) >= min(2, len(words))
+
+
+def ground_opening(opening: str, state: dict[str, Any]) -> str:
+    """Deterministic backstop: append whichever of objective/stakes the opening omits.
+
+    shortcut: lexical overlap check (>=2 shared words each), not semantic; upgrade
+    only if staging shows false passes. Objective actionability is prompt-enforced,
+    not validated.
+    """
+    scenario = read_scenario(state)
+    if scenario is None:
+        return opening
+    missing = [scenario[k] for k in ("objective", "stakes") if not _covered(opening, scenario[k])]
+    if not missing:
+        return opening
+    return f"{opening.rstrip()}\n\nYour purpose: {' '.join(missing)}"
 
 
 @dataclass
