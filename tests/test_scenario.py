@@ -460,6 +460,25 @@ def test_provider_hook_copying_hidden_content_is_rejected(hook: str) -> None:
         scenario_from_provider(_provider(opening_hook=hook))
 
 
+_HIDDEN = "Wardens buried the missing treasure beneath chapel floorboards."
+
+
+def test_leak_check_word_overlap_boundary_without_verbatim_copy() -> None:
+    with pytest.raises(ValueError, match="leaks"):  # 3 shared words: wardens, buried, treasure
+        scenario_from_provider(_provider(hidden_truth=_HIDDEN, opening_hook="A widow whispers that wardens buried treasure somewhere."))
+    # 2 shared words (wardens, buried) is allowed
+    assert scenario_from_provider(_provider(hidden_truth=_HIDDEN, opening_hook="A widow whispers that wardens buried something."))
+
+
+def test_leak_check_ignores_words_the_player_already_knows() -> None:
+    hidden = "Wardens buried the chapel treasure beneath floorboards."
+    hook = "Wardens say you must recover the buried chapel treasure tonight."
+    known = _provider(hidden_truth=hidden, opening_hook=hook, objective="Recover the buried chapel treasure.")
+    assert scenario_from_provider(known)  # words restated from the public objective are not leaks
+    with pytest.raises(ValueError, match="leaks"):  # control: same hook, objective no longer public
+        scenario_from_provider(_provider(hidden_truth=hidden, opening_hook=hook))
+
+
 def test_benign_hook_and_fallback_pass_leak_check() -> None:
     assert scenario_from_provider(_provider())["opening_hook"]
     assert build_fallback_scenario()["opening_hook"]
