@@ -31,8 +31,8 @@ player text -> Action Parser -> ToolExecutor -> Story/rule progression
 ```
 
 Stable cross-repository authority and security invariants belong in
-[architecture.md](architecture.md). Review disposition policy belongs in
-[review-triage-policy.md](review-triage-policy.md). The broader roadmap is
+[architecture.md](architecture.md). Haunted Halls-specific Claude review requirements belong in
+[../.claude/dev-loop-policy.md](../.claude/dev-loop-policy.md), while generic loop mechanics are provided by the external `jt-dev-loop` plugin. The broader roadmap is
 [issue #52](https://github.com/jtesolin/haunted-halls-engine/issues/52).
 
 ## Completed phases
