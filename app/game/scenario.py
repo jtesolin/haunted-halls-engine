@@ -200,8 +200,16 @@ def build_story_context(state: dict[str, Any]) -> str | None:
 _WORD = re.compile(r"[a-z]{4,}")
 
 
+# Generic words that say nothing about a specific objective.
+_STOP = frozenset(
+    "find what these this that with from your have been will before after into over "
+    "return learn house halls hall home room rooms them they their there where which "
+    "when while must keep bring".split()
+)
+
+
 def _words(text: str) -> set[str]:
-    return set(_WORD.findall(text.lower()))
+    return set(_WORD.findall(text.lower())) - _STOP
 
 
 def build_opening_directive(state: dict[str, Any]) -> str:

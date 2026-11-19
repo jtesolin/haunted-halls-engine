@@ -480,3 +480,14 @@ def test_creation_grounds_vague_opening_and_feeds_scenario_to_title(monkeypatch,
     assert titles[0].objective == "Find who rings it."
     persisted = json.dumps(detail.model_dump(mode="json"))
     assert "sexton" not in persisted  # hidden truth never reaches the API response
+
+
+def test_ground_opening_fallback_scenario_boundary_and_generic_words() -> None:
+    state = build_fresh_campaign_state()
+    state["scenario"] = build_fallback_scenario()
+    generic = "The house creaks and the halls whisper before dawn. What do you do?"
+    assert "Your purpose:" in ground_opening(generic, state)  # generic words only
+    one = "A spirit stirs; you wonder about it. What do you do?"
+    assert "Your purpose:" in ground_opening(one, state)  # one distinctive word
+    two = "You resolve to find what the wronged spirit lost and return it."
+    assert ground_opening(two, state) == two  # >=2 distinctive words

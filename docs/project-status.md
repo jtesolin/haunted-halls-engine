@@ -191,7 +191,7 @@ and production promotion. Isolated preview databases retain separate project
 counters; this is not an aggregate preview-wide or hard dollar budget.
 Quota-accounting redesign (#102) remains a separate follow-up. Campaign title
 generation (#103) now uses a dedicated `CampaignTitleGenerator` agent (nano model,
-minimal reasoning, 64-token output cap, opening text only) instead of a second
+minimal reasoning, 64-token output cap, premise, objective and opening text (#123; set once at creation)) instead of a second
 full Narrator call; it is reserved/finalized per call like every other model call
 and recorded under its own `CampaignTitleGenerator` agent name.
 
