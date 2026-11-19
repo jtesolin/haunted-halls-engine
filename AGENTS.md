@@ -13,8 +13,8 @@ authoritative for local engineering practice.
   cross-repository roadmap and current status.
 - [docs/architecture.md](docs/architecture.md) — stable architecture and
   product/authority invariants.
-- [docs/review-triage-policy.md](docs/review-triage-policy.md) — canonical
-  review-disposition policy and comment contract.
+- [.claude/dev-loop-policy.md](.claude/dev-loop-policy.md) — Haunted Halls-specific
+  dev-loop architecture, validation, cross-repository, and escalation policy.
 
 ## Review and planning source hierarchy
 
@@ -25,8 +25,9 @@ When evaluating a current change, use sources in this order:
    acceptance criteria.
 3. [docs/project-status.md](docs/project-status.md).
 4. [docs/architecture.md](docs/architecture.md).
-5. Repository-specific `.github/copilot-instructions.md`.
-6. Older PR descriptions, historical issues, and conversational context only
+5. [.claude/dev-loop-policy.md](.claude/dev-loop-policy.md) when running the dev loop.
+6. Repository-specific `.github/copilot-instructions.md`.
+7. Older PR descriptions, historical issues, and conversational context only
    as supporting history when needed.
 
 If durable sources conflict, surface the current code and explicit issue intent
