@@ -27,6 +27,7 @@ class ScenarioProviderOutput(BaseModel):
     premise: str
     objective: str
     stakes: str
+    opening_hook: str
     hidden_truth: str
     beats: list[ScenarioBeatProviderOutput]
     outcomes: list[ScenarioOutcomeProviderOutput]
