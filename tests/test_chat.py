@@ -579,7 +579,7 @@ def test_create_campaign_uses_narrator_for_opening_and_title_generator_for_title
     assert "write the opening scene for this haunted halls campaign" in prompts[0].lower()
     assert data["name"] == "Whispers in the West Wing"
     content = data["messages"][0]["content"]
-    assert content.startswith("The candles hiss awake in the corridor. Where do you step first?")
+    assert content.endswith("The candles hiss awake in the corridor. Where do you step first?")
     assert "Your purpose" not in content
 
 

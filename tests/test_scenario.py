@@ -384,7 +384,7 @@ def test_opening_marker_discarded_and_marker_only_opening_rejected(monkeypatch, 
         _Narrator("You wake in a cold hall.\n[[STORY beats=rope outcome=rest]]"),
     )
     detail = asyncio.run(orchestrator_module.orchestrator.create_campaign(CampaignCreateRequest(), owner))
-    assert detail.messages[0].content.startswith("You wake in a cold hall.")
+    assert detail.messages[0].content.endswith("You wake in a cold hall.")  # fallback hook prepended
     assert "[[STORY" not in detail.messages[0].content
     scenario = _state(detail.campaign_id, owner)["scenario"]
     assert scenario["status"] == "active" and not any(b["revealed"] for b in scenario["beats"])
@@ -424,7 +424,8 @@ def test_opening_directive_and_grounding_use_only_player_known_fields() -> None:
     assert grounded == f"Echoes drift through the hall.\n\n{hook}\n\nWhat do you do first?"
     assert "Your purpose" not in grounded and "your task" not in grounded.lower()
     assert "never left" not in grounded and "ledger" not in grounded
-    assert ground_opening("Echoes drift. What now?", state).endswith(hook)  # single paragraph
+    single = ground_opening("Echoes drift. What now?", state)  # single paragraph: invitation stays last
+    assert single == f"{hook}\n\nEchoes drift. What now?"
 
     concrete = "You must find who rings the bell before it tolls for you."
     assert ground_opening(concrete, state) == concrete
@@ -443,6 +444,25 @@ def test_legacy_scenario_without_hook_is_valid_and_never_spliced() -> None:
 def test_blank_provider_hook_falls_back_to_invalid_scenario() -> None:
     with pytest.raises(ValueError):
         scenario_from_provider(_provider(opening_hook=" "))
+
+
+@pytest.mark.parametrize(
+    "hook",
+    [
+        "Remember: the sexton never left.",  # hidden_truth copy
+        "A frayed bell rope hangs there; follow it.",  # beat clue copy
+        "A ledger of the dead lies open, so the bell never stops.",  # clue + outcome overlap
+        "Someone whispers the sexton rests, the bell never stops tolling.",  # outcome words
+    ],
+)
+def test_provider_hook_copying_hidden_content_is_rejected(hook: str) -> None:
+    with pytest.raises(ValueError, match="leaks"):
+        scenario_from_provider(_provider(opening_hook=hook))
+
+
+def test_benign_hook_and_fallback_pass_leak_check() -> None:
+    assert scenario_from_provider(_provider())["opening_hook"]
+    assert build_fallback_scenario()["opening_hook"]
 
 
 def test_fallback_scenario_has_in_world_hook() -> None:

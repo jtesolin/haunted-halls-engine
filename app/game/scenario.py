@@ -114,7 +114,7 @@ def _validate(raw: Any) -> dict[str, Any]:
 
 def scenario_from_provider(output: ScenarioProviderOutput) -> dict[str, Any]:
     """Validate generated output into persisted form; raises ValueError if unusable."""
-    return _validate(
+    scenario = _validate(
         {
             "premise": output.premise,
             "objective": output.objective,
@@ -125,6 +125,25 @@ def scenario_from_provider(output: ScenarioProviderOutput) -> dict[str, Any]:
             "outcomes": [{"id": o.outcome_id, "summary": o.summary} for o in output.outcomes],
         }
     )
+    _reject_leaky_hook(scenario)
+    return scenario
+
+
+def _reject_leaky_hook(scenario: dict[str, Any]) -> None:
+    """The hook is shown verbatim to the player, so it must not copy hidden text.
+
+    shortcut: lexical (verbatim copy or >=3 shared distinctive words beyond the public
+    fields), not semantic; upgrade only if staging shows paraphrased leaks. Runs only on
+    provider output, never on persisted reads.
+    """
+    hook = scenario["opening_hook"]
+    own = _words(hook) - _words(" ".join(scenario[k] for k in ("premise", "objective", "stakes")))
+    hidden = [scenario["hidden_truth"]]
+    hidden += [b["clue"] for b in scenario["beats"]] + [o["summary"] for o in scenario["outcomes"]]
+    for text in hidden:
+        copied = text.lower().rstrip(". ")
+        if (len(copied) >= 15 and copied in hook.lower()) or len(own & _words(text)) >= 3:
+            raise ValueError("Scenario opening hook leaks hidden content.")
 
 
 def build_fallback_scenario() -> dict[str, Any]:
@@ -247,7 +266,8 @@ def ground_opening(opening: str, state: dict[str, Any]) -> str:
     """Deterministic backstop: if the opening conveys neither objective nor hook, insert the hook.
 
     The hook is authored as in-world narration, so it is inserted before the closing
-    paragraph (the player invitation) rather than spliced on as a meta directive. Scenarios
+    paragraph (the player invitation) rather than spliced on as a meta directive; a
+    single-paragraph opening gets it prepended so the invitation stays last. Scenarios
     without a hook (legacy) are left unchanged.
 
     shortcut: lexical overlap check (>=2 shared words), not semantic, and zero extra model
@@ -259,7 +279,7 @@ def ground_opening(opening: str, state: dict[str, Any]) -> str:
     if scenario is None or not hook or _covered(opening, scenario["objective"]) or _covered(opening, hook):
         return opening
     head, sep, tail = opening.rstrip().rpartition("\n\n")
-    return f"{head}\n\n{hook}\n\n{tail}" if sep else f"{opening.rstrip()}\n\n{hook}"
+    return f"{head}\n\n{hook}\n\n{tail}" if sep else f"{hook}\n\n{opening.strip()}"
 
 
 @dataclass
