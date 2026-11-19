@@ -476,6 +476,7 @@ def test_creation_grounds_vague_opening_and_feeds_scenario_to_title(monkeypatch,
     assert detail.name == "Who Rings the Bell"
     assert "Find who rings it." in narrator.payloads[0].player_message
     assert "Your purpose: Find who rings it." in detail.messages[0].content
+    assert titles[0].opening == detail.messages[0].content  # title sees grounded opening
     assert titles[0].premise == "A bell tolls in the cellar."
     assert titles[0].objective == "Find who rings it."
     persisted = json.dumps(detail.model_dump(mode="json"))
@@ -490,4 +491,19 @@ def test_ground_opening_fallback_scenario_boundary_and_generic_words() -> None:
     one = "A spirit stirs; you wonder about it. What do you do?"
     assert "Your purpose:" in ground_opening(one, state)  # one distinctive word
     two = "You resolve to find what the wronged spirit lost and return it."
-    assert ground_opening(two, state) == two  # >=2 distinctive words
+    out = ground_opening(two, state)  # objective covered, stakes still appended
+    assert "wronged spirit lost in these halls" not in out and "restless dead" in out
+
+
+def test_ground_opening_checks_objective_and_stakes_independently() -> None:
+    state = _scenario_state()  # objective "Find who rings it.", stakes "The bell tolls for you next."
+    obj_only = "You must find who rings the bell. What do you do?"
+    out = ground_opening(obj_only, state)
+    assert "The bell tolls for you next." in out and "Find who rings it." not in out
+    both = "Find who rings the bell, or it tolls for you next."
+    assert ground_opening(both, state) == both
+    neither = "Echoes drift. What now?"
+    out = ground_opening(neither, state)
+    assert "Find who rings it." in out and "The bell tolls for you next." in out
+    state["scenario"]["objective"] = "Bring them home."  # no distinctive words
+    assert "Bring them home." in ground_opening(both, state)

@@ -224,19 +224,25 @@ def build_opening_directive(state: dict[str, Any]) -> str:
     )
 
 
-def ground_opening(opening: str, state: dict[str, Any]) -> str:
-    """Deterministic backstop: append player-known objective/stakes if the opening omits them.
+def _covered(opening: str, text: str) -> bool:
+    words = _words(text)
+    return bool(words) and len(words & _words(opening)) >= min(2, len(words))
 
-    shortcut: lexical overlap check (>=2 shared words), not semantic; upgrade only
-    if staging shows false passes.
+
+def ground_opening(opening: str, state: dict[str, Any]) -> str:
+    """Deterministic backstop: append whichever of objective/stakes the opening omits.
+
+    shortcut: lexical overlap check (>=2 shared words each), not semantic; upgrade
+    only if staging shows false passes. Objective actionability is prompt-enforced,
+    not validated.
     """
     scenario = read_scenario(state)
     if scenario is None:
         return opening
-    objective_words = _words(scenario["objective"])
-    if len(objective_words & _words(opening)) >= min(2, len(objective_words)):
+    missing = [scenario[k] for k in ("objective", "stakes") if not _covered(opening, scenario[k])]
+    if not missing:
         return opening
-    return f"{opening.rstrip()}\n\nYour purpose: {scenario['objective']} {scenario['stakes']}"
+    return f"{opening.rstrip()}\n\nYour purpose: {' '.join(missing)}"
 
 
 @dataclass

@@ -174,7 +174,7 @@ replace those three functions behind the same interface, not add parallel state.
 
 At creation the Narrator opening request carries the persisted scenario's
 player-known objective and stakes; `ground_opening` then deterministically
-appends a "Your purpose:" line if the opening shares fewer than two words with
+appends a "Your purpose:" line with whichever of objective/stakes shares fewer than two words with
 the objective (no extra model call). Hidden truth, beats and outcomes are never
 used. The campaign title is assigned **once at creation** (never renamed later)
 from the scenario premise, objective and opening, instructed to name the story
