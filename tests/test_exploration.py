@@ -431,3 +431,18 @@ def test_route_and_passage_edges_written_by_the_engine_round_trip() -> None:
     assert e["rain_court/passage/crypt"].label == "unmapped passage"
     assert e["rain_court/route/channel_gap"].label == "Channel Gap"
     assert record_exploration(state) is False
+
+
+@pytest.mark.parametrize(
+    ("edge_id", "edge"),
+    [
+        ("north", {"from": "entry_hall", "kind": "exit", "label": "north"}),
+        ("crypt", {"from": "rain_court", "kind": "passage", "label": "unmapped passage", "to": "crypt", "traversed": True}),
+    ],
+)
+def test_projection_rejects_bare_edge_ids_without_the_from_kind_prefix(edge_id: str, edge: dict) -> None:
+    state = _rain_court_state()
+    state["exploration"]["rooms"].append("crypt")
+    _add(state, edge_id, **edge)
+    with pytest.raises(InvalidCampaignStateError):
+        _view(state)
