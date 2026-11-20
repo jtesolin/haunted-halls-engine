@@ -37,3 +37,11 @@ class ExplorationResponse(BaseModel):
     # Flat natural-language details of the current room, projected from the same
     # player-observable scene the Narrator receives.
     observations: list[str]
+
+
+class ExplorationRoomNotes(BaseModel):
+    # Last-known player observations of one visited room. Only the current room is
+    # refreshed from live perception; other rooms keep what the player last saw.
+    room: ExplorationLocation
+    current: bool
+    notes: list[str]

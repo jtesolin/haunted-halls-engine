@@ -285,11 +285,16 @@ def test_world_action_executes_exactly_once_and_grounds_narrator_with_npc_presen
             "game_state_updated",
             "world_action_executed",
             "game_state_updated",
+            # Observed world change refreshes the current room's journal notes.
+            "game_state_updated",
             "narrator_response_created",
         ]
-        world_event_payload = json.loads(events[-3].payload_json or "{}")
+        world_event_payload = json.loads(events[-4].payload_json or "{}")
         assert world_event_payload["action"] == "move_npc"
         assert world_event_payload["changed"] is True
+        # The observed NPC move is persisted as a journal note for the room it entered.
+        notes = final_state["exploration"]["notes"]["grand_corridor"]
+        assert any(n["key"] == "npc:old_caretaker" for n in notes)
 
     scene = captured_scene["scene"]
     assert scene.current_room.id == "grand_corridor"

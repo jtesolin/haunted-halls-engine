@@ -990,6 +990,18 @@ class ChatOrchestrator:
             current_turn_reward=current_turn_reward,
         )
         campaign_state = director_step_result.campaign_state
+        # A Director world action can change what the player sees after the first
+        # record above; refresh the current room's notes in the same turn write.
+        if tool_result.success:
+            observed_state = json.loads(campaign_state)
+            try:
+                if record_exploration(observed_state, world=self.tool_executor.world):
+                    writes.set_state(player_turn_id, observed_state)
+                    campaign_state = json.dumps(observed_state)
+            except InvalidCampaignStateError as exc:
+                raise HTTPException(
+                    status_code=500, detail="Campaign state could not be processed."
+                ) from exc
         current_turn_reveal = director_step_result.current_turn_reveal
         current_turn_reward = director_step_result.current_turn_reward
 

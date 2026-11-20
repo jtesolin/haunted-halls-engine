@@ -490,3 +490,131 @@ def test_projection_rejects_rooms_connected_only_to_each_other() -> None:
     }
     with pytest.raises(InvalidCampaignStateError):
         _view(state)
+
+
+# --- #132: persisted room notes and cross-room corrections -------------------
+
+
+def _notes(state: dict, room: str) -> list[str]:
+    from app.game.exploration import project_room_notes
+
+    result = project_room_notes(json.dumps(state), room)
+    assert result is not None
+    return result.notes
+
+
+def test_notes_persist_for_visited_room_and_ignore_unobserved_changes() -> None:
+    state = build_fresh_campaign_state()
+    before = _notes(state, "entry_hall")
+    assert any(n.startswith("Old Caretaker:") for n in before)
+    _move(state, "grand_corridor")
+    assert _notes(state, "entry_hall") == before
+    # World changes the player did not see must not alter or leak into old notes.
+    state["items"]["old_book"] = {**state["items"]["old_book"], "location": "room:entry_hall"}
+    state["npcs"]["old_caretaker"]["description"] = "Changed while away."
+    state["npcs"]["old_caretaker"]["status"] = "absent"
+    assert _notes(state, "entry_hall") == before
+    assert not any("Changed while away" in n for n in _notes(state, "entry_hall"))
+
+
+def test_seeing_npc_elsewhere_corrects_old_note_without_duplicates() -> None:
+    state = build_fresh_campaign_state()
+    _move(state, "grand_corridor")
+    state["npcs"]["old_caretaker"]["location"] = "grand_corridor"  # seen here now
+    record_exploration(state)
+    old = _notes(state, "entry_hall")
+    assert "Old Caretaker: last seen here; since seen in Grand Corridor." in old
+    assert not any(n.startswith("Old Caretaker: ") and "last seen" not in n for n in old)
+    here = _notes(state, "grand_corridor")
+    assert sum(n.startswith("Old Caretaker:") for n in here) == 1
+    record_exploration(state)  # idempotent
+    assert _notes(state, "entry_hall") == old
+    # Moves again: every older correction follows the latest sighting.
+    _move(state, "library")
+    state["npcs"]["old_caretaker"]["location"] = "library"
+    record_exploration(state)
+    for room in ("entry_hall", "grand_corridor"):
+        assert "Old Caretaker: last seen here; since seen in Library." in _notes(state, room)
+
+
+def test_revisit_updates_notes_and_drops_observed_absence() -> None:
+    state = build_fresh_campaign_state()
+    _move(state, "grand_corridor")
+    state["npcs"]["old_caretaker"]["location"] = "grand_corridor"
+    record_exploration(state)
+    state["npcs"]["old_caretaker"]["location"] = "library"  # unseen while away
+    state["items"]["brass_key"]["location"] = "player:current"
+    _move(state, "entry_hall")
+    notes = _notes(state, "entry_hall")
+    # The correction survives (still the last sighting); no stale "here" note.
+    assert [n for n in notes if "Old Caretaker" in n] == [
+        "Old Caretaker: last seen here; since seen in Grand Corridor."
+    ]
+    assert state["exploration"]["notes"]["entry_hall"][-1]["seen_in"] == "grand_corridor"
+    assert len(notes) == len(set(notes))
+    # Never reveals the unvisited library the caretaker walked to.
+    assert "Library" not in json.dumps(notes)
+
+
+def test_malformed_notes_fail_closed() -> None:
+    state = build_fresh_campaign_state()
+    state["exploration"]["notes"] = {"library": [{"key": "room", "text": "x"}]}
+    with pytest.raises(InvalidCampaignStateError):
+        _view(state)
+    state["exploration"]["notes"] = {"entry_hall": [{"key": "room", "text": "x", "seen_in": "entry_hall"}]}
+    with pytest.raises(InvalidCampaignStateError):
+        _view(state)
+    state["exploration"]["notes"] = {"entry_hall": [{"key": "a", "text": "x"}, {"key": "a", "text": "y"}]}
+    with pytest.raises(InvalidCampaignStateError):
+        _view(state)
+
+
+def test_room_notes_read_does_not_persist_legacy_state() -> None:
+    state = build_fresh_campaign_state()
+    del state["exploration"]
+    snapshot = json.dumps(state)
+    assert any(n.startswith("Old Caretaker:") for n in _notes(state, "entry_hall"))
+    assert json.dumps(state) == snapshot
+
+
+def test_room_notes_api_rejects_undiscovered_foreign_and_unauthenticated() -> None:
+    client = _client()
+    owner = _headers(client, "notes-owner")
+    other = _headers(client, "notes-other")
+    campaign_id = _campaign(client, owner)
+    base = f"/api/campaign/{campaign_id}/exploration/rooms"
+
+    assert client.get(f"{base}/entry_hall").status_code in {401, 403}
+    assert client.get(f"{base}/entry_hall", headers=other).status_code == 404
+    ok = client.get(f"{base}/entry_hall", headers=owner)
+    assert ok.status_code == 200 and ok.json()["current"] is True
+    assert any(n.startswith("Old Caretaker:") for n in ok.json()["notes"])
+    # Unvisited and nonexistent rooms are indistinguishable.
+    unvisited = client.get(f"{base}/library", headers=owner)
+    unknown = client.get(f"{base}/no_such_room", headers=owner)
+    assert unvisited.status_code == unknown.status_code == 404
+    assert unvisited.json() == {"detail": "Room not found"} == unknown.json()
+    assert (
+        client.get("/api/campaign/missing/exploration/rooms/entry_hall", headers=owner).status_code
+        == 404
+    )
+
+
+def test_room_notes_api_returns_frozen_notes_for_previous_room() -> None:
+    client = _client()
+    owner = _headers(client, "notes-prev")
+    campaign_id = _campaign(client, owner)
+    from app.db.session import get_engine as _engine
+
+    state = _persisted(campaign_id)
+    _move(state, "grand_corridor")
+    with _engine().begin() as conn:
+        conn.execute(
+            text("UPDATE campaigns SET state = :s WHERE campaign_id = :c"),
+            {"s": json.dumps(state), "c": campaign_id},
+        )
+    body = client.get(
+        f"/api/campaign/{campaign_id}/exploration/rooms/entry_hall", headers=owner
+    ).json()
+    assert body["current"] is False
+    assert any(n.startswith("Old Caretaker:") for n in body["notes"])

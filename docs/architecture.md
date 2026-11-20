@@ -184,6 +184,31 @@ engine currently has no hidden doors, locked exits, hazards or dynamic exits;
 those need their own authoritative producers (and edge invalidation) before the
 graph can represent them. Persisted edges are validated against the current authored world, so renaming, removing or re-targeting an authored exit or route makes the graph fail validation and the exploration API and `record_exploration` (every successful action) fail closed for affected campaigns; worlds are treated as immutable once campaigns exist, passage edges must be traversed and every visited room must be reachable from the first room over traversed edges; the migration policy is tracked in #131. Route ids/names are authored player-facing text already given to the Narrator and may hint at a destination without naming a room. Frontend visualization is a separate issue.
 
+### Journal room notes and cross-room corrections (#132)
+
+`state["exploration"]["notes"][room_id]` holds the player's last-known, flat
+natural-language notes for each visited room (`{key, text[, seen_in]}`; `key` is
+`room`, `route:<id>`, `item:<id>` or `npc:<id>`). They are player knowledge, not
+live world state:
+
+- Only the room the player is in is refreshed, from the same narrator-observable
+  scene as before, after the player action and again after a Director world action
+  in the same atomic turn write. Rooms the player left are never refreshed, so
+  unobserved changes cannot alter or leak into them.
+- A revisit replaces entries by key (no duplicates); an entity no longer seen in
+  the current room is dropped because its absence was observed.
+- Seeing an NPC/item in room C rewrites its entries in other rooms to "last seen
+  here; since seen in C" (`seen_in`), following the latest sighting. No travel
+  path or departure time is inferred, and corrections survive revisits.
+- `GET /api/campaign/{id}/exploration` keeps `observations` (current room notes).
+  `GET /api/campaign/{id}/exploration/rooms/{room_id}` returns
+  `{room, current, notes}` for a visited room. Unvisited and nonexistent room ids
+  both return 404 `Room not found`; campaign ownership is enforced as before.
+- Limits: no inference from rumors, sounds or narrative-only discoveries; notes
+  derive only from structured scene state. Persisted notes are validated
+  structurally (visited rooms only, unique keys, valid `seen_in`), and the text is
+  trusted server-written state like the rest of the campaign JSON.
+
 ## Campaign scenario ownership and Story Director seam
 
 `app/game/scenario.py` solely owns `state["scenario"]` (separate from the
