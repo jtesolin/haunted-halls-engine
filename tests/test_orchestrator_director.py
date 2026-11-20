@@ -379,6 +379,7 @@ def test_director_reveal_clue_executes_persists_and_grounds_narrator(
             "player_message_received",
             "action_parsed",
             "tool_executed",
+            "game_state_updated",  # legacy fixture lazily gains its exploration graph
             "world_action_executed",
             "game_state_updated",
             "narrator_response_created",

@@ -156,6 +156,34 @@ it to call `GET /api/character/{character_id}` for the active campaign.
   rows exist for a campaign, the earliest by `created_at`, tie-broken by
   ascending row id, is returned deterministically in both detail and list.
 
+### Exploration graph and API contract (#128)
+
+`state["exploration"]` in the authoritative campaign state JSON is the only
+persisted exploration record: visited room ids (stable authored room ids, so
+revisits reuse identities), the current room, and directed edges
+(`<room>/exit/<direction>`, `<room>/route/<route_id>`, `<room>/passage/<dest>`
+for movement with no authored exit/route, e.g. teleport/phasing). It is written
+only by `record_exploration` inside the turn's single atomic state write, so a
+failed turn (including a failed tool action) persists nothing; the graph is excluded from memory-model inputs; new campaigns record the start room at creation and
+legacy campaigns gain a baseline on their next successful action (a read of a
+legacy campaign projects the same baseline without persisting).
+
+Knowledge boundary: an edge's destination is stored only once the player has
+traversed it or sees it from a room whose destination they already visited;
+otherwise the API shows an anonymous `frontier-<hash>` node with no name (an edge seen earlier stays a frontier until the player is back in its source room, even if the destination was since visited by another route), so
+unvisited names and ids never leak. Current-room observations are not persisted:
+`GET /api/campaign/{campaign_id}/exploration` (authenticated, owner-scoped; 404
+for unknown/foreign campaigns, 500 `Exploration state is unavailable` for
+malformed state, including a recorded graph whose current room disagrees with the
+player's authoritative location; a read never synthesizes unrecorded movement; edge ids and labels must match what the engine writes, so a corrupted edge cannot echo unrecorded text) returns `current_location`, `nodes`, `edges` and a flat, de-duplicated list of
+natural-language `observations` projected from the same player-observable scene
+the Narrator receives (room description, nearby items with open/lit state, nearby
+NPCs, and traversal routes as neutral exit features). Because they are projected
+from authoritative state on read, they cannot go stale or contradict it. The
+engine currently has no hidden doors, locked exits, hazards or dynamic exits;
+those need their own authoritative producers (and edge invalidation) before the
+graph can represent them. Persisted edges are validated against the current authored world, so renaming, removing or re-targeting an authored exit or route makes the graph fail validation and the exploration API and `record_exploration` (every successful action) fail closed for affected campaigns; worlds are treated as immutable once campaigns exist, passage edges must be traversed and every visited room must be reachable from the first room over traversed edges; the migration policy is tracked in #131. Route ids/names are authored player-facing text already given to the Narrator and may hint at a destination without naming a room. Frontend visualization is a separate issue.
+
 ## Campaign scenario ownership and Story Director seam
 
 `app/game/scenario.py` solely owns `state["scenario"]` (separate from the

@@ -343,8 +343,12 @@ def redact_state_for_memory(campaign_state: str) -> str:
         state = json.loads(campaign_state)
     except (TypeError, ValueError):
         return "{}"  # unparseable: nothing safe to forward
-    if not isinstance(state, dict) or "scenario" not in state:
+    if not isinstance(state, dict):
         return campaign_state
+    # The exploration graph is internal bookkeeping; keep it out of memory-model cost.
+    had_exploration = state.pop("exploration", None) is not None
+    if "scenario" not in state:
+        return json.dumps(state) if had_exploration else campaign_state
     try:
         scenario = _validate(state["scenario"])
     except ValueError:
