@@ -163,15 +163,17 @@ persisted exploration record: visited room ids (stable authored room ids, so
 revisits reuse identities), the current room, and directed edges
 (`<room>/exit/<direction>`, `<room>/route/<route_id>`, `<room>/passage/<dest>`
 for movement with no authored exit/route, e.g. teleport/phasing). It is written
-only by `record_exploration` inside the turn's single atomic state write, so a
-failed turn (including a failed tool action) persists nothing; the graph is excluded from memory-model inputs; new campaigns record the start room at creation and
+only by `record_exploration` inside the turn's single atomic state write, so an
+errored turn persists nothing, and a failed tool action never creates a baseline, exploration facts or movement (see the #132 section for the one Director-observed refresh); the graph is excluded from memory-model inputs; new campaigns record the start room at creation and
 legacy campaigns gain a baseline on their next successful action (a read of a
 legacy campaign projects the same baseline without persisting).
 
 Knowledge boundary: an edge's destination is stored only once the player has
 traversed it or sees it from a room whose destination they already visited;
 otherwise the API shows an anonymous `frontier-<hash>` node with no name (an edge seen earlier stays a frontier until the player is back in its source room, even if the destination was since visited by another route), so
-unvisited names and ids never leak. Current-room observations are not persisted:
+unvisited names and ids never leak. Current-room observations are the current
+room's notes, refreshed from the live scene on read and never persisted by a read
+(see #132 below):
 `GET /api/campaign/{campaign_id}/exploration` (authenticated, owner-scoped; 404
 for unknown/foreign campaigns, 500 `Exploration state is unavailable` for
 malformed state, including a recorded graph whose current room disagrees with the
@@ -182,7 +184,44 @@ NPCs, and traversal routes as neutral exit features). Because they are projected
 from authoritative state on read, they cannot go stale or contradict it. The
 engine currently has no hidden doors, locked exits, hazards or dynamic exits;
 those need their own authoritative producers (and edge invalidation) before the
-graph can represent them. Persisted edges are validated against the current authored world, so renaming, removing or re-targeting an authored exit or route makes the graph fail validation and the exploration API and `record_exploration` (every successful action) fail closed for affected campaigns; worlds are treated as immutable once campaigns exist, passage edges must be traversed and every visited room must be reachable from the first room over traversed edges; the migration policy is tracked in #131. Route ids/names are authored player-facing text already given to the Narrator and may hint at a destination without naming a room. Frontend visualization is a separate issue.
+graph can represent them. Persisted edges are validated against the current authored world, so renaming, removing or re-targeting an authored exit or route makes the graph fail validation and the exploration API and `record_exploration` (every successful action, and an in-sync journal on a failed-tool turn) fail closed for affected campaigns; worlds are treated as immutable once campaigns exist, passage edges must be traversed and every visited room must be reachable from the first room over traversed edges; the migration policy is tracked in #131. Route ids/names are authored player-facing text already given to the Narrator and may hint at a destination without naming a room. Frontend visualization is a separate issue.
+
+### Journal room notes and cross-room corrections (#132)
+
+`state["exploration"]["notes"][room_id]` holds the player's last-known, flat
+natural-language notes for each visited room (`{key, text[, seen_in]}`; `key` is
+`room`, `route:<id>`, `item:<id>` or `npc:<id>`). They are player knowledge, not
+live world state:
+
+- Only the room the player is in is refreshed, from the same narrator-observable
+  scene as before, after the player action and again after a Director world action
+  in the same atomic turn write. Rooms the player left are never refreshed, so
+  unobserved changes cannot alter or leak into them.
+- A revisit replaces entries by key (no duplicates); an entity no longer seen in
+  the current room is dropped because its absence was observed.
+- Seeing an NPC/item in room C rewrites its entries in other rooms to "last seen
+  here; since seen in C" (`seen_in`), following the latest sighting. No travel
+  path or departure time is inferred, and corrections survive revisits.
+- `GET /api/campaign/{id}/exploration` keeps `observations` (current room notes).
+  `GET /api/campaign/{id}/exploration/rooms/{room_id}` returns
+  `{room, current, notes}` for a visited room. Unvisited and nonexistent room ids
+  both return 404 `Room not found`; campaign ownership is enforced as before.
+- Campaigns with a #128 graph but no notes yet (rooms visited before #132) return
+  `notes: []` for those rooms; they are not backfilled because that would read
+  unobserved world state. Notes accrue from the next turn whose journal refresh runs.
+- A failed tool action never creates a baseline, edges or movement. If a Director
+  world action changes the scene on that turn and the journal's `current` already
+  equals the player's authoritative location, the current room's notes are still
+  refreshed in the same atomic write (this can also add notes to a pre-#132 graph).
+  Malformed or stale exploration state on such a turn fails closed with 500
+  `Campaign state could not be processed.`, as on a successful action.
+- A read projection refreshes only the current room from the live scene and never
+  applies cross-room corrections to other rooms' persisted notes; those change only
+  in a turn write.
+- Limits: no inference from rumors, sounds or narrative-only discoveries; notes
+  derive only from structured scene state. Persisted notes are validated
+  structurally (visited rooms only, unique keys, valid `seen_in`), and the text is
+  trusted server-written state like the rest of the campaign JSON.
 
 ## Campaign scenario ownership and Story Director seam
 

@@ -17,9 +17,9 @@ from app.game.campaign_state import (
     InvalidCampaignStateError,
     load_strict_campaign_state_for_read,
 )
-from app.game.exploration import project_exploration
+from app.game.exploration import project_exploration, project_room_notes
 from app.game.items import inventory_item_ids
-from app.schemas.exploration import ExplorationResponse
+from app.schemas.exploration import ExplorationResponse, ExplorationRoomNotes
 from app.schemas.character import (
     CharacterAbility,
     CharacterDetail,
@@ -99,6 +99,33 @@ def get_campaign_exploration(
         raise HTTPException(
             status_code=500, detail="Exploration state is unavailable"
         ) from None
+
+
+@router.get(
+    "/campaign/{campaign_id}/exploration/rooms/{room_id}",
+    response_model=ExplorationRoomNotes,
+)
+def get_campaign_exploration_room(
+    campaign_id: str,
+    room_id: str,
+    _user_context: AuthenticatedUserContext = Depends(
+        require_authenticated_user_context
+    ),
+) -> ExplorationRoomNotes:
+    with session() as db:
+        campaign = db.get_campaign_for_owner(campaign_id, _user_context.internal_user_id)
+    if campaign is None or not campaign.state or campaign.state == "No campaign state yet.":
+        raise HTTPException(status_code=404, detail="Campaign not found")
+    try:
+        notes = project_room_notes(campaign.state, room_id)
+    except InvalidCampaignStateError:
+        raise HTTPException(
+            status_code=500, detail="Exploration state is unavailable"
+        ) from None
+    if notes is None:
+        # Same answer for unknown and undiscovered ids: no room-existence oracle.
+        raise HTTPException(status_code=404, detail="Room not found")
+    return notes
 
 
 @router.delete("/campaign/{campaign_id}", status_code=204)

@@ -144,6 +144,14 @@ location, discovered nodes/edges with anonymous frontier nodes, flat current-roo
 observations). No migration, extra model call, or frontend change; see
 [architecture.md](architecture.md). Frontend visualization is a separate issue.
 
+## Journal room notes (issue #132)
+
+The exploration journal persists last-known notes for every visited room, with
+deterministic cross-room NPC/item corrections, and exposes
+`GET /api/campaign/{campaign_id}/exploration/rooms/{room_id}` (404 for
+undiscovered rooms). Frontend room selection is haunted-halls#96. See
+[architecture.md](architecture.md).
+
 ## Current Phase 8 status
 
 **8F4 is implemented; Phase 8 and #52 remain open.** `keen_eye` remains the

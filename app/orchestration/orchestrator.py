@@ -955,8 +955,8 @@ class ChatOrchestrator:
 
         # Recorded from the post-tool authoritative location, in this turn's single
         # atomic write; a failed turn raises before anything is persisted.
-        # Failed tool results never create exploration facts (legacy baseline waits
-        # for the next successful action).
+        # Failed tool results never create a baseline or exploration facts; a
+        # Director change observed on such a turn is handled by the hook below.
         try:
             exploration_state_changed = tool_result.success and record_exploration(
                 updated_state, world=self.tool_executor.world, tool_result=tool_result
@@ -979,6 +979,7 @@ class ChatOrchestrator:
             writes.set_state(player_turn_id, updated_state)
             campaign_state = json.dumps(updated_state)
 
+        state_before_director = campaign_state
         director_step_result = await self._run_director_step(
             writes=writes,
             owner_user_id=owner_user_id,
@@ -990,6 +991,27 @@ class ChatOrchestrator:
             current_turn_reward=current_turn_reward,
         )
         campaign_state = director_step_result.campaign_state
+        # A Director world action can change what the player sees after the first
+        # record above; refresh the current room's notes in the same turn write.
+        # A failed tool never creates a baseline or knowledge by itself: it refreshes
+        # an existing journal only when the Director changed the world this turn and
+        # the journal is already at the player's location (no synthesized movement).
+        observed_state = json.loads(campaign_state)
+        journal = observed_state.get("exploration")
+        journal_in_sync = (
+            campaign_state != state_before_director
+            and isinstance(journal, dict)
+            and journal.get("current") == (observed_state.get("player") or {}).get("location")
+        )
+        if tool_result.success or journal_in_sync:
+            try:
+                if record_exploration(observed_state, world=self.tool_executor.world):
+                    writes.set_state(player_turn_id, observed_state)
+                    campaign_state = json.dumps(observed_state)
+            except InvalidCampaignStateError as exc:
+                raise HTTPException(
+                    status_code=500, detail="Campaign state could not be processed."
+                ) from exc
         current_turn_reveal = director_step_result.current_turn_reveal
         current_turn_reward = director_step_result.current_turn_reward
 

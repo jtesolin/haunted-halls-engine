@@ -285,11 +285,20 @@ def test_world_action_executes_exactly_once_and_grounds_narrator_with_npc_presen
             "game_state_updated",
             "world_action_executed",
             "game_state_updated",
+            # Observed world change refreshes the current room's journal notes.
+            "game_state_updated",
             "narrator_response_created",
         ]
-        world_event_payload = json.loads(events[-3].payload_json or "{}")
+        world_event_payload = json.loads(events[-4].payload_json or "{}")
         assert world_event_payload["action"] == "move_npc"
         assert world_event_payload["changed"] is True
+        # The observed NPC move is persisted as a journal note for the room it entered.
+        notes = final_state["exploration"]["notes"]["grand_corridor"]
+        assert any(n["key"] == "npc:old_caretaker" for n in notes)
+        corrected = final_state["exploration"]["notes"]["entry_hall"]
+        assert {"key": "npc:old_caretaker", "seen_in": "grand_corridor"}.items() <= next(
+            n for n in corrected if n["key"] == "npc:old_caretaker"
+        ).items()
 
     scene = captured_scene["scene"]
     assert scene.current_room.id == "grand_corridor"
@@ -1175,3 +1184,160 @@ def test_director_none_decision_materializes_and_persists_fresh_state_once(
         # The second turn must not re-trigger fresh-state materialization
         # since the sentinel was already resolved on the first turn.
         assert "game_state_updated" not in new_event_types
+
+
+def test_failed_tool_with_observed_director_change_refreshes_existing_notes(
+    monkeypatch,
+) -> None:
+    _install_move_and_narrator_stubs(monkeypatch)
+    monkeypatch.setattr(
+        orchestrator_module.orchestrator.action_parser_agent, "parse", _fake_parse_ambiguous
+    )
+    from app.schemas.director import WorldActionProposal
+
+    async def fake_propose(*, director_input, model=None):  # noqa: ANN001, ARG001, ANN202
+        return DirectorAgentResult(
+            proposal=WorldActionProposal(
+                world_action=MoveNpcWorldAction(
+                    npc_id="old_caretaker", destination_room_id="grand_corridor"
+                )
+            ),
+            usage=None,
+        )
+
+    monkeypatch.setattr(orchestrator_module.orchestrator.director_agent, "propose", fake_propose)
+    client = TestClient(app)
+    _headers, user_id = _resolve_user(client, "director-failed-tool-observed")
+
+    response = asyncio.run(
+        orchestrator_module.orchestrator.handle_chat(
+            ChatRequest(message="hmm"), owner_user_id=user_id
+        )
+    )
+
+    with session() as db:
+        campaign = db.get_campaign(response.campaign_id)
+        assert campaign is not None and campaign.state is not None
+        state = json.loads(campaign.state)
+    assert state["npcs"]["old_caretaker"]["location"] == "grand_corridor"
+    assert state["player"]["location"] == "entry_hall"
+    notes = state["exploration"]["notes"]["entry_hall"]
+    assert not any(n["key"] == "npc:old_caretaker" for n in notes)
+
+
+def _failed_tool_director_turn(
+    monkeypatch, state: dict, subject: str
+) -> tuple[str, HTTPException | None]:
+    """Run a failed-tool turn whose Director moves the caretaker out of entry_hall."""
+    _install_move_and_narrator_stubs(monkeypatch)
+    monkeypatch.setattr(
+        orchestrator_module.orchestrator.action_parser_agent, "parse", _fake_parse_ambiguous
+    )
+    from app.schemas.director import WorldActionProposal
+
+    async def fake_propose(*, director_input, model=None):  # noqa: ANN001, ARG001, ANN202
+        return DirectorAgentResult(
+            proposal=WorldActionProposal(
+                world_action=MoveNpcWorldAction(
+                    npc_id="old_caretaker", destination_room_id="grand_corridor"
+                )
+            ),
+            usage=None,
+        )
+
+    monkeypatch.setattr(orchestrator_module.orchestrator.director_agent, "propose", fake_propose)
+    _headers, user_id = _resolve_user(TestClient(app), subject)
+    campaign_id = f"campaign_{uuid4().hex}"
+    with session() as db:
+        db.create_campaign(
+            campaign_id=campaign_id,
+            owner_user_id=user_id,
+            name="Failed tool campaign",
+            description="Test campaign",
+            state=state,
+        )
+    request = ChatRequest(message="hmm", campaign_id=campaign_id)
+    try:
+        asyncio.run(orchestrator_module.orchestrator.handle_chat(request, owner_user_id=user_id))
+    except HTTPException as exc:
+        return campaign_id, exc
+    return campaign_id, None
+
+
+def _stored_state(campaign_id: str) -> dict:
+    with session() as db:
+        campaign = db.get_campaign(campaign_id)
+        assert campaign is not None and campaign.state is not None
+        return json.loads(campaign.state)
+
+
+def test_failed_tool_with_desynced_journal_writes_no_notes_or_movement(monkeypatch) -> None:
+    state = build_fresh_campaign_state()
+    state["player"]["location"] = "grand_corridor"  # journal still says entry_hall
+    before = json.loads(json.dumps(state["exploration"]))
+    campaign_id, error = _failed_tool_director_turn(monkeypatch, state, "failed-desync")
+    assert error is None
+    after = _stored_state(campaign_id)
+    assert after["npcs"]["old_caretaker"]["location"] == "grand_corridor"
+    assert after["exploration"] == before
+
+
+def test_failed_tool_never_creates_a_baseline(monkeypatch) -> None:
+    state = build_fresh_campaign_state()
+    del state["exploration"]
+    campaign_id, error = _failed_tool_director_turn(monkeypatch, state, "failed-legacy")
+    assert error is None
+    assert "exploration" not in _stored_state(campaign_id)
+
+
+def test_failed_tool_adds_current_room_notes_to_in_sync_graph_without_notes(
+    monkeypatch,
+) -> None:
+    state = build_fresh_campaign_state()
+    state["exploration"].pop("notes")
+    campaign_id, error = _failed_tool_director_turn(monkeypatch, state, "failed-no-notes")
+    assert error is None
+    after = _stored_state(campaign_id)
+    assert after["exploration"]["rooms"] == ["entry_hall"]
+    notes = after["exploration"]["notes"]["entry_hall"]
+    assert [n["key"] for n in notes if n["key"].startswith("npc:")] == []  # observed leaving
+
+
+def test_failed_tool_with_malformed_in_sync_journal_fails_closed(monkeypatch) -> None:
+    state = build_fresh_campaign_state()
+    state["exploration"]["notes"] = {"entry_hall": [{"key": [], "text": "x"}]}
+    campaign_id, error = _failed_tool_director_turn(monkeypatch, state, "failed-malformed")
+    assert error is not None and error.status_code == 500
+    assert error.detail == "Campaign state could not be processed."
+    assert _stored_state(campaign_id)["exploration"] == state["exploration"]
+    assert _stored_state(campaign_id)["npcs"]["old_caretaker"]["location"] == "entry_hall"
+
+
+def test_failed_tool_without_director_change_writes_no_notes(monkeypatch) -> None:
+    _install_move_and_narrator_stubs(monkeypatch)
+    monkeypatch.setattr(
+        orchestrator_module.orchestrator.action_parser_agent, "parse", _fake_parse_ambiguous
+    )
+
+    async def no_action(*, director_input, model=None):  # noqa: ANN001, ARG001, ANN202
+        return _no_action_result()
+
+    monkeypatch.setattr(orchestrator_module.orchestrator.director_agent, "propose", no_action)
+    state = build_fresh_campaign_state()
+    state["exploration"].pop("notes")  # pre-#132 graph, in sync with the player
+    _headers, user_id = _resolve_user(TestClient(app), "failed-no-director-change")
+    campaign_id = f"campaign_{uuid4().hex}"
+    with session() as db:
+        db.create_campaign(
+            campaign_id=campaign_id,
+            owner_user_id=user_id,
+            name="Failed tool campaign",
+            description="Test campaign",
+            state=state,
+        )
+    asyncio.run(
+        orchestrator_module.orchestrator.handle_chat(
+            ChatRequest(message="hmm", campaign_id=campaign_id), owner_user_id=user_id
+        )
+    )
+    assert "notes" not in _stored_state(campaign_id)["exploration"]
