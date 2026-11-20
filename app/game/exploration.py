@@ -82,6 +82,11 @@ def _read(state: dict[str, Any], world: World) -> dict[str, Any] | None:
         ):
             raise _malformed()
         _check_edge(world, edge_id, edge)
+    # Every visited room after the first must be the target of a traversed edge, so a
+    # corrupted `rooms` list cannot present a room the player never reached.
+    reached = {e["to"] for e in edges.values() if e["traversed"]}
+    if any(room not in reached for room in rooms[1:]):
+        raise _malformed()
     return raw
 
 
@@ -104,7 +109,11 @@ def _check_edge(world: World, edge_id: str, edge: dict[str, Any]) -> None:
         route = next((r for r in world.local_traversal_routes(source) if r.route_id == key), None)
         expected = route.name if route is not None and to in (None, route.destination) else None
     else:
-        expected = "unmapped passage" if to is not None and key == to else None
+        expected = (
+            "unmapped passage"
+            if to is not None and key == to and edge["traversed"]
+            else None
+        )
     if expected is None or edge["label"] != expected:
         raise _malformed()
 

@@ -462,3 +462,15 @@ def test_projection_rejects_edges_retargeted_away_from_authored_destination(edge
     _add(state, edge_id, **edge)
     with pytest.raises(InvalidCampaignStateError):
         _view(state)
+
+
+def test_projection_rejects_untraversed_passage_and_unreached_rooms() -> None:
+    state = _rain_court_state()
+    _move(state, "crypt")
+    state["exploration"]["edges"]["rain_court/passage/crypt"]["traversed"] = False
+    with pytest.raises(InvalidCampaignStateError):
+        _view(state)
+    state = _rain_court_state()
+    state["exploration"]["rooms"].append("crypt")  # never reached by any traversed edge
+    with pytest.raises(InvalidCampaignStateError):
+        _view(state)
