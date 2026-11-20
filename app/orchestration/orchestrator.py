@@ -955,8 +955,8 @@ class ChatOrchestrator:
 
         # Recorded from the post-tool authoritative location, in this turn's single
         # atomic write; a failed turn raises before anything is persisted.
-        # Failed tool results never create exploration facts (legacy baseline waits
-        # for the next successful action).
+        # Failed tool results never create a baseline or exploration facts; a
+        # Director change observed on such a turn is handled by the hook below.
         try:
             exploration_state_changed = tool_result.success and record_exploration(
                 updated_state, world=self.tool_executor.world, tool_result=tool_result

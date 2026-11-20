@@ -1223,3 +1223,91 @@ def test_failed_tool_with_observed_director_change_refreshes_existing_notes(
     assert state["player"]["location"] == "entry_hall"
     notes = state["exploration"]["notes"]["entry_hall"]
     assert not any(n["key"] == "npc:old_caretaker" for n in notes)
+
+
+def _failed_tool_director_turn(
+    monkeypatch, state: dict, subject: str
+) -> tuple[str, HTTPException | None]:
+    """Run a failed-tool turn whose Director moves the caretaker out of entry_hall."""
+    _install_move_and_narrator_stubs(monkeypatch)
+    monkeypatch.setattr(
+        orchestrator_module.orchestrator.action_parser_agent, "parse", _fake_parse_ambiguous
+    )
+    from app.schemas.director import WorldActionProposal
+
+    async def fake_propose(*, director_input, model=None):  # noqa: ANN001, ARG001, ANN202
+        return DirectorAgentResult(
+            proposal=WorldActionProposal(
+                world_action=MoveNpcWorldAction(
+                    npc_id="old_caretaker", destination_room_id="grand_corridor"
+                )
+            ),
+            usage=None,
+        )
+
+    monkeypatch.setattr(orchestrator_module.orchestrator.director_agent, "propose", fake_propose)
+    _headers, user_id = _resolve_user(TestClient(app), subject)
+    campaign_id = f"campaign_{uuid4().hex}"
+    with session() as db:
+        db.create_campaign(
+            campaign_id=campaign_id,
+            owner_user_id=user_id,
+            name="Failed tool campaign",
+            description="Test campaign",
+            state=state,
+        )
+    request = ChatRequest(message="hmm", campaign_id=campaign_id)
+    try:
+        asyncio.run(orchestrator_module.orchestrator.handle_chat(request, owner_user_id=user_id))
+    except HTTPException as exc:
+        return campaign_id, exc
+    return campaign_id, None
+
+
+def _stored_state(campaign_id: str) -> dict:
+    with session() as db:
+        campaign = db.get_campaign(campaign_id)
+        assert campaign is not None and campaign.state is not None
+        return json.loads(campaign.state)
+
+
+def test_failed_tool_with_desynced_journal_writes_no_notes_or_movement(monkeypatch) -> None:
+    state = build_fresh_campaign_state()
+    state["player"]["location"] = "grand_corridor"  # journal still says entry_hall
+    before = json.loads(json.dumps(state["exploration"]))
+    campaign_id, error = _failed_tool_director_turn(monkeypatch, state, "failed-desync")
+    assert error is None
+    after = _stored_state(campaign_id)
+    assert after["npcs"]["old_caretaker"]["location"] == "grand_corridor"
+    assert after["exploration"] == before
+
+
+def test_failed_tool_never_creates_a_baseline(monkeypatch) -> None:
+    state = build_fresh_campaign_state()
+    del state["exploration"]
+    campaign_id, error = _failed_tool_director_turn(monkeypatch, state, "failed-legacy")
+    assert error is None
+    assert "exploration" not in _stored_state(campaign_id)
+
+
+def test_failed_tool_adds_current_room_notes_to_in_sync_graph_without_notes(
+    monkeypatch,
+) -> None:
+    state = build_fresh_campaign_state()
+    state["exploration"].pop("notes")
+    campaign_id, error = _failed_tool_director_turn(monkeypatch, state, "failed-no-notes")
+    assert error is None
+    after = _stored_state(campaign_id)
+    assert after["exploration"]["rooms"] == ["entry_hall"]
+    notes = after["exploration"]["notes"]["entry_hall"]
+    assert [n["key"] for n in notes if n["key"].startswith("npc:")] == []  # observed leaving
+
+
+def test_failed_tool_with_malformed_in_sync_journal_fails_closed(monkeypatch) -> None:
+    state = build_fresh_campaign_state()
+    state["exploration"]["notes"] = {"entry_hall": [{"key": [], "text": "x"}]}
+    campaign_id, error = _failed_tool_director_turn(monkeypatch, state, "failed-malformed")
+    assert error is not None and error.status_code == 500
+    assert error.detail == "Campaign state could not be processed."
+    assert _stored_state(campaign_id)["exploration"] == state["exploration"]
+    assert _stored_state(campaign_id)["npcs"]["old_caretaker"]["location"] == "entry_hall"

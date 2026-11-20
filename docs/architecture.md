@@ -164,7 +164,7 @@ revisits reuse identities), the current room, and directed edges
 (`<room>/exit/<direction>`, `<room>/route/<route_id>`, `<room>/passage/<dest>`
 for movement with no authored exit/route, e.g. teleport/phasing). It is written
 only by `record_exploration` inside the turn's single atomic state write, so a
-failed turn (including a failed tool action) persists nothing; the graph is excluded from memory-model inputs; new campaigns record the start room at creation and
+errored turn persists nothing, and a failed tool action never creates a baseline, exploration facts or movement (see the #132 section for the one Director-observed refresh); the graph is excluded from memory-model inputs; new campaigns record the start room at creation and
 legacy campaigns gain a baseline on their next successful action (a read of a
 legacy campaign projects the same baseline without persisting).
 
@@ -184,7 +184,7 @@ NPCs, and traversal routes as neutral exit features). Because they are projected
 from authoritative state on read, they cannot go stale or contradict it. The
 engine currently has no hidden doors, locked exits, hazards or dynamic exits;
 those need their own authoritative producers (and edge invalidation) before the
-graph can represent them. Persisted edges are validated against the current authored world, so renaming, removing or re-targeting an authored exit or route makes the graph fail validation and the exploration API and `record_exploration` (every successful action) fail closed for affected campaigns; worlds are treated as immutable once campaigns exist, passage edges must be traversed and every visited room must be reachable from the first room over traversed edges; the migration policy is tracked in #131. Route ids/names are authored player-facing text already given to the Narrator and may hint at a destination without naming a room. Frontend visualization is a separate issue.
+graph can represent them. Persisted edges are validated against the current authored world, so renaming, removing or re-targeting an authored exit or route makes the graph fail validation and the exploration API and `record_exploration` (every successful action, and an in-sync journal on a failed-tool turn) fail closed for affected campaigns; worlds are treated as immutable once campaigns exist, passage edges must be traversed and every visited room must be reachable from the first room over traversed edges; the migration policy is tracked in #131. Route ids/names are authored player-facing text already given to the Narrator and may hint at a destination without naming a room. Frontend visualization is a separate issue.
 
 ### Journal room notes and cross-room corrections (#132)
 
@@ -208,7 +208,13 @@ live world state:
   both return 404 `Room not found`; campaign ownership is enforced as before.
 - Campaigns with a #128 graph but no notes yet (rooms visited before #132) return
   `notes: []` for those rooms; they are not backfilled because that would read
-  unobserved world state. Notes accrue from the next successful turn.
+  unobserved world state. Notes accrue from the next turn whose journal refresh runs.
+- A failed tool action never creates a baseline, edges or movement. If a Director
+  world action changes the scene on that turn and the journal's `current` already
+  equals the player's authoritative location, the current room's notes are still
+  refreshed in the same atomic write (this can also add notes to a pre-#132 graph).
+  Malformed or stale exploration state on such a turn fails closed with 500
+  `Campaign state could not be processed.`, as on a successful action.
 - Limits: no inference from rumors, sounds or narrative-only discoveries; notes
   derive only from structured scene state. Persisted notes are validated
   structurally (visited rooms only, unique keys, valid `seen_in`), and the text is
