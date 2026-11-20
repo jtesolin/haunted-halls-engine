@@ -111,6 +111,9 @@ def record_exploration(
 ) -> bool:
     """Fold the player's current location into the graph. True if state changed.
 
+    A legacy campaign (no graph yet) is baselined at the tool result's
+    `previous_location` when it moved, so its first move keeps its origin room.
+
     Idempotent; raises `InvalidCampaignStateError` on malformed persisted data.
     """
     player = state.get("player")
@@ -120,7 +123,10 @@ def record_exploration(
     before = copy.deepcopy(state.get("exploration"))
     ex = _read(state, world)
     if ex is None:
-        ex = {"rooms": [], "current": current, "edges": {}}
+        origin = tool_result.previous_location if tool_result else None
+        if not isinstance(origin, str) or world.get_room(origin) is None:
+            origin = current
+        ex = {"rooms": [origin], "current": origin, "edges": {}}
         state["exploration"] = ex
     visited: list[str] = ex["rooms"]
     edges: dict[str, dict[str, Any]] = ex["edges"]

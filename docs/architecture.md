@@ -181,7 +181,7 @@ NPCs, and traversal routes as neutral exit features). Because they are projected
 from authoritative state on read, they cannot go stale or contradict it. The
 engine currently has no hidden doors, locked exits, hazards or dynamic exits;
 those need their own authoritative producers (and edge invalidation) before the
-graph can represent them. Frontend visualization is a separate issue.
+graph can represent them. Route ids/names are authored player-facing text already given to the Narrator and may hint at a destination without naming a room. Frontend visualization is a separate issue.
 
 ## Campaign scenario ownership and Story Director seam
 

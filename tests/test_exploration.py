@@ -321,3 +321,25 @@ def test_failed_move_records_no_exploration_facts(legacy: bool) -> None:
     after = _persisted(campaign_id)
     assert after.get("exploration") == state.get("exploration")
     assert after["player"]["location"] == "entry_hall"
+
+
+def test_legacy_campaign_first_move_keeps_origin_room() -> None:
+    client = _client()
+    headers = _headers(client, "explore-legacy-move")
+    user_id = headers[INTERNAL_USER_ID_HEADER_NAME]
+    campaign_id = _campaign(client, headers)
+    state = _persisted(campaign_id)
+    del state["exploration"]
+    with get_engine().begin() as conn:
+        conn.execute(
+            text("UPDATE campaigns SET state = :s WHERE campaign_id = :c"),
+            {"s": json.dumps(state), "c": campaign_id},
+        )
+    asyncio.run(orchestrator_module.orchestrator.handle_chat(
+        ChatRequest(message="go north", campaign_id=campaign_id), owner_user_id=user_id,
+    ))
+    body = client.get(f"/api/campaign/{campaign_id}/exploration", headers=headers).json()
+    assert [n["id"] for n in body["nodes"] if n["kind"] == "room"] == ["entry_hall", "grand_corridor"]
+    edges = {e["id"]: e for e in body["edges"]}
+    assert edges["entry_hall/exit/north"]["traversed"]
+    assert edges["grand_corridor/exit/south"]["target"] == "entry_hall"
