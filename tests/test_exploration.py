@@ -369,3 +369,19 @@ def test_projection_rejects_graph_that_disagrees_with_player_location() -> None:
     # The turn path still records real movement.
     assert record_exploration(state) is True
     assert _view(state).current_location.id == "grand_corridor"
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda e: e["entry_hall/exit/north"].update(label="crypt"),
+        lambda e: e["entry_hall/exit/north"].update(to=None, traversed=True),
+        lambda e: e.__setitem__("entry_hall/exit/secret_vault", e["entry_hall/exit/north"]),
+        lambda e: e["entry_hall/exit/north"].update(**{"from": "entry_hall", "to": "entry_hall"}),
+    ],
+)
+def test_projection_rejects_inconsistent_edges_so_nothing_unrecorded_is_echoed(mutate) -> None:
+    state = build_fresh_campaign_state()
+    mutate(state["exploration"]["edges"])
+    with pytest.raises(InvalidCampaignStateError):
+        _view(state)

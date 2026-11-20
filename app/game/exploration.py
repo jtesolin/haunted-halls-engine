@@ -76,7 +76,31 @@ def _read(state: dict[str, Any], world: World) -> dict[str, Any] | None:
             or not isinstance(edge.get("traversed"), bool)
         ):
             raise _malformed()
+        _check_edge(world, edge_id, edge)
     return raw
+
+
+def _check_edge(world: World, edge_id: str, edge: dict[str, Any]) -> None:
+    """Every string the API echoes (id, label) must be exactly what the engine writes."""
+    source, kind, to = edge["from"], edge["kind"], edge["to"]
+    prefix = f"{source}/{kind}/"
+    key = edge_id.removeprefix(prefix)
+    if (
+        not edge_id.startswith(prefix)
+        or source == to
+        or (edge["traversed"] and to is None)
+    ):
+        raise _malformed()
+    if kind == "exit":
+        expected = key if key in world.rooms[source].exits else None
+    elif kind == "route":
+        expected = next(
+            (r.name for r in world.local_traversal_routes(source) if r.route_id == key), None
+        )
+    else:
+        expected = "unmapped passage" if to is not None and key == to else None
+    if expected is None or edge["label"] != expected:
+        raise _malformed()
 
 
 def _traversal_edge(

@@ -175,7 +175,7 @@ unvisited names and ids never leak. Current-room observations are not persisted:
 `GET /api/campaign/{campaign_id}/exploration` (authenticated, owner-scoped; 404
 for unknown/foreign campaigns, 500 `Exploration state is unavailable` for
 malformed state, including a recorded graph whose current room disagrees with the
-player's authoritative location; a read never synthesizes unrecorded movement) returns `current_location`, `nodes`, `edges` and a flat, de-duplicated list of
+player's authoritative location; a read never synthesizes unrecorded movement; edge ids and labels must match what the engine writes, so a corrupted edge cannot echo unrecorded text) returns `current_location`, `nodes`, `edges` and a flat, de-duplicated list of
 natural-language `observations` projected from the same player-observable scene
 the Narrator receives (room description, nearby items with open/lit state, nearby
 NPCs, and traversal routes as neutral exit features). Because they are projected
