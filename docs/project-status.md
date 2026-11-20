@@ -136,6 +136,14 @@ coherence, not word overlap. Scenario fallback is logged
 as `campaign_scenario_fallback` with reason `missing|invalid` and no story
 content. Objective actionability is prompt-enforced, not validated.
 
+## Exploration graph and API (issue #128)
+
+Campaigns persist a player-discovered exploration graph in campaign state and
+expose it read-only at `GET /api/campaign/{campaign_id}/exploration` (current
+location, discovered nodes/edges with anonymous frontier nodes, flat current-room
+observations). No migration, extra model call, or frontend change; see
+[architecture.md](architecture.md). Frontend visualization is a separate issue.
+
 ## Current Phase 8 status
 
 **8F4 is implemented; Phase 8 and #52 remain open.** `keen_eye` remains the

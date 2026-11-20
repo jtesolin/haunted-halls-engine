@@ -56,6 +56,7 @@ from app.game.abilities import (
     validate_starter_ability_definitions,
 )
 from app.game.character_progression import ensure_character_progression_state, unlock_ability
+from app.game.exploration import record_exploration
 from app.game.narrator_scene import build_narrator_scene_context
 from app.game.narrative import NARRATIVE_CLUES
 from app.game.progression_rewards import (
@@ -952,8 +953,20 @@ class ChatOrchestrator:
                 status_code=500, detail="Campaign state could not be processed."
             ) from exc
 
+        # Recorded from the post-tool authoritative location, in this turn's single
+        # atomic write; a failed turn raises before anything is persisted.
+        try:
+            exploration_state_changed = record_exploration(
+                updated_state, world=self.tool_executor.world, tool_result=tool_result
+            )
+        except InvalidCampaignStateError as exc:
+            raise HTTPException(
+                status_code=500, detail="Campaign state could not be processed."
+            ) from exc
+
         authoritative_state_changed = (
             scenario_state_changed
+            or exploration_state_changed
             or bool(tool_result.state_delta)
             or initial_state is not None
             or campaign_state == "No campaign state yet."

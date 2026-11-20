@@ -289,10 +289,12 @@ def test_real_incompatible_traversal_turn_is_narrated_without_story_or_movement(
     assert "remain" in response.reply
     assert signals == [None]
     with session() as db:
-        assert _load_campaign_state(db.get_campaign(campaign_id)) == state
+        persisted = _load_campaign_state(db.get_campaign(campaign_id))
+        # The fixture's stale graph is re-baselined at the real location; nothing moved.
+        assert persisted.pop("exploration")["current"] == "grand_corridor"
+        assert persisted == {k: v for k, v in state.items() if k != "exploration"}
         events = db.list_campaign_events(campaign_id)
         assert sum(event.type == "tool_execution_failed" for event in events) == 1
-        assert not any(event.type == "game_state_updated" for event in events)
     text = "\n".join(str(message.get("content", "")) for message in messages_seen)
     assert '"traversal_failure"' in text and "You remain where you started." in text
     assert '"traversal_effect"' not in text

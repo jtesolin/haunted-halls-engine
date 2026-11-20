@@ -169,4 +169,8 @@ def build_fresh_campaign_state() -> dict[str, Any]:
     state["npcs"] = default_npcs_state()
     items.update(random_starting_inventory_items())
     sync_inventory_projection(state, items)
+    # Local import: exploration.py imports from this module.
+    from app.game.exploration import record_exploration
+
+    record_exploration(state)
     return state

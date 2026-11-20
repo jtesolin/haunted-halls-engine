@@ -17,7 +17,9 @@ from app.game.campaign_state import (
     InvalidCampaignStateError,
     load_strict_campaign_state_for_read,
 )
+from app.game.exploration import project_exploration
 from app.game.items import inventory_item_ids
+from app.schemas.exploration import ExplorationResponse
 from app.schemas.character import (
     CharacterAbility,
     CharacterDetail,
@@ -76,6 +78,27 @@ def get_campaign(
         truncated=truncated,
         character_id=character_id,
     )
+
+
+@router.get(
+    "/campaign/{campaign_id}/exploration", response_model=ExplorationResponse
+)
+def get_campaign_exploration(
+    campaign_id: str,
+    _user_context: AuthenticatedUserContext = Depends(
+        require_authenticated_user_context
+    ),
+) -> ExplorationResponse:
+    with session() as db:
+        campaign = db.get_campaign_for_owner(campaign_id, _user_context.internal_user_id)
+    if campaign is None or not campaign.state or campaign.state == "No campaign state yet.":
+        raise HTTPException(status_code=404, detail="Campaign not found")
+    try:
+        return project_exploration(campaign.state)
+    except InvalidCampaignStateError:
+        raise HTTPException(
+            status_code=500, detail="Exploration state is unavailable"
+        ) from None
 
 
 @router.delete("/campaign/{campaign_id}", status_code=204)

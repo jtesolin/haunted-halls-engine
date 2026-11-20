@@ -1,0 +1,301 @@
+import asyncio
+import json
+
+import pytest
+from fastapi import HTTPException
+from fastapi.testclient import TestClient
+from sqlalchemy import text
+
+import app.orchestration.orchestrator as orchestrator_module
+from app.api.dependencies import INTERNAL_USER_ID_HEADER_NAME
+from app.core.config import settings
+from app.db.session import get_engine
+from app.game.campaign_state import (
+    InvalidCampaignStateError,
+    build_fresh_campaign_state,
+)
+from app.game.exploration import project_exploration, record_exploration
+from app.main import app
+from app.schemas.chat import ChatRequest
+from app.schemas.internal_auth import CANONICAL_GOOGLE_ISSUER
+
+pytestmark = pytest.mark.usefixtures("fake_runtime_model_provider")
+TOKEN = "test-internal-engine-service-token-0000000000000000000000000000000000000000000000"
+
+
+def _headers(client: TestClient, subject: str) -> dict[str, str]:
+    response = client.post(
+        "/internal/auth/users/resolve",
+        json={
+            "identity_provider": "google",
+            "provider_issuer": CANONICAL_GOOGLE_ISSUER,
+            "provider_subject": subject,
+            "email": f"{subject}@example.com",
+            "email_verified": True,
+            "display_name": "Explorer",
+            "avatar_url": None,
+        },
+        headers={"Authorization": f"Bearer {TOKEN}"},
+    )
+    assert response.status_code == 200
+    return {
+        "Authorization": f"Bearer {TOKEN}",
+        INTERNAL_USER_ID_HEADER_NAME: response.json()["user_id"],
+    }
+
+
+def _client() -> TestClient:
+    settings.INTERNAL_ENGINE_SERVICE_TOKEN = TOKEN
+    return TestClient(app)
+
+
+def _move(state: dict, room: str) -> None:
+    state["player"]["location"] = room
+    record_exploration(state)
+
+
+def _view(state: dict):
+    return project_exploration(json.dumps(state))
+
+
+def _edges(view) -> dict:
+    return {e.id: e for e in view.edges}
+
+
+def test_new_campaign_knows_only_start_room_with_anonymous_frontier() -> None:
+    state = build_fresh_campaign_state()
+    view = _view(state)
+    assert [n.id for n in view.nodes if n.kind == "room"] == ["entry_hall"]
+    frontier = [n for n in view.nodes if n.kind == "frontier"]
+    assert len(frontier) == 1 and frontier[0].name is None
+    assert "Grand Corridor" not in view.model_dump_json()
+    assert "grand_corridor" not in view.model_dump_json()
+    assert view.current_location.id == "entry_hall"
+
+
+def test_revisits_reuse_ids_and_links_do_not_duplicate_with_cycles() -> None:
+    state = build_fresh_campaign_state()
+    for room in ["grand_corridor", "entry_hall", "grand_corridor", "library", "grand_corridor"]:
+        _move(state, room)
+    ids = [n.id for n in _view(state).nodes if n.kind == "room"]
+    assert ids == ["entry_hall", "grand_corridor", "library"]
+    edges = state["exploration"]["edges"]
+    assert len(edges) == len(set(edges))
+    # Both directions of the corridor<->hall cycle exist exactly once, resolved.
+    e = _edges(_view(state))
+    assert e["entry_hall/exit/north"].target == "grand_corridor"
+    assert e["grand_corridor/exit/south"].target == "entry_hall"
+    assert e["entry_hall/exit/north"].traversed and e["grand_corridor/exit/south"].traversed
+    before = json.dumps(state["exploration"], sort_keys=True)
+    assert record_exploration(state) is False
+    assert json.dumps(state["exploration"], sort_keys=True) == before
+
+
+def test_unvisited_destinations_stay_hidden_and_seen_exit_to_known_room_resolves() -> None:
+    state = build_fresh_campaign_state()
+    _move(state, "grand_corridor")
+    view = _view(state)
+    dumped = view.model_dump_json()
+    for secret in ("Library", "library", "Dining", "dining_room", "Staircase", "staircase"):
+        assert secret not in dumped
+    e = _edges(view)
+    assert e["grand_corridor/exit/east"].target.startswith("frontier-")
+    # Seen from the visited side, the way back is not anonymous.
+    assert e["grand_corridor/exit/south"].target == "entry_hall"
+    assert not e["grand_corridor/exit/south"].traversed
+
+
+def test_frontier_ids_are_stable_and_distinct() -> None:
+    state = build_fresh_campaign_state()
+    _move(state, "grand_corridor")
+    first = _edges(_view(state))
+    second = _edges(_view(state))
+    targets = [e.target for e in first.values() if e.target.startswith("frontier-")]
+    assert len(targets) == len(set(targets)) == 3
+    assert {k: v.target for k, v in first.items()} == {k: v.target for k, v in second.items()}
+
+
+def test_one_way_and_unusual_movement_are_directed_edges() -> None:
+    state = build_fresh_campaign_state()
+    _move(state, "crypt")  # no authored exit from entry_hall: teleport/phasing
+    e = _edges(_view(state))
+    passage = e["entry_hall/passage/crypt"]
+    assert (passage.kind, passage.target, passage.traversed) == ("passage", "crypt", True)
+    assert "crypt/passage/entry_hall" not in e  # one-way: no reverse link invented
+
+
+def test_traversal_route_edge_distinct_from_walking_exit() -> None:
+    state = build_fresh_campaign_state()
+    for room in ["grand_corridor", "dining_room", "rain_court"]:
+        _move(state, room)
+    e = _edges(_view(state))
+    assert e["rain_court/route/channel_gap"].kind == "route"
+    assert e["rain_court/route/channel_gap"].target.startswith("frontier-")
+    assert "Far Bank" not in _view(state).model_dump_json()
+
+
+def test_observations_track_world_changes_without_duplicates() -> None:
+    state = build_fresh_campaign_state()
+    _move(state, "grand_corridor")
+    _move(state, "library")
+    obs = _view(state).observations
+    assert any(o.startswith("Old Book:") and o.endswith("It is closed.") for o in obs)
+    assert any(o.startswith("Brass Key:") for o in obs)
+    assert any(o.startswith("Library Ghost:") for o in obs)
+    assert len(obs) == len(set(obs))
+    state["items"]["old_book"]["properties"]["is_open"] = True  # state changes
+    state["items"]["brass_key"]["location"] = "player:current"  # taken
+    state["npcs"]["library_ghost"]["status"] = "absent"
+    obs = _view(state).observations
+    assert any(o.startswith("Old Book:") and o.endswith("It is open.") for o in obs)
+    assert not any("closed" in o for o in obs if o.startswith("Old Book"))
+    assert not any(o.startswith(("Brass Key", "Library Ghost")) for o in obs)
+    # Ordinary exits are not duplicated as details.
+    assert not any(o.startswith("west") for o in obs)
+
+
+def test_route_observation_is_neutral_exit_feature() -> None:
+    state = build_fresh_campaign_state()
+    for room in ["grand_corridor", "dining_room", "rain_court"]:
+        _move(state, room)
+    obs = _view(state).observations
+    assert "Channel Gap: a 3-metre gap crossing." in obs
+    assert "Far Bank" not in " ".join(obs) and "Upper Gallery" not in " ".join(obs)
+
+
+def test_legacy_state_projects_without_persisting_and_malformed_fails_closed() -> None:
+    state = build_fresh_campaign_state()
+    del state["exploration"]
+    snapshot = json.dumps(state)
+    assert _view(state).current_location.id == "entry_hall"
+    assert json.dumps(state) == snapshot
+    state["exploration"] = {"rooms": ["nowhere"], "current": "nowhere", "edges": {}}
+    with pytest.raises(InvalidCampaignStateError):
+        _view(state)
+    with pytest.raises(InvalidCampaignStateError):
+        record_exploration(state)
+
+
+def _campaign(client: TestClient, headers) -> str:
+    response = client.post("/api/campaign", json={}, headers=headers)
+    assert response.status_code == 201
+    return response.json()["campaign_id"]
+
+
+def _persisted(campaign_id: str) -> dict:
+    with get_engine().connect() as conn:
+        return json.loads(
+            conn.execute(
+                text("SELECT state FROM campaigns WHERE campaign_id = :c"),
+                {"c": campaign_id},
+            ).scalar_one()
+        )
+
+
+def test_api_requires_auth_and_is_owner_scoped() -> None:
+    client = _client()
+    owner = _headers(client, "explore-owner")
+    other = _headers(client, "explore-other")
+    campaign_id = _campaign(client, owner)
+    url = f"/api/campaign/{campaign_id}/exploration"
+
+    assert client.get(url).status_code in {401, 403}
+    assert client.get(url, headers=other).status_code == 404
+    assert client.get("/api/campaign/missing/exploration", headers=owner).status_code == 404
+    response = client.get(url, headers=owner)
+    assert response.status_code == 200
+    body = response.json()
+    assert set(body) == {"current_location", "nodes", "edges", "observations"}
+    assert body["current_location"]["id"] == "entry_hall"
+    assert any(o.startswith("Old Caretaker:") for o in body["observations"])
+
+
+def test_api_campaigns_are_isolated() -> None:
+    client = _client()
+    headers = _headers(client, "explore-iso")
+    first, second = _campaign(client, headers), _campaign(client, headers)
+    with get_engine().begin() as conn:
+        state = _persisted(first)
+        _move(state, "grand_corridor")
+        conn.execute(
+            text("UPDATE campaigns SET state = :s WHERE campaign_id = :c"),
+            {"s": json.dumps(state), "c": first},
+        )
+    assert client.get(f"/api/campaign/{first}/exploration", headers=headers).json()["current_location"]["id"] == "grand_corridor"
+    assert client.get(f"/api/campaign/{second}/exploration", headers=headers).json()["current_location"]["id"] == "entry_hall"
+
+
+def test_api_malformed_state_returns_500_without_leak() -> None:
+    client = _client()
+    headers = _headers(client, "explore-bad")
+    campaign_id = _campaign(client, headers)
+    state = _persisted(campaign_id)
+    state["exploration"] = {"rooms": "x"}
+    with get_engine().begin() as conn:
+        conn.execute(
+            text("UPDATE campaigns SET state = :s WHERE campaign_id = :c"),
+            {"s": json.dumps(state), "c": campaign_id},
+        )
+    response = client.get(f"/api/campaign/{campaign_id}/exploration", headers=headers)
+    assert response.status_code == 500
+    assert response.json() == {"detail": "Exploration state is unavailable"}
+
+
+def test_turn_move_persists_graph_and_failed_turn_persists_nothing(monkeypatch) -> None:
+    client = _client()
+    headers = _headers(client, "explore-turn")
+    user_id = headers[INTERNAL_USER_ID_HEADER_NAME]
+    campaign_id = _campaign(client, headers)
+    before = _persisted(campaign_id)
+
+    async def broken(**kwargs):  # noqa: ANN003, ANN202
+        raise RuntimeError("narrator down")
+
+    real = orchestrator_module.orchestrator.narrator_agent.generate
+    monkeypatch.setattr(orchestrator_module.orchestrator.narrator_agent, "generate", broken)
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(orchestrator_module.orchestrator.handle_chat(
+            ChatRequest(message="go north", campaign_id=campaign_id), owner_user_id=user_id,
+        ))
+    assert exc.value.status_code == 502
+    assert _persisted(campaign_id) == before  # no location, node or edge written
+
+    monkeypatch.setattr(orchestrator_module.orchestrator.narrator_agent, "generate", real)
+    asyncio.run(orchestrator_module.orchestrator.handle_chat(
+        ChatRequest(message="go north", campaign_id=campaign_id), owner_user_id=user_id,
+    ))
+    body = client.get(f"/api/campaign/{campaign_id}/exploration", headers=headers).json()
+    assert body["current_location"]["id"] == "grand_corridor"
+    assert [n["id"] for n in body["nodes"] if n["kind"] == "room"] == ["entry_hall", "grand_corridor"]
+    edge = next(e for e in body["edges"] if e["id"] == "entry_hall/exit/north")
+    assert edge["traversed"] and edge["target"] == "grand_corridor"
+
+
+def test_ability_traversal_records_route_edge_and_reveals_landing() -> None:
+    from app.schemas.chat import ToolExecutionResult
+    from app.schemas.generated_abilities import (
+        AbilityGameplayResult,
+        AbilityGameplayStatus,
+        AbilityTraversalEffect,
+        TraversalMethod,
+    )
+
+    state = build_fresh_campaign_state()
+    for room in ["grand_corridor", "dining_room", "rain_court"]:
+        _move(state, room)
+    state["player"]["location"] = "far_bank"
+    result = ToolExecutionResult(
+        success=True, summary="crossed",
+        ability_result=AbilityGameplayResult(
+            ability_id="x", status=AbilityGameplayStatus.RESOLVED,
+            traversal_effect=AbilityTraversalEffect(
+                method=TraversalMethod.LEVITATION, route_id="channel_gap",
+                route_name="Channel Gap", origin="rain_court",
+                destination="far_bank", destination_name="Far Bank",
+            ),
+        ),
+    )
+    assert record_exploration(state, tool_result=result)
+    e = _edges(_view(state))
+    assert (e["rain_court/route/channel_gap"].target, e["rain_court/route/channel_gap"].traversed) == ("far_bank", True)
+    assert "rain_court/passage/far_bank" not in e
