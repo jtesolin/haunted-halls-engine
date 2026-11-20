@@ -343,3 +343,29 @@ def test_legacy_campaign_first_move_keeps_origin_room() -> None:
     edges = {e["id"]: e for e in body["edges"]}
     assert edges["entry_hall/exit/north"]["traversed"]
     assert edges["grand_corridor/exit/south"]["target"] == "entry_hall"
+
+
+def test_observations_are_deduplicated() -> None:
+    state = build_fresh_campaign_state()
+    _move(state, "library")
+    twin = dict(state["items"]["brass_key"])
+    state["items"]["brass_key_twin"] = {**twin, "id": "brass_key_twin"}
+    state["items"]["twin_of_room"] = {
+        **twin, "id": "twin_of_room", "name": "A",
+        "description": "", "location": "room:library",
+    }
+    obs = _view(state).observations
+    assert len(obs) == len(set(obs))
+    assert sum(o.startswith("Brass Key:") for o in obs) == 1
+
+
+def test_projection_rejects_graph_that_disagrees_with_player_location() -> None:
+    state = build_fresh_campaign_state()
+    state["player"]["location"] = "grand_corridor"  # graph still ends at entry_hall
+    snapshot = json.dumps(state)
+    with pytest.raises(InvalidCampaignStateError):
+        _view(state)
+    assert json.dumps(state) == snapshot
+    # The turn path still records real movement.
+    assert record_exploration(state) is True
+    assert _view(state).current_location.id == "grand_corridor"

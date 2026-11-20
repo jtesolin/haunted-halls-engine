@@ -174,7 +174,8 @@ otherwise the API shows an anonymous `frontier-<hash>` node with no name (an edg
 unvisited names and ids never leak. Current-room observations are not persisted:
 `GET /api/campaign/{campaign_id}/exploration` (authenticated, owner-scoped; 404
 for unknown/foreign campaigns, 500 `Exploration state is unavailable` for
-malformed state) returns `current_location`, `nodes`, `edges` and a flat list of
+malformed state, including a recorded graph whose current room disagrees with the
+player's authoritative location; a read never synthesizes unrecorded movement) returns `current_location`, `nodes`, `edges` and a flat, de-duplicated list of
 natural-language `observations` projected from the same player-observable scene
 the Narrator receives (room description, nearby items with open/lit state, nearby
 NPCs, and traversal routes as neutral exit features). Because they are projected

@@ -181,7 +181,7 @@ def _observations(campaign_state: str, world: World) -> list[str]:
         f"{r.name}: a {r.distance_metres}-metre {r.kind.value} crossing."
         for r in scene.traversal_routes
     )
-    return lines
+    return list(dict.fromkeys(lines))  # one entry per distinct fact, order kept
 
 
 def project_exploration(campaign_state: str, *, world: World = DEFAULT_WORLD) -> ExplorationResponse:
@@ -191,7 +191,14 @@ def project_exploration(campaign_state: str, *, world: World = DEFAULT_WORLD) ->
     is exactly what its next successful turn will persist.
     """
     state = load_strict_campaign_state_for_read(campaign_state)
-    # Reject malformed state / compute a transient graph without touching the source.
+    # A recorded graph must already end at the authoritative location: a read never
+    # synthesizes movement no turn recorded (only an absent graph is baselined).
+    recorded = state.get("exploration")
+    if recorded is not None:
+        _read(state, world)
+        if recorded["current"] != state.get("player", {}).get("location"):
+            raise _malformed()
+    # Compute a transient graph without touching the source.
     scratch = copy.deepcopy(state)
     record_exploration(scratch, world=world)
     ex = scratch.get("exploration")
