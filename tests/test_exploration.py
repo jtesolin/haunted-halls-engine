@@ -618,3 +618,73 @@ def test_room_notes_api_returns_frozen_notes_for_previous_room() -> None:
     ).json()
     assert body["current"] is False
     assert any(n.startswith("Old Caretaker:") for n in body["notes"])
+
+
+def test_item_state_change_updates_note_and_taken_item_is_dropped() -> None:
+    state = build_fresh_campaign_state()
+    _move(state, "grand_corridor")
+    _move(state, "library")
+    before = state["exploration"]["notes"]["library"]
+    assert [n["text"] for n in before if n["key"] == "item:old_book"][0].endswith("It is closed.")
+    state["items"]["old_book"]["properties"]["is_open"] = True
+    record_exploration(state)
+    book = [n for n in state["exploration"]["notes"]["library"] if n["key"] == "item:old_book"]
+    assert len(book) == 1 and book[0]["text"].endswith("It is open.")
+    state["items"]["brass_key"]["location"] = "player:current"
+    record_exploration(state)
+    assert not any(n["key"] == "item:brass_key" for n in state["exploration"]["notes"]["library"])
+
+
+def test_item_seen_elsewhere_corrects_old_room_note() -> None:
+    state = build_fresh_campaign_state()
+    _move(state, "grand_corridor")
+    _move(state, "library")
+    state["items"]["brass_key"]["location"] = "room:grand_corridor"  # unseen move
+    _move(state, "grand_corridor")
+    entry = next(e for e in state["exploration"]["notes"]["library"] if e["key"] == "item:brass_key")
+    assert entry["text"] == "Brass Key: last seen here; since seen in Grand Corridor."
+    assert entry["seen_in"] == "grand_corridor"
+
+
+@pytest.mark.parametrize("key", [[], {}, 7, None, "dup"])
+def test_malformed_note_keys_fail_closed_not_typeerror(key) -> None:
+    state = build_fresh_campaign_state()
+    entries = [{"key": key, "text": "x"}]
+    if key == "dup":
+        entries.append({"key": "dup", "text": "y"})
+    state["exploration"]["notes"] = {"entry_hall": entries}
+    with pytest.raises(InvalidCampaignStateError):
+        _view(state)
+    with pytest.raises(InvalidCampaignStateError):
+        record_exploration(state)
+
+
+def _store(campaign_id: str, state) -> None:
+    with get_engine().begin() as conn:
+        conn.execute(
+            text("UPDATE campaigns SET state = :s WHERE campaign_id = :c"),
+            {"s": state if isinstance(state, str) else json.dumps(state), "c": campaign_id},
+        )
+
+
+def test_room_notes_api_malformed_legacy_and_empty_state() -> None:
+    client = _client()
+    owner = _headers(client, "notes-edge")
+    campaign_id = _campaign(client, owner)
+    url = f"/api/campaign/{campaign_id}/exploration/rooms/entry_hall"
+    state = _persisted(campaign_id)
+
+    legacy = {k: v for k, v in state.items() if k != "exploration"}
+    _store(campaign_id, legacy)
+    ok = client.get(url, headers=owner)
+    assert ok.status_code == 200 and ok.json()["notes"]
+    assert "exploration" not in _persisted(campaign_id)  # a read never persists
+
+    state["exploration"]["notes"] = {"entry_hall": [{"key": [], "text": "x"}]}
+    _store(campaign_id, state)
+    bad = client.get(url, headers=owner)
+    assert bad.status_code == 500
+    assert bad.json() == {"detail": "Exploration state is unavailable"}
+
+    _store(campaign_id, "No campaign state yet.")
+    assert client.get(url, headers=owner).status_code == 404

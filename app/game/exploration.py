@@ -9,9 +9,10 @@ so a failed turn leaves no exploration facts. Nothing here calls a model.
 Knowledge boundary: a connection's destination stays unknown (`to` is None, shown
 as an anonymous frontier node) until the player traverses it or sees it from a
 room whose destination they have already visited. Unvisited room names/ids are
-never stored or returned. Observations are not stored: they are projected on read
-from the narrator's player-observable scene (`build_narrator_scene_context`), so
-they track items/NPCs/state changes without a second copy that could go stale.
+never stored or returned. Current-room observations come from the narrator's
+player-observable scene (`build_narrator_scene_context`), so they track
+items/NPCs/state changes; a read refreshes the current room from the live scene
+and never persists.
 
 Room notes (#132): `exploration["notes"][room_id]` is a flat list of
 `{"key", "text"[, "seen_in"]}` entries, the player's last-known observations of a
@@ -114,8 +115,7 @@ def _check_notes(notes: Any, rooms: list[str]) -> None:
     for room_id, entries in notes.items():
         if room_id not in rooms or not isinstance(entries, list):
             raise _malformed()
-        keys = [e.get("key") if isinstance(e, dict) else None for e in entries]
-        if len(set(keys)) != len(keys) or not all(
+        if not all(
             isinstance(e, dict)
             and isinstance(e.get("key"), str)
             and isinstance(e.get("text"), str)
@@ -123,6 +123,8 @@ def _check_notes(notes: Any, rooms: list[str]) -> None:
             and e.get("seen_in") != room_id
             for e in entries
         ):
+            raise _malformed()
+        if len({e["key"] for e in entries}) != len(entries):
             raise _malformed()
 
 

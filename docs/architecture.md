@@ -171,7 +171,9 @@ legacy campaign projects the same baseline without persisting).
 Knowledge boundary: an edge's destination is stored only once the player has
 traversed it or sees it from a room whose destination they already visited;
 otherwise the API shows an anonymous `frontier-<hash>` node with no name (an edge seen earlier stays a frontier until the player is back in its source room, even if the destination was since visited by another route), so
-unvisited names and ids never leak. Current-room observations are not persisted:
+unvisited names and ids never leak. Current-room observations are the current
+room's notes, refreshed from the live scene on read and never persisted by a read
+(see #132 below):
 `GET /api/campaign/{campaign_id}/exploration` (authenticated, owner-scoped; 404
 for unknown/foreign campaigns, 500 `Exploration state is unavailable` for
 malformed state, including a recorded graph whose current room disagrees with the
@@ -204,6 +206,9 @@ live world state:
   `GET /api/campaign/{id}/exploration/rooms/{room_id}` returns
   `{room, current, notes}` for a visited room. Unvisited and nonexistent room ids
   both return 404 `Room not found`; campaign ownership is enforced as before.
+- Campaigns with a #128 graph but no notes yet (rooms visited before #132) return
+  `notes: []` for those rooms; they are not backfilled because that would read
+  unobserved world state. Notes accrue from the next successful turn.
 - Limits: no inference from rumors, sounds or narrative-only discoveries; notes
   derive only from structured scene state. Persisted notes are validated
   structurally (visited rooms only, unique keys, valid `seen_in`), and the text is

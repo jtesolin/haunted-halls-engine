@@ -295,6 +295,10 @@ def test_world_action_executes_exactly_once_and_grounds_narrator_with_npc_presen
         # The observed NPC move is persisted as a journal note for the room it entered.
         notes = final_state["exploration"]["notes"]["grand_corridor"]
         assert any(n["key"] == "npc:old_caretaker" for n in notes)
+        corrected = final_state["exploration"]["notes"]["entry_hall"]
+        assert {"key": "npc:old_caretaker", "seen_in": "grand_corridor"}.items() <= next(
+            n for n in corrected if n["key"] == "npc:old_caretaker"
+        ).items()
 
     scene = captured_scene["scene"]
     assert scene.current_room.id == "grand_corridor"
@@ -1180,3 +1184,42 @@ def test_director_none_decision_materializes_and_persists_fresh_state_once(
         # The second turn must not re-trigger fresh-state materialization
         # since the sentinel was already resolved on the first turn.
         assert "game_state_updated" not in new_event_types
+
+
+def test_failed_tool_with_observed_director_change_refreshes_existing_notes(
+    monkeypatch,
+) -> None:
+    _install_move_and_narrator_stubs(monkeypatch)
+    monkeypatch.setattr(
+        orchestrator_module.orchestrator.action_parser_agent, "parse", _fake_parse_ambiguous
+    )
+    from app.schemas.director import WorldActionProposal
+
+    async def fake_propose(*, director_input, model=None):  # noqa: ANN001, ARG001, ANN202
+        return DirectorAgentResult(
+            proposal=WorldActionProposal(
+                world_action=MoveNpcWorldAction(
+                    npc_id="old_caretaker", destination_room_id="grand_corridor"
+                )
+            ),
+            usage=None,
+        )
+
+    monkeypatch.setattr(orchestrator_module.orchestrator.director_agent, "propose", fake_propose)
+    client = TestClient(app)
+    _headers, user_id = _resolve_user(client, "director-failed-tool-observed")
+
+    response = asyncio.run(
+        orchestrator_module.orchestrator.handle_chat(
+            ChatRequest(message="hmm"), owner_user_id=user_id
+        )
+    )
+
+    with session() as db:
+        campaign = db.get_campaign(response.campaign_id)
+        assert campaign is not None and campaign.state is not None
+        state = json.loads(campaign.state)
+    assert state["npcs"]["old_caretaker"]["location"] == "grand_corridor"
+    assert state["player"]["location"] == "entry_hall"
+    notes = state["exploration"]["notes"]["entry_hall"]
+    assert not any(n["key"] == "npc:old_caretaker" for n in notes)
