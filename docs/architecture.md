@@ -164,13 +164,13 @@ revisits reuse identities), the current room, and directed edges
 (`<room>/exit/<direction>`, `<room>/route/<route_id>`, `<room>/passage/<dest>`
 for movement with no authored exit/route, e.g. teleport/phasing). It is written
 only by `record_exploration` inside the turn's single atomic state write, so a
-failed turn persists nothing; new campaigns record the start room at creation and
-legacy campaigns gain a baseline on their next successful turn (a read of a
+failed turn (including a failed tool action) persists nothing; the graph is excluded from memory-model inputs; new campaigns record the start room at creation and
+legacy campaigns gain a baseline on their next successful action (a read of a
 legacy campaign projects the same baseline without persisting).
 
 Knowledge boundary: an edge's destination is stored only once the player has
 traversed it or sees it from a room whose destination they already visited;
-otherwise the API shows an anonymous `frontier-<hash>` node with no name, so
+otherwise the API shows an anonymous `frontier-<hash>` node with no name (an edge seen earlier stays a frontier until the player is back in its source room, even if the destination was since visited by another route), so
 unvisited names and ids never leak. Current-room observations are not persisted:
 `GET /api/campaign/{campaign_id}/exploration` (authenticated, owner-scoped; 404
 for unknown/foreign campaigns, 500 `Exploration state is unavailable` for

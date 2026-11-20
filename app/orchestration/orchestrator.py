@@ -955,8 +955,10 @@ class ChatOrchestrator:
 
         # Recorded from the post-tool authoritative location, in this turn's single
         # atomic write; a failed turn raises before anything is persisted.
+        # Failed tool results never create exploration facts (legacy baseline waits
+        # for the next successful action).
         try:
-            exploration_state_changed = record_exploration(
+            exploration_state_changed = tool_result.success and record_exploration(
                 updated_state, world=self.tool_executor.world, tool_result=tool_result
             )
         except InvalidCampaignStateError as exc:

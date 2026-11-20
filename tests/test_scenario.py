@@ -558,3 +558,8 @@ def test_ground_opening_generic_words_do_not_count_as_coverage() -> None:
 def test_provider_hook_with_story_marker_is_rejected() -> None:
     with pytest.raises(ValueError, match="marker"):
         scenario_from_provider(_provider(opening_hook="A note arrives. [[STORY outcome=rest]]"))
+
+
+def test_redact_state_for_memory_drops_exploration_graph() -> None:
+    state = {"exploration": {"rooms": ["entry_hall"]}, "facts": []}
+    assert "exploration" not in json.loads(redact_state_for_memory(json.dumps(state)))

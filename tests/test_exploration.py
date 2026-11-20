@@ -299,3 +299,25 @@ def test_ability_traversal_records_route_edge_and_reveals_landing() -> None:
     e = _edges(_view(state))
     assert (e["rain_court/route/channel_gap"].target, e["rain_court/route/channel_gap"].traversed) == ("far_bank", True)
     assert "rain_court/passage/far_bank" not in e
+
+
+@pytest.mark.parametrize("legacy", [True, False])
+def test_failed_move_records_no_exploration_facts(legacy: bool) -> None:
+    client = _client()
+    headers = _headers(client, f"explore-failed-move-{legacy}")
+    user_id = headers[INTERNAL_USER_ID_HEADER_NAME]
+    campaign_id = _campaign(client, headers)
+    state = _persisted(campaign_id)
+    if legacy:
+        del state["exploration"]
+    with get_engine().begin() as conn:
+        conn.execute(
+            text("UPDATE campaigns SET state = :s WHERE campaign_id = :c"),
+            {"s": json.dumps(state), "c": campaign_id},
+        )
+    asyncio.run(orchestrator_module.orchestrator.handle_chat(
+        ChatRequest(message="go west", campaign_id=campaign_id), owner_user_id=user_id,
+    ))  # entry_hall has no west exit: tool fails, turn still narrated
+    after = _persisted(campaign_id)
+    assert after.get("exploration") == state.get("exploration")
+    assert after["player"]["location"] == "entry_hall"
