@@ -215,6 +215,9 @@ live world state:
   refreshed in the same atomic write (this can also add notes to a pre-#132 graph).
   Malformed or stale exploration state on such a turn fails closed with 500
   `Campaign state could not be processed.`, as on a successful action.
+- A read projection refreshes only the current room from the live scene and never
+  applies cross-room corrections to other rooms' persisted notes; those change only
+  in a turn write.
 - Limits: no inference from rumors, sounds or narrative-only discoveries; notes
   derive only from structured scene state. Persisted notes are validated
   structurally (visited rooms only, unique keys, valid `seen_in`), and the text is

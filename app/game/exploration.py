@@ -186,8 +186,12 @@ def record_exploration(
     *,
     world: World = DEFAULT_WORLD,
     tool_result: ToolExecutionResult | None = None,
+    correct_other_rooms: bool = True,
 ) -> bool:
     """Fold the player's current location into the graph. True if state changed.
+
+    `correct_other_rooms=False` (read projections) refreshes only the current
+    room's notes and leaves every other room's persisted notes untouched.
 
     A legacy campaign (no graph yet) is baselined at the tool result's
     `previous_location` when it moved, so its first move keeps its origin room.
@@ -234,7 +238,7 @@ def record_exploration(
         )
         if edge["to"] is None and dest in visited:
             edge["to"] = dest
-    _record_notes(state, ex, world, current)
+    _record_notes(state, ex, world, current, correct_other_rooms)
     return state.get("exploration") != before
 
 
@@ -264,13 +268,15 @@ def _scene_notes(state: dict[str, Any], world: World) -> list[tuple[str, str, st
     return notes
 
 
-def _record_notes(state: dict[str, Any], ex: dict[str, Any], world: World, current: str) -> None:
+def _record_notes(
+    state: dict[str, Any], ex: dict[str, Any], world: World, current: str, correct: bool = True
+) -> None:
     all_notes: dict[str, list[dict[str, str]]] = ex.setdefault("notes", {})
     seen = _scene_notes(state, world)
     here = world.rooms[current].name
     # Entities seen here correct their last-known entries in every other room.
     for key, _, name in seen:
-        if not key.startswith(("item:", "npc:")):
+        if not correct or not key.startswith(("item:", "npc:")):
             continue
         for room_id, entries in all_notes.items():
             if room_id == current:
@@ -306,7 +312,7 @@ def _project(campaign_state: str, world: World) -> tuple[dict[str, Any], dict[st
             raise _malformed()
     # Compute a transient graph without touching the source.
     scratch = copy.deepcopy(state)
-    record_exploration(scratch, world=world)
+    record_exploration(scratch, world=world, correct_other_rooms=False)
     ex = scratch.get("exploration")
     if ex is None or world.get_room(ex["current"]) is None:
         raise _malformed()

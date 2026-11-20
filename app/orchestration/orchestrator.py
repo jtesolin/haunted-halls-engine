@@ -979,6 +979,7 @@ class ChatOrchestrator:
             writes.set_state(player_turn_id, updated_state)
             campaign_state = json.dumps(updated_state)
 
+        state_before_director = campaign_state
         director_step_result = await self._run_director_step(
             writes=writes,
             owner_user_id=owner_user_id,
@@ -992,14 +993,16 @@ class ChatOrchestrator:
         campaign_state = director_step_result.campaign_state
         # A Director world action can change what the player sees after the first
         # record above; refresh the current room's notes in the same turn write.
-        # A failed tool never creates a baseline, but a Director change the player
-        # watched on that turn still updates an existing journal that is already
-        # at the player's location (a failed tool never synthesizes movement).
+        # A failed tool never creates a baseline or knowledge by itself: it refreshes
+        # an existing journal only when the Director changed the world this turn and
+        # the journal is already at the player's location (no synthesized movement).
         observed_state = json.loads(campaign_state)
         journal = observed_state.get("exploration")
-        journal_in_sync = isinstance(journal, dict) and journal.get(
-            "current"
-        ) == (observed_state.get("player") or {}).get("location")
+        journal_in_sync = (
+            campaign_state != state_before_director
+            and isinstance(journal, dict)
+            and journal.get("current") == (observed_state.get("player") or {}).get("location")
+        )
         if tool_result.success or journal_in_sync:
             try:
                 if record_exploration(observed_state, world=self.tool_executor.world):

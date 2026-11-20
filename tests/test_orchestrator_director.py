@@ -1311,3 +1311,33 @@ def test_failed_tool_with_malformed_in_sync_journal_fails_closed(monkeypatch) ->
     assert error.detail == "Campaign state could not be processed."
     assert _stored_state(campaign_id)["exploration"] == state["exploration"]
     assert _stored_state(campaign_id)["npcs"]["old_caretaker"]["location"] == "entry_hall"
+
+
+def test_failed_tool_without_director_change_writes_no_notes(monkeypatch) -> None:
+    _install_move_and_narrator_stubs(monkeypatch)
+    monkeypatch.setattr(
+        orchestrator_module.orchestrator.action_parser_agent, "parse", _fake_parse_ambiguous
+    )
+
+    async def no_action(*, director_input, model=None):  # noqa: ANN001, ARG001, ANN202
+        return _no_action_result()
+
+    monkeypatch.setattr(orchestrator_module.orchestrator.director_agent, "propose", no_action)
+    state = build_fresh_campaign_state()
+    state["exploration"].pop("notes")  # pre-#132 graph, in sync with the player
+    _headers, user_id = _resolve_user(TestClient(app), "failed-no-director-change")
+    campaign_id = f"campaign_{uuid4().hex}"
+    with session() as db:
+        db.create_campaign(
+            campaign_id=campaign_id,
+            owner_user_id=user_id,
+            name="Failed tool campaign",
+            description="Test campaign",
+            state=state,
+        )
+    asyncio.run(
+        orchestrator_module.orchestrator.handle_chat(
+            ChatRequest(message="hmm", campaign_id=campaign_id), owner_user_id=user_id
+        )
+    )
+    assert "notes" not in _stored_state(campaign_id)["exploration"]

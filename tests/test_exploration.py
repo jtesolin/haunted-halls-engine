@@ -688,3 +688,34 @@ def test_room_notes_api_malformed_legacy_and_empty_state() -> None:
 
     _store(campaign_id, "No campaign state yet.")
     assert client.get(url, headers=owner).status_code == 404
+
+
+# --- review of PR #133: suspected-bug reproductions ---------------------------
+
+
+def test_check_notes_accepts_ordinary_entries_across_moves_and_rereads() -> None:
+    # Ordinary entries carry no `seen_in`; they must survive every re-validation.
+    state = build_fresh_campaign_state()
+    for room in ("grand_corridor", "library", "grand_corridor", "entry_hall"):
+        _move(state, room)
+        assert _view(state).current_location.id == room
+        assert all("seen_in" not in e for es in state["exploration"]["notes"].values() for e in es)
+    # Only an explicit same-room or null seen_in is malformed.
+    for bad in ({"seen_in": "entry_hall"}, {"seen_in": None}, {"seen_in": "boiler_room"}):
+        state["exploration"]["notes"]["entry_hall"] = [{"key": "npc:x", "text": "x", **bad}]
+        with pytest.raises(InvalidCampaignStateError):
+            _view(state)
+
+
+def test_read_projection_never_rewrites_other_rooms_notes() -> None:
+    state = build_fresh_campaign_state()
+    _move(state, "grand_corridor")
+    persisted = json.dumps(state["exploration"]["notes"]["entry_hall"])
+    # State drifts outside any recorded turn (nothing observed it being recorded).
+    state["npcs"]["old_caretaker"]["location"] = "grand_corridor"
+    notes = _notes(state, "entry_hall")
+    assert not any("last seen" in n for n in notes)
+    assert [n for n in notes if n.startswith("Old Caretaker:")] == [
+        e["text"] for e in json.loads(persisted) if e["key"] == "npc:old_caretaker"
+    ]
+    assert _view(state).current_location.id == "grand_corridor"
