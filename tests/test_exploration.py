@@ -385,3 +385,49 @@ def test_projection_rejects_inconsistent_edges_so_nothing_unrecorded_is_echoed(m
     mutate(state["exploration"]["edges"])
     with pytest.raises(InvalidCampaignStateError):
         _view(state)
+
+
+def _rain_court_state() -> dict:
+    state = build_fresh_campaign_state()
+    for room in ["grand_corridor", "dining_room", "rain_court"]:
+        _move(state, room)
+    return state
+
+
+def _add(state: dict, edge_id: str, **edge) -> None:
+    state["exploration"]["edges"][edge_id] = {
+        "from": "rain_court", "to": None, "kind": "route", "label": "Channel Gap",
+        "traversed": False, **edge,
+    }
+
+
+@pytest.mark.parametrize(
+    ("edge_id", "edge"),
+    [
+        ("rain_court/route/hidden_tunnel", {}),  # route key not authored
+        ("rain_court/route/channel_gap", {"label": "Far Bank"}),  # wrong label
+        ("rain_court/passage/far_bank", {"kind": "passage", "label": "unmapped passage"}),  # to None
+        ("rain_court/passage/far_bank", {"kind": "passage", "label": "unmapped passage", "to": "dining_room"}),  # key != to
+        ("rain_court/passage/dining_room", {"kind": "passage", "label": "Far Bank", "to": "dining_room"}),  # wrong label
+        ("rain_court/exit/channel_gap", {}),  # id kind segment disagrees with kind
+        ("dining_room/route/channel_gap", {}),  # id prefix disagrees with from
+        ("rain_court/route/channel_gap", {"traversed": True}),  # traversed without target
+        ("rain_court/route/channel_gap", {"to": "rain_court"}),  # self loop
+    ],
+)
+def test_projection_rejects_forged_route_and_passage_edges(edge_id: str, edge: dict) -> None:
+    state = _rain_court_state()
+    del state["exploration"]["edges"]["rain_court/route/channel_gap"]
+    _add(state, edge_id, **edge)
+    with pytest.raises(InvalidCampaignStateError):
+        _view(state)
+
+
+def test_route_and_passage_edges_written_by_the_engine_round_trip() -> None:
+    state = _rain_court_state()
+    _move(state, "crypt")  # unmapped passage
+    view = _view(state)
+    e = _edges(view)
+    assert e["rain_court/passage/crypt"].label == "unmapped passage"
+    assert e["rain_court/route/channel_gap"].label == "Channel Gap"
+    assert record_exploration(state) is False

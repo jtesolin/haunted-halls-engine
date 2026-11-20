@@ -13,6 +13,10 @@ never stored or returned. Observations are not stored: they are projected on rea
 from the narrator's player-observable scene (`build_narrator_scene_context`), so
 they track items/NPCs/state changes without a second copy that could go stale.
 
+Persisted edges are validated against the current authored world (`_check_edge`):
+renaming/removing an exit or route for existing campaigns fails closed with no
+repair, so worlds are immutable once campaigns exist; a change needs a migration.
+
 shortcut: exits are static authored topology, so exit edges are never removed;
 revisit when worlds gain dynamic exits (locks, collapses, hidden doors) and
 add a producer plus edge invalidation.
