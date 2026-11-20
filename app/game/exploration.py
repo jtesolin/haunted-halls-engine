@@ -4,7 +4,8 @@ Ownership: `state["exploration"]` inside the authoritative campaign state JSON i
 the only persisted exploration record (rooms the player has visited and directed
 connections the player has perceived). It is written only through
 `record_exploration`, in the same atomic turn write as every other state change,
-so a failed turn leaves no exploration facts. Nothing here calls a model.
+so an errored turn leaves no exploration facts (a failed tool action only
+refreshes current-room notes of an in-sync journal; see docs/architecture.md). Nothing here calls a model.
 
 Knowledge boundary: a connection's destination stays unknown (`to` is None, shown
 as an anonymous frontier node) until the player traverses it or sees it from a
