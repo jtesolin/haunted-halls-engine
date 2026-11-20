@@ -446,3 +446,19 @@ def test_projection_rejects_bare_edge_ids_without_the_from_kind_prefix(edge_id: 
     _add(state, edge_id, **edge)
     with pytest.raises(InvalidCampaignStateError):
         _view(state)
+
+
+@pytest.mark.parametrize(
+    ("edge_id", "edge"),
+    [
+        ("entry_hall/exit/north", {"from": "entry_hall", "kind": "exit", "label": "north", "to": "library"}),
+        ("rain_court/route/channel_gap", {"to": "dining_room"}),
+    ],
+)
+def test_projection_rejects_edges_retargeted_away_from_authored_destination(edge_id: str, edge: dict) -> None:
+    state = _rain_court_state()
+    state["exploration"]["rooms"].append("library")
+    state["exploration"]["edges"].pop(edge_id, None)
+    _add(state, edge_id, **edge)
+    with pytest.raises(InvalidCampaignStateError):
+        _view(state)

@@ -15,7 +15,8 @@ they track items/NPCs/state changes without a second copy that could go stale.
 
 Persisted edges are validated against the current authored world (`_check_edge`):
 renaming/removing an exit or route for existing campaigns fails closed with no
-repair, so worlds are immutable once campaigns exist; a change needs a migration.
+repair, so worlds are immutable once campaigns exist; a change needs a migration. A resolved
+exit/route target must equal the authored destination.
 
 shortcut: exits are static authored topology, so exit edges are never removed;
 revisit when worlds gain dynamic exits (locks, collapses, hidden doors) and
@@ -95,12 +96,13 @@ def _check_edge(world: World, edge_id: str, edge: dict[str, Any]) -> None:
         or (edge["traversed"] and to is None)
     ):
         raise _malformed()
+    # A resolved target must be the authored destination: no false room connections.
     if kind == "exit":
-        expected = key if key in world.rooms[source].exits else None
+        authored = world.rooms[source].exits.get(key)
+        expected = key if authored is not None and to in (None, authored) else None
     elif kind == "route":
-        expected = next(
-            (r.name for r in world.local_traversal_routes(source) if r.route_id == key), None
-        )
+        route = next((r for r in world.local_traversal_routes(source) if r.route_id == key), None)
+        expected = route.name if route is not None and to in (None, route.destination) else None
     else:
         expected = "unmapped passage" if to is not None and key == to else None
     if expected is None or edge["label"] != expected:

@@ -182,7 +182,7 @@ NPCs, and traversal routes as neutral exit features). Because they are projected
 from authoritative state on read, they cannot go stale or contradict it. The
 engine currently has no hidden doors, locked exits, hazards or dynamic exits;
 those need their own authoritative producers (and edge invalidation) before the
-graph can represent them. Persisted edges are validated against the current authored world, so renaming or removing an authored exit or route makes the graph fail validation and the exploration API and `record_exploration` (every successful action) fail closed for affected campaigns; worlds are treated as immutable once campaigns exist, and the migration policy (including undetected exit re-targeting) is tracked in #131. Route ids/names are authored player-facing text already given to the Narrator and may hint at a destination without naming a room. Frontend visualization is a separate issue.
+graph can represent them. Persisted edges are validated against the current authored world, so renaming, removing or re-targeting an authored exit or route makes the graph fail validation and the exploration API and `record_exploration` (every successful action) fail closed for affected campaigns; worlds are treated as immutable once campaigns exist, and the migration policy is tracked in #131. Route ids/names are authored player-facing text already given to the Narrator and may hint at a destination without naming a room. Frontend visualization is a separate issue.
 
 ## Campaign scenario ownership and Story Director seam
 
