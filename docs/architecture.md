@@ -163,7 +163,7 @@ persisted exploration record: visited room ids (stable authored room ids, so
 revisits reuse identities), the current room, and directed edges
 (`<room>/exit/<direction>`, `<room>/route/<route_id>`, `<room>/passage/<dest>`
 for movement with no authored exit/route, e.g. teleport/phasing). It is written
-only by `record_exploration` inside the turn's single atomic state write, so a
+only by `record_exploration` inside the turn's single atomic state write, so an
 errored turn persists nothing, and a failed tool action never creates a baseline, exploration facts or movement (see the #132 section for the one Director-observed refresh); the graph is excluded from memory-model inputs; new campaigns record the start room at creation and
 legacy campaigns gain a baseline on their next successful action (a read of a
 legacy campaign projects the same baseline without persisting).
