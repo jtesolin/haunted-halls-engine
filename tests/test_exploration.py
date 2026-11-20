@@ -474,3 +474,19 @@ def test_projection_rejects_untraversed_passage_and_unreached_rooms() -> None:
     state["exploration"]["rooms"].append("crypt")  # never reached by any traversed edge
     with pytest.raises(InvalidCampaignStateError):
         _view(state)
+
+
+def test_projection_rejects_rooms_connected_only_to_each_other() -> None:
+    state = build_fresh_campaign_state()
+    ex = state["exploration"]
+    ex["rooms"] += ["grand_corridor", "library"]
+    ex["current"] = "library"
+    state["player"]["location"] = "library"
+    ex["edges"]["grand_corridor/exit/east"] = {
+        "from": "grand_corridor", "to": "library", "kind": "exit", "label": "east", "traversed": True,
+    }
+    ex["edges"]["library/exit/west"] = {
+        "from": "library", "to": "grand_corridor", "kind": "exit", "label": "west", "traversed": True,
+    }
+    with pytest.raises(InvalidCampaignStateError):
+        _view(state)

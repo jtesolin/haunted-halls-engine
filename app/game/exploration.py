@@ -82,10 +82,16 @@ def _read(state: dict[str, Any], world: World) -> dict[str, Any] | None:
         ):
             raise _malformed()
         _check_edge(world, edge_id, edge)
-    # Every visited room after the first must be the target of a traversed edge, so a
-    # corrupted `rooms` list cannot present a room the player never reached.
-    reached = {e["to"] for e in edges.values() if e["traversed"]}
-    if any(room not in reached for room in rooms[1:]):
+    # Every visited room must be reachable from the baseline room over traversed
+    # edges, so corrupted state cannot present rooms the player never reached.
+    reached, pending = {rooms[0]}, [rooms[0]]
+    while pending:
+        here = pending.pop()
+        for e in edges.values():
+            if e["traversed"] and e["from"] == here and e["to"] not in reached:
+                reached.add(e["to"])
+                pending.append(e["to"])
+    if reached != set(rooms):
         raise _malformed()
     return raw
 
